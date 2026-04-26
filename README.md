@@ -60,6 +60,7 @@ eg-lgbm/
 - `constants.output_root`：日志、alpha、回测输出的根目录
 - `constants.checkpoint_root`：模型 checkpoint 输出目录
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
+- `strategy.path`：指向回测策略文件，例如 `alpha_strategy.py`
 - `combo.paths.checkpoint_root`：checkpoint 输出目录
 - `combo.paths.output_dir`：日志和中间结果输出目录
 - `backtest.output_path`：回测结果输出目录
@@ -78,6 +79,7 @@ eg-lgbm/
 
 示例里：
 - `model_path="model.py"`
+- `path="../alpha_strategy.py"`
 - `checkpoint_root="checkpoints"`
 - `output_dir="output"`
 - `output_path="output/backtest"`

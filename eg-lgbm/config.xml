@@ -6,7 +6,7 @@
     checkpoint_root="checkpoints"
   />
 
-  <strategy start_ds="20200101" end_ds="20240631" />
+  <strategy start_ds="20200101" end_ds="20240631" path="../alpha_strategy.py" />
 
   <combo>
     <paths

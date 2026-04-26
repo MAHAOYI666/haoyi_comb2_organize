@@ -142,8 +142,8 @@ def dump_alpha_analysis(node: Node, combo_config: dict):
     print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
 
 
-def build_strategy_file() -> Path:
-    return Path(__file__).resolve().parent / "alpha_strategy.py"
+def build_strategy_file(organize_config: dict) -> Path:
+    return Path(organize_config["strategy"]["path"])
 
 
 def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestNode:
@@ -188,7 +188,7 @@ def main():
             combo = ComboBase(node)
             codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
 
-            strategy_path = build_strategy_file()
+            strategy_path = build_strategy_file(organize_config)
             backtest_node = build_backtest_node(strategy_path, organize_config)
             backtest = DailyBacktest(backtest_node)
 

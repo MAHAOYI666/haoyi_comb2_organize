@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "strategy": {
         "start_ds": 20160111,
         "end_ds": 20200101,
+        "path": str(ORGANIZE_ROOT / "alpha_strategy.py"),
     },
     "combo": {
         "paths": {
@@ -99,6 +100,7 @@ PATH_FIELDS = {
     ("constants", "factor_root"),
     ("constants", "output_root"),
     ("constants", "checkpoint_root"),
+    ("strategy", "path"),
     ("combo", "paths", "base_dir"),
     ("combo", "paths", "output_dir"),
     ("combo", "paths", "model_path"),

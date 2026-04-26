@@ -167,7 +167,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
     parser.add_argument("--features", type=str, default=None, help="Comma-separated feature indices to ablate")
     parser.add_argument("--output-suffix", default="ablation_by_zero", help="Subdirectory under combo output_dir for ablation outputs")
-    parser.add_argument("--ablation-batch-size", type=int, default=16, help="Number of baseline/feature variants to predict per forward batch")
+    parser.add_argument("--ablation-batch-size", type=int, default=4, help="Number of baseline/feature variants to predict per forward batch")
+    parser.add_argument("--feature-group-size", type=int, default=20, help="Number of features to run per full Combo/backtest pass")
     parser.add_argument("--train", action="store_true", help="Allow training and checkpoint saving during the ablation run")
     return parser.parse_args()
 
@@ -183,6 +184,72 @@ def variant_config(base_config: dict, variant_dir: Path) -> dict:
     return config
 
 
+def feature_groups(features: list[int], group_size: int) -> list[list[int]]:
+    group_size = max(1, int(group_size))
+    return [features[start : start + group_size] for start in range(0, len(features), group_size)]
+
+
+def run_group(
+    organize_config: dict,
+    features: list[int],
+    output_suffix: str,
+    ablation_batch_size: int,
+    train_enabled: bool,
+    monitor: PerfMonitor,
+    include_baseline_output: bool,
+):
+    combo_config = organize_config["combo"]
+    with monitor.section("setup"):
+        node = Node(combo_config)
+        node.monitor = monitor
+        combo = AblationCombo(
+            node,
+            features=features,
+            train_enabled=train_enabled,
+            batch_size=ablation_batch_size,
+        )
+        codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
+
+        base_output_dir = Path(combo_config["paths"]["output_dir"])
+        ablation_root = base_output_dir / output_suffix
+        variant_configs = {
+            name: variant_config(organize_config, ablation_root / name)
+            for name in combo.variant_names
+            if include_baseline_output or name != "baseline"
+        }
+
+        strategy_path = build_strategy_file()
+        backtests = {
+            name: DailyBacktest(build_backtest_node(strategy_path, config))
+            for name, config in variant_configs.items()
+        }
+        if include_baseline_output:
+            loop_backtest = backtests["baseline"]
+        else:
+            loop_backtest = DailyBacktest(build_backtest_node(strategy_path, variant_config(organize_config, ablation_root / "baseline_probe")))
+
+    for date in sorted(loop_backtest.vwap_data.index):
+        date_int = int(date)
+        with monitor.section("combine", date=date_int):
+            combo.Combine(date_int)
+        with monitor.section("backtest_step", date=date_int):
+            baseline_metrics = None
+            for name, backtest in backtests.items():
+                alpha = combo.variant_alphas[name].to(dtype=node.alpha.dtype).numpy()
+                metrics = backtest.step(date_int, pd.Series(alpha, index=codes))
+                if name == "baseline":
+                    baseline_metrics = metrics
+        if baseline_metrics is not None:
+            print_daily_metrics(baseline_metrics)
+
+    with monitor.section("backtest_finalize"):
+        for backtest in backtests.values():
+            backtest.finalize()
+    with monitor.section("alpha_analysis"):
+        for name, config in variant_configs.items():
+            dump_alpha_analysis(SimpleNamespace(alpha_history=combo.variant_histories[name]), config["combo"])
+
+
 def main():
     args = parse_args()
     config_path = args.config_flag or args.config
@@ -190,52 +257,22 @@ def main():
     monitor = PerfMonitor.from_config(organize_config)
 
     try:
-        combo_config = organize_config["combo"]
-        with monitor.section("setup"):
-            node = Node(combo_config)
-            node.monitor = monitor
-            combo = AblationCombo(
-                node,
-                features=parse_features(args.features),
+        probe_node = Node(organize_config["combo"])
+        probe_combo = AblationCombo(probe_node, features=[], batch_size=1)
+        selected_features = parse_features(args.features)
+        if selected_features is None:
+            selected_features = list(range(probe_combo.loader.num_features))
+        for group_idx, group_features in enumerate(feature_groups(selected_features, args.feature_group_size), start=1):
+            print(f"[ABLATION] group={group_idx} features={group_features[0]}-{group_features[-1]} count={len(group_features)}")
+            run_group(
+                organize_config=organize_config,
+                features=group_features,
+                output_suffix=args.output_suffix,
+                ablation_batch_size=args.ablation_batch_size,
                 train_enabled=args.train,
-                batch_size=args.ablation_batch_size,
+                monitor=monitor,
+                include_baseline_output=group_idx == 1,
             )
-            codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
-
-            base_output_dir = Path(combo_config["paths"]["output_dir"])
-            ablation_root = base_output_dir / args.output_suffix
-            variant_configs = {
-                name: variant_config(organize_config, ablation_root / name)
-                for name in combo.variant_names
-            }
-
-            strategy_path = build_strategy_file()
-            backtests = {
-                name: DailyBacktest(build_backtest_node(strategy_path, config))
-                for name, config in variant_configs.items()
-            }
-            loop_backtest = backtests["baseline"]
-
-        for date in sorted(loop_backtest.vwap_data.index):
-            date_int = int(date)
-            with monitor.section("combine", date=date_int):
-                combo.Combine(date_int)
-            with monitor.section("backtest_step", date=date_int):
-                baseline_metrics = None
-                for name, backtest in backtests.items():
-                    alpha = combo.variant_alphas[name].to(dtype=node.alpha.dtype).numpy()
-                    metrics = backtest.step(date_int, pd.Series(alpha, index=codes))
-                    if name == "baseline":
-                        baseline_metrics = metrics
-            if baseline_metrics is not None:
-                print_daily_metrics(baseline_metrics)
-
-        with monitor.section("backtest_finalize"):
-            for backtest in backtests.values():
-                backtest.finalize()
-        with monitor.section("alpha_analysis"):
-            for name, config in variant_configs.items():
-                dump_alpha_analysis(SimpleNamespace(alpha_history=combo.variant_histories[name]), config["combo"])
     finally:
         monitor.close()
 
