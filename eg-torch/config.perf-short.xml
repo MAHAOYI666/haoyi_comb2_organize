@@ -1,0 +1,70 @@
+<config>
+  <constants
+    cache_path="/home/shared/data1/factorsim_data/Cache"
+    factor_root="/home/shared/data1/factorsim_data/Factor/FactorData/ZsimPool"
+    output_root="output-torch-perf-short"
+    checkpoint_root="checkpoints-torch-perf-short"
+  />
+
+  <strategy start_ds="20200120" end_ds="20200210" path="../alpha_strategy.py" />
+
+  <combo>
+    <paths
+      model_path="model.py"
+    />
+
+    <runtime
+      snaptime="perf_short"
+      livetrading="false"
+      trainDelay="0"
+      retDays="5"
+      tsDays="5"
+      model_smooth_rate="0.7"
+      model_keep_num="0"
+      select_days="20"
+      max_train_days="60"
+    />
+
+    <model
+      device="cpu"
+      hiddenSize="512"
+      fcSize="256"
+      dropout="0.5"
+      lr="0.000002"
+      epochs="2"
+      batchSize="3"
+      weight_decay="0.000001"
+      scheduler_step_size="10"
+      scheduler_gamma="0.5"
+      grad_clip="10.0"
+      seed="42"
+    />
+
+    <loader dtype="float16" data_start_ds="20191201">
+      <factor_paths>
+        <path>cyz_20231130_01</path>
+        <path>cyz_20231130_02</path>
+        <path>cyz_20231130_03</path>
+        <path>cyz_20240718_01</path>
+      </factor_paths>
+    </loader>
+  </combo>
+
+  <backtest
+    daily_metrics_file="daily_pnl.csv"
+    cash="10000000"
+    fee_rate="0.00075"
+    reserve_cash="0.95"
+    verbose="false"
+    universe="base"
+  />
+
+  <monitor
+    enabled="true"
+    output_path="output-torch-perf-short/perf_metrics.csv"
+    format="csv"
+    print_summary="true"
+    collect_gpu="true"
+    sync_cuda="false"
+  />
+</config>

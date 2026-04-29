@@ -22,6 +22,9 @@ class FeatureSource(Protocol):
     def load_day(self, ds: int) -> torch.Tensor:
         ...
 
+    def prefetch_days(self, days: Sequence[int]):
+        ...
+
 
 class MemmapFeatureSource:
     def __init__(self, paths: Sequence[str], dtype: torch.dtype):
@@ -29,6 +32,7 @@ class MemmapFeatureSource:
         self.dtype = dtype
         self.feature_dim = len(self.paths)
         self._cache: dict[str, Memmaper2] = {}
+        self._day_cache: dict[int, torch.Tensor] = {}
 
     def _mmap(self, path: str) -> Memmaper2:
         if path not in self._cache:
@@ -36,11 +40,37 @@ class MemmapFeatureSource:
         return self._cache[path]
 
     def load_day(self, ds: int) -> torch.Tensor:
+        ds = int(ds)
+        cached = self._day_cache.pop(ds, None)
+        if cached is not None:
+            return cached
         values = []
         for path in self.paths:
-            data = self._mmap(path).load(start_ds=int(ds), end_ds=int(ds))[:]
+            data = self._mmap(path).load(start_ds=ds, end_ds=ds)[:]
             values.append(torch.as_tensor(np.asarray(data)[0], dtype=self.dtype))
         return torch.stack(values, dim=-1)
+
+    def prefetch_days(self, days: Sequence[int]):
+        days = list(dict.fromkeys(int(ds) for ds in days))
+        if not days:
+            return
+        needed_days = [ds for ds in days if ds not in self._day_cache]
+        if not needed_days:
+            return
+        start_ds = min(needed_days)
+        end_ds = max(needed_days)
+        day_set = set(needed_days)
+        trading_days = [int(ds) for ds in MASK.date if start_ds <= int(ds) <= end_ds]
+        values_by_day = {ds: [] for ds in needed_days}
+        for path in self.paths:
+            data = self._mmap(path).load(start_ds=start_ds, end_ds=end_ds)[:]
+            arr = np.asarray(data)
+            for offset, ds in enumerate(trading_days[: len(arr)]):
+                if ds in day_set:
+                    values_by_day[ds].append(torch.as_tensor(arr[offset], dtype=self.dtype))
+        for ds, values in values_by_day.items():
+            if len(values) == len(self.paths):
+                self._day_cache[ds] = torch.stack(values, dim=-1)
 
 
 class EmptyCubeSource:
@@ -50,6 +80,9 @@ class EmptyCubeSource:
 
     def load_day(self, ds: int) -> torch.Tensor:
         return torch.zeros((len(MASK.code), self.feature_dim), dtype=self.dtype)
+
+    def prefetch_days(self, days: Sequence[int]):
+        return None
 
 
 class MemmapLabelSource:
@@ -130,6 +163,11 @@ class ComboDataLoader:
         feature = truncate(feature, -4.0, 4.0)
         feature = nan_to_num(feature, 0.0)
         return feature.to(self.dtype)
+
+    def prefetch_features(self, days: Sequence[int]):
+        days = [self.align_date(ds) for ds in days]
+        self.factor_source.prefetch_days(days)
+        self.cube_source.prefetch_days(days)
 
     def gen_base_universe_mask(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
@@ -217,16 +255,20 @@ class ComboTrainDataset(Dataset):
         self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
         self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
 
-        for offset in range(self.ndays):
-            label_didx = self.start_didx + offset
-            feature_didx = label_didx - self.x_delay + 1
-            label_ds = loader.didx2date(label_didx)
-            feature_ds = loader.didx2date(feature_didx)
-            x = loader.gen_feature(feature_ds)
-            y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-            self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
-            self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-            self.W[offset] = w[self.validinsts].to(loader.dtype)
+        for window_start in range(0, self.ndays, self.step_size):
+            window_end = min(window_start + self.step_size, self.ndays)
+            feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
+            loader.prefetch_features(feature_days)
+            for offset in range(window_start, window_end):
+                label_didx = self.start_didx + offset
+                feature_didx = label_didx - self.x_delay + 1
+                label_ds = loader.didx2date(label_didx)
+                feature_ds = loader.didx2date(feature_didx)
+                x = loader.gen_feature(feature_ds)
+                y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
+                self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
+                self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
+                self.W[offset] = w[self.validinsts].to(loader.dtype)
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []

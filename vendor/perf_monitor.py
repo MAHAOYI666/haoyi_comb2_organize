@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -72,6 +74,31 @@ class PerfMonitor:
         if not self.enabled:
             return nullcontext()
         return self._section(event, date)
+
+    def decorate(self, event: str, date_arg: str | None = None):
+        def decorator(func: Callable):
+            signature = inspect.signature(func)
+
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                date = None
+                if date_arg:
+                    bound = signature.bind_partial(*args, **kwargs)
+                    date = bound.arguments.get(date_arg)
+                with self.section(event, date=date):
+                    return func(*args, **kwargs)
+
+            return wrapper
+
+        return decorator
+
+    def patch_method(self, cls: type, method_name: str, event: str, date_arg: str | None = None):
+        original = getattr(cls, method_name)
+        if getattr(original, "_perf_patched", False):
+            return
+        decorated = self.decorate(event, date_arg=date_arg)(original)
+        decorated._perf_patched = True
+        setattr(cls, method_name, decorated)
 
     @contextmanager
     def _section(self, event: str, date: int | None = None):

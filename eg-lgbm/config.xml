@@ -6,7 +6,7 @@
     checkpoint_root="checkpoints"
   />
 
-  <strategy start_ds="20200101" end_ds="20240631" path="../alpha_strategy.py" />
+  <strategy start_ds="20200101" end_ds="20200331" path="../alpha_strategy.py" />
 
   <combo>
     <paths
@@ -17,7 +17,7 @@
       snaptime="example_lgbm"
       livetrading="false"
       trainDelay="1"
-      retDays="1"
+      retDays="5"
       tsDays="3"
       model_smooth_rate="0.7"
       model_keep_num="0"

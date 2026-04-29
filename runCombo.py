@@ -18,6 +18,7 @@ for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"
         sys.path.insert(0, local_package_path)
 
 from comb2 import ComboBase, LoaderConfig
+from src.DataLoader import ComboDataLoader, ComboTrainDataset
 from comb2_pcmaster import BacktestNode, DailyBacktest
 from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
@@ -167,6 +168,44 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
     )
 
 
+class ExperimentRunner:
+    def __init__(self, organize_config: dict, monitor: PerfMonitor):
+        self.organize_config = organize_config
+        self.combo_config = organize_config["combo"]
+        self.monitor = monitor
+        self.node: Node | None = None
+        self.combo: ComboBase | None = None
+        self.codes: pd.Index | None = None
+        self.backtest: DailyBacktest | None = None
+
+    def setup(self):
+        self.node = Node(self.combo_config)
+        self.node.monitor = self.monitor
+        self.combo = ComboBase(self.node)
+        if self.monitor.enabled:
+            install_research_model_decorators(self.monitor, self.combo.research_model_cls)
+        self.codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
+
+        strategy_path = build_strategy_file(self.organize_config)
+        backtest_node = build_backtest_node(strategy_path, self.organize_config)
+        self.backtest = DailyBacktest(backtest_node)
+
+    def dates(self):
+        return sorted(self.backtest.vwap_data.index)
+
+    def alpha_convert(self, date_int: int):
+        return self.node.alpha.detach().cpu().to(dtype=self.node.alpha.dtype).numpy()
+
+    def backtest_step(self, date_int: int, alpha):
+        return self.backtest.step(date_int, pd.Series(alpha, index=self.codes))
+
+    def backtest_finalize(self):
+        self.backtest.finalize()
+
+    def alpha_analysis(self):
+        dump_alpha_analysis(self.node, self.combo_config)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
@@ -174,38 +213,58 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def install_perf_decorators(monitor: PerfMonitor):
+    monitor.patch_method(ExperimentRunner, "setup", "setup")
+    monitor.patch_method(ExperimentRunner, "alpha_convert", "alpha_convert", date_arg="date_int")
+    monitor.patch_method(ExperimentRunner, "backtest_step", "backtest_step", date_arg="date_int")
+    monitor.patch_method(ExperimentRunner, "backtest_finalize", "backtest_finalize")
+    monitor.patch_method(ExperimentRunner, "alpha_analysis", "alpha_analysis")
+    monitor.patch_method(ComboBase, "Combine", "combine", date_arg="di")
+    monitor.patch_method(ComboBase, "LoadCheckpointModel", "combo_load_checkpoint", date_arg="dt")
+    monitor.patch_method(ComboBase, "GenComboPos", "combo_gen_pos", date_arg="ds")
+    monitor.patch_method(ComboBase, "Train", "combo_train", date_arg="ds")
+    monitor.patch_method(ComboBase, "SaveCheckpointModel", "combo_save_checkpoint", date_arg="dt")
+    monitor.patch_method(ComboTrainDataset, "__init__", "detail_dataset_init", date_arg="end_ds")
+    monitor.patch_method(ComboTrainDataset, "_build_validinsts", "detail_build_validinsts")
+    monitor.patch_method(ComboTrainDataset, "__getitem__", "detail_dataset_getitem", date_arg="idx")
+    monitor.patch_method(ComboDataLoader, "gen_feature", "detail_gen_feature", date_arg="ds")
+    monitor.patch_method(ComboDataLoader, "gen_label", "detail_gen_label", date_arg="ds")
+    monitor.patch_method(ComboDataLoader, "gen_valid_mask", "detail_gen_valid_mask", date_arg="ds")
+    monitor.patch_method(ComboDataLoader, "gen_base_universe_mask", "detail_gen_base_universe_mask", date_arg="ds")
+
+
+def install_research_model_decorators(monitor: PerfMonitor, research_model_cls: type):
+    monitor.patch_method(research_model_cls, "_next_batch", "detail_dataloader_next")
+    monitor.patch_method(research_model_cls, "_batch_to_device", "detail_batch_to_device")
+    monitor.patch_method(research_model_cls, "_zero_grad", "detail_zero_grad")
+    monitor.patch_method(research_model_cls, "_forward_batch", "detail_forward")
+    monitor.patch_method(research_model_cls, "_compute_loss", "detail_loss")
+    monitor.patch_method(research_model_cls, "_backward_loss", "detail_backward")
+    monitor.patch_method(research_model_cls, "_clip_grad", "detail_clip_grad")
+    monitor.patch_method(research_model_cls, "_optimizer_step", "detail_optimizer_step")
+    monitor.patch_method(research_model_cls, "_loss_to_float", "detail_loss_to_cpu")
+
+
 def main():
     args = parse_args()
     config_path = args.config_flag or args.config
     organize_config = organize_config_module.load_config(config_path)
     monitor = PerfMonitor.from_config(organize_config)
+    if monitor.enabled:
+        install_perf_decorators(monitor)
     try:
-        combo_config = organize_config["combo"]
+        runner = ExperimentRunner(organize_config, monitor)
+        runner.setup()
 
-        with monitor.section("setup"):
-            node = Node(combo_config)
-            node.monitor = monitor
-            combo = ComboBase(node)
-            codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
-
-            strategy_path = build_strategy_file(organize_config)
-            backtest_node = build_backtest_node(strategy_path, organize_config)
-            backtest = DailyBacktest(backtest_node)
-
-        for date in sorted(backtest.vwap_data.index):
+        for date in runner.dates():
             date_int = int(date)
-            with monitor.section("combine", date=date_int):
-                combo.Combine(date_int)
-            with monitor.section("alpha_convert", date=date_int):
-                alpha = node.alpha.detach().cpu().to(dtype=node.alpha.dtype).numpy()
-            with monitor.section("backtest_step", date=date_int):
-                metrics = backtest.step(date_int, pd.Series(alpha, index=codes))
+            runner.combo.Combine(date_int)
+            alpha = runner.alpha_convert(date_int)
+            metrics = runner.backtest_step(date_int, alpha)
             print_daily_metrics(metrics)
 
-        with monitor.section("backtest_finalize"):
-            backtest.finalize()
-        with monitor.section("alpha_analysis"):
-            dump_alpha_analysis(node, combo_config)
+        runner.backtest_finalize()
+        runner.alpha_analysis()
     finally:
         monitor.close()
 

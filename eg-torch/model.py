@@ -114,6 +114,37 @@ class ResearchModel:
         )
         return model.to(self.device)
 
+    def _next_batch(self, iterator):
+        return next(iterator)
+
+    def _batch_to_device(self, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor):
+        return (
+            x.to(self.device, dtype=torch.float32),
+            y.to(self.device, dtype=torch.float32),
+            w.to(self.device, dtype=torch.float32),
+        )
+
+    def _zero_grad(self, optimizer):
+        optimizer.zero_grad(set_to_none=True)
+
+    def _forward_batch(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+    def _compute_loss(self, pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        return self.loss_fn(pred, y, w)
+
+    def _backward_loss(self, loss: torch.Tensor):
+        loss.backward()
+
+    def _clip_grad(self):
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+
+    def _optimizer_step(self, optimizer):
+        optimizer.step()
+
+    def _loss_to_float(self, loss: torch.Tensor) -> float:
+        return float(loss.detach().cpu())
+
     def fit(self, dataset):
         self.trainii = dataset.validinsts.detach().cpu().to(torch.long).clone()
         self.model = self._init_model(self.trainii)
@@ -129,17 +160,20 @@ class ResearchModel:
         for epoch in range(self.epochs):
             total_loss = 0.0
             batches = 0
-            for _, x, y, w in dataloader:
-                x = x.to(self.device, dtype=torch.float32)
-                y = y.to(self.device, dtype=torch.float32)
-                w = w.to(self.device, dtype=torch.float32)
-                optimizer.zero_grad(set_to_none=True)
-                pred = self.model(x)
-                loss = self.loss_fn(pred, y, w)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                optimizer.step()
-                total_loss += float(loss.detach().cpu())
+            iterator = iter(dataloader)
+            while True:
+                try:
+                    _, x, y, w = self._next_batch(iterator)
+                except StopIteration:
+                    break
+                x, y, w = self._batch_to_device(x, y, w)
+                self._zero_grad(optimizer)
+                pred = self._forward_batch(x)
+                loss = self._compute_loss(pred, y, w)
+                self._backward_loss(loss)
+                self._clip_grad()
+                self._optimizer_step(optimizer)
+                total_loss += self._loss_to_float(loss)
                 batches += 1
             scheduler.step()
             print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={total_loss / max(batches, 1):.6f}")

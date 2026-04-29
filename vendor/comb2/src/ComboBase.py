@@ -7,7 +7,6 @@ import importlib.util
 import os
 import re
 import shutil
-from contextlib import nullcontext
 from io import BytesIO
 from typing import Any
 
@@ -36,6 +35,7 @@ class ComboBase:
             os.makedirs(self.modelDir, exist_ok=True)
 
         self.loader = ComboDataLoader(node.loader_config)
+        self.loader.monitor = getattr(node, "monitor", None)
         self.buffer = ComboBuffer(feat_size=self.loader.num_features, keepdays=self.tsDays, instsz=len(self.loader.mask.code), dtype=self.loader.dtype)
         self.selection = node.selection_module or DefaultSelectionModule(
             max_train_days=self.max_train_days,
@@ -47,12 +47,6 @@ class ComboBase:
         self.reset_buffer = True
         self.alpha_history = node.alpha_history
         self.research_model_cls = self._load_research_model_class(self.model_path)
-
-    def _monitor_section(self, name: str, ds: int | None = None):
-        monitor = getattr(self.node, "monitor", None)
-        if monitor is None:
-            return nullcontext()
-        return monitor.section(name, date=ds)
 
     def _model_config(self) -> dict[str, Any]:
         model_config = dict(getattr(self.node, "model_config", {}))
@@ -136,25 +130,19 @@ class ComboBase:
         ds = self._resolve_date(di)
         pred_ds = self._prev_date(ds)
         if self.modelDir:
-            with self._monitor_section("combo_load_checkpoint", pred_ds):
-                self.LoadCheckpointModel(self.modelDir, pred_ds)
-        with self._monitor_section("combo_gen_pos", pred_ds):
-            self.GenComboPos(pred_ds)
+            self.LoadCheckpointModel(self.modelDir, pred_ds)
+        self.GenComboPos(pred_ds)
 
     def CombineHist(self, di, ti=None):
         ds = self._resolve_date(di)
         pred_ds = self._prev_date(ds)
         if self.model is None and self.modelDir:
-            with self._monitor_section("combo_load_checkpoint", pred_ds):
-                self.LoadCheckpointModel(self.modelDir, pred_ds)
-        with self._monitor_section("combo_gen_pos", pred_ds):
-            self.GenComboPos(pred_ds)
+            self.LoadCheckpointModel(self.modelDir, pred_ds)
+        self.GenComboPos(pred_ds)
         if self.needTrain(ds):
-            with self._monitor_section("combo_train", ds):
-                self.Train(ds)
+            self.Train(ds)
             if self.modelDir:
-                with self._monitor_section("combo_save_checkpoint", self._prev_date(ds, self.trainDelay)):
-                    self.SaveCheckpointModel(self.modelDir, self._prev_date(ds, self.trainDelay))
+                self.SaveCheckpointModel(self.modelDir, self._prev_date(ds, self.trainDelay))
 
     def _resolve_date(self, di) -> int:
         if isinstance(di, int) and di in self.loader.mask.date:
