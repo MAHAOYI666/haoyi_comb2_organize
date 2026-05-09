@@ -17,9 +17,20 @@ from optuna_framework.specs import RunPaths
 PATH_PATCH_KEYS = {
     "config.strategy.@start_ds",
     "config.strategy.@end_ds",
+    "config.strategy.@path",
     "config.constants.@output_root",
     "config.constants.@checkpoint_root",
+    "config.combo.paths.@model_path",
     "config.combo.runtime.@snaptime",
+}
+
+_RELATIVE_PATH_SPECS = (
+    ("./combo/paths", "model_path"),
+    ("./strategy", "path"),
+)
+
+OPTUNA_RUNTIME_PATCH_KEYS = PATH_PATCH_KEYS | {
+    "config.combo.output.@enable_alpha_analysis",
 }
 
 MODEL_PATCH_KEYS = {
@@ -67,6 +78,8 @@ def render_config(
     for dotted_path, value in (fixed_overrides or {}).items():
         apply_fixed_override(root, dotted_path, value)
 
+    _resolve_relative_paths(root, baseline_config_path.parent)
+
     run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
     run_paths.output_root.mkdir(parents=True, exist_ok=True)
     run_paths.checkpoint_root.mkdir(parents=True, exist_ok=True)
@@ -92,6 +105,18 @@ def render_config(
     return materialized
 
 
+def _resolve_relative_paths(root: ET.Element, base_dir: Path) -> None:
+    """Convert relative file paths to absolute paths anchored to the baseline config."""
+
+    for xpath, attr in _RELATIVE_PATH_SPECS:
+        element = root.find(xpath)
+        if element is None:
+            continue
+        value = element.get(attr)
+        if value and not Path(value).expanduser().is_absolute():
+            element.set(attr, str((base_dir / value).resolve()))
+
+
 def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None:
     """Apply a dotted override like ``combo.model.device`` to an XML attribute."""
 
@@ -100,7 +125,15 @@ def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None
         raise ValueError(f"invalid fixed override path: {dotted_path}")
     element_path = "./" + "/".join(parts[:-1])
     attr_name = parts[-1]
-    _set_attr(root, element_path, attr_name, value)
+    element = root.find(element_path)
+    if element is None and element_path == "./combo/output":
+        combo = root.find("./combo")
+        if combo is None:
+            raise ValueError("XML is missing element: ./combo")
+        element = ET.SubElement(combo, "output")
+    if element is None:
+        raise ValueError(f"XML is missing element: {element_path}")
+    element.set(attr_name, _format_xml_value(value))
 
 
 def structured_xml_diff(path_a: str | Path, path_b: str | Path) -> list[XmlDiff]:

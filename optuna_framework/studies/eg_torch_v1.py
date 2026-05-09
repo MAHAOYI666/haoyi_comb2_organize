@@ -29,6 +29,6 @@ STUDY_SPEC = StudySpec(
     holdout_segments=HOLDOUT_SEGMENTS,
     baseline_only_segments=BASELINE_ONLY_SEGMENTS,
     n_trials=60,
-    fixed_overrides={},
+    fixed_overrides={"combo.output.enable_alpha_analysis": False},
 )
 

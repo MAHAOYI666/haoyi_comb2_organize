@@ -9,7 +9,7 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_framework.config_renderer import PATH_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
+from optuna_framework.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
 from optuna_framework.paths import build_baseline_run_paths
 from optuna_framework.scripts._script_common import adapter_for_name
 from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
@@ -31,7 +31,7 @@ def main() -> None:
         fixed_overrides=STUDY_SPEC.fixed_overrides,
     )
     diffs = structured_xml_diff(STUDY_SPEC.baseline_config_path, run_paths.config_path)
-    assert_only_allowed_diffs(diffs, PATH_PATCH_KEYS)
+    assert_only_allowed_diffs(diffs, OPTUNA_RUNTIME_PATCH_KEYS)
     print(f"rendered_config={run_paths.config_path}")
     print("xml_diff_allowed=true")
     for diff in diffs:
