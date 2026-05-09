@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
         "output": {
             "alpha_history_path": str(COMB2_ROOT / "output" / "alpha_history.pt"),
             "log_path": str(COMB2_ROOT / "output" / "train.log"),
+            "enable_alpha_analysis": True,
         },
         "runtime": {
             "snaptime": "mlp_minimal",
