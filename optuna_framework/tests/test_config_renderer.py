@@ -22,6 +22,8 @@ def test_render_baseline_params_only_changes_path_whitelist(tmp_path) -> None:
     assert root.find("./strategy").get("start_ds") == "20210104"
     assert root.find("./strategy").get("end_ds") == "20211231"
     assert root.find("./combo/runtime").get("snaptime") == "trial_00007_seg01"
+    assert root.find("./combo/paths").get("model_path") == str((get_repo_root() / "eg-torch" / "model.py").resolve())
+    assert root.find("./strategy").get("path") == str((get_repo_root() / "alpha_strategy.py").resolve())
     assert root.find("./constants").get("output_root") == str(run_paths.output_root)
     assert root.find("./constants").get("checkpoint_root") == str(run_paths.checkpoint_root)
     assert materialized["scheduler_step_size"] == 10
@@ -54,3 +56,20 @@ def test_apply_fixed_override_rejects_missing_element() -> None:
     else:
         raise AssertionError("expected ValueError")
 
+
+
+def test_fixed_override_can_create_combo_output_element(tmp_path) -> None:
+    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
+    segment = STUDY_SPEC.segment_by_name("seg01")
+    run_paths = build_trial_run_paths(tmp_path, 9, segment)
+
+    render_config(
+        STUDY_SPEC.baseline_config_path,
+        run_paths,
+        adapter,
+        adapter.baseline_params(),
+        fixed_overrides={"combo.output.enable_alpha_analysis": False},
+    )
+
+    root = ET.parse(run_paths.config_path).getroot()
+    assert root.find("./combo/output").get("enable_alpha_analysis") == "false"

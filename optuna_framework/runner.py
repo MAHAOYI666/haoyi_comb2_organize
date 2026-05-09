@@ -49,7 +49,7 @@ def run_segment(run_paths: RunPaths) -> object:
 
     try:
         if proc.returncode != 0:
-            raise SegmentRunError(f"runCombo failed for {run_paths.segment.name} with returncode={proc.returncode}")
+            raise SegmentRunError(_format_failed_run_message(run_paths, cmd, proc.returncode))
         if not run_paths.pnl_summary_path.exists() or run_paths.pnl_summary_path.stat().st_size <= 0:
             raise SegmentRunError(f"missing or empty pnl_summary.csv: {run_paths.pnl_summary_path}")
         metrics = parse_segment_metrics(
@@ -66,6 +66,38 @@ def run_segment(run_paths: RunPaths) -> object:
     return metrics
 
 
+def _format_failed_run_message(run_paths: RunPaths, cmd: list[str], returncode: int) -> str:
+    """Build an actionable error message for a failed segment subprocess."""
+
+    details = [
+        f"runCombo failed for {run_paths.segment.name} with returncode={returncode}",
+        f"command: {command_to_string(cmd)}",
+        f"config: {run_paths.config_path}",
+        f"stdout_log: {run_paths.stdout_path}",
+        f"stderr_log: {run_paths.stderr_path}",
+    ]
+    stderr_tail = _tail_text(run_paths.stderr_path)
+    if stderr_tail:
+        details.append("stderr_tail:\n" + stderr_tail)
+    stdout_tail = _tail_text(run_paths.stdout_path)
+    if stdout_tail:
+        details.append("stdout_tail:\n" + stdout_tail)
+    return "\n".join(details)
+
+
+def _tail_text(path: Path, max_lines: int = 40, max_chars: int = 6000) -> str:
+    """Return the last non-empty lines from a UTF-8-ish text file."""
+
+    if not path.exists() or path.stat().st_size <= 0:
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()[-max_lines:]
+    tail = "\n".join(lines).strip()
+    if len(tail) > max_chars:
+        tail = "..." + tail[-max_chars:]
+    return tail
+
+
 def _mark_failed(run_paths: RunPaths) -> None:
     trial_dir = run_paths.trial_dir
     if trial_dir is None:
@@ -73,4 +105,3 @@ def _mark_failed(run_paths: RunPaths) -> None:
     meta_path = trial_dir / "trial_meta.json"
     if meta_path.exists():
         update_segment(trial_dir, run_paths.segment.name, "failed")
-

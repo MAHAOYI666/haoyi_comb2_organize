@@ -20,7 +20,7 @@ MASK = IndexMask()
 def _maybe_section(monitor, event: str, ds: int | None = None, *, level: str = "full"):
     if monitor is None:
         return nullcontext()
-    return monitor.maybe_section(event, date=ds, level=level)
+    return monitor.section(event, date=ds)
 
 
 class FeatureSource(Protocol):
@@ -289,39 +289,17 @@ class ComboTrainDataset(Dataset):
             self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
             self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
 
-        loop_gen_feature = monitor.accumulator("dataset_init.loop.gen_feature", date=self.end_ds) if monitor else None
-        loop_gen_label = monitor.accumulator("dataset_init.loop.gen_label", date=self.end_ds) if monitor else None
-        loop_tensor_assign = monitor.accumulator("dataset_init.loop.tensor_assign", date=self.end_ds) if monitor else None
         with _maybe_section(monitor, "dataset_init.loop_total", self.end_ds, level="full"):
             for offset in range(self.ndays):
                 label_didx = self.start_didx + offset
                 feature_didx = label_didx - self.x_delay + 1
                 label_ds = loader.didx2date(label_didx)
                 feature_ds = loader.didx2date(feature_didx)
-                if loop_gen_feature is not None and monitor.detail_enabled("full"):
-                    with loop_gen_feature.tick():
-                        x = loader.gen_feature(feature_ds)
-                else:
-                    x = loader.gen_feature(feature_ds)
-                if loop_gen_label is not None and monitor.detail_enabled("full"):
-                    with loop_gen_label.tick():
-                        y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                else:
-                    y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                if loop_tensor_assign is not None and monitor.detail_enabled("full"):
-                    with loop_tensor_assign.tick():
-                        self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
-                        self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-                        self.W[offset] = w[self.validinsts].to(loader.dtype)
-                else:
-                    self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
-                    self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-                    self.W[offset] = w[self.validinsts].to(loader.dtype)
-
-        if loop_gen_feature is not None and monitor.detail_enabled("full"):
-            loop_gen_feature.flush()
-            loop_gen_label.flush()
-            loop_tensor_assign.flush()
+                x = loader.gen_feature(feature_ds)
+                y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
+                self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
+                self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
+                self.W[offset] = w[self.validinsts].to(loader.dtype)
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []
