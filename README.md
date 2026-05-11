@@ -100,6 +100,27 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 研究员只需要把命令里的 `runCombo.py` 和 `config.xml` 换成自己的实际路径。
 
+## 数据压缩选项
+
+实际使用时，只需要在 XML 的 `<combo><loader ...>` 节点里增加 `compression` 属性即可：
+
+```xml
+<loader dtype="float16" compression="fp4" data_start_ds="20160101">
+  ...
+</loader>
+```
+
+可选值：
+- `none`：默认值，不压缩，行为与原始流程一致
+- `fp4`：压缩特征存储，主要用于降低 CPU 内存占用
+- `fp8`：使用 PyTorch float8 存储；是否可用取决于当前 PyTorch 运行环境对 CPU float8 相关算子的支持
+
+压缩只作用于 comb2 内部的特征缓存存储：
+- `ComboTrainDataset.X`
+- `ComboBuffer.buffer`
+
+不压缩 `Y`、`W`、mask、label、因子文件、模型输入输出，也不改变 `cs_zscore`、`truncate`、`nan_to_num` 等数据预处理逻辑。模型侧拿到的仍然是解码后的浮点张量，所以体感上主要就是在 `config.xml` 里指定压缩方式。
+
 ## 运行结果
 
 执行后通常会产生这些输出：

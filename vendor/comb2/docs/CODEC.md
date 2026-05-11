@@ -23,7 +23,7 @@ Supported values:
 | value | behavior |
 | --- | --- |
 | `none` | `PassthroughCodec(loader.dtype)`; default and backward-compatible |
-| `fp8` | stores feature tensors as `torch.float8_e4m3fn` |
+| `fp8` | stores one raw byte per element in `torch.uint8`; bytes encode `torch.float8_e4m3fn` values |
 | `fp4` | stores two 4-bit codes per byte |
 
 Unknown values raise immediately. There is no silent fallback.
@@ -41,6 +41,8 @@ Unknown values raise immediately. There is no silent fallback.
 | storage device | CPU only in this phase |
 | device mixing | encode and decode use CPU storage; decode returns CPU tensors |
 | FP4 saturation | values below `-5` decode as `-5`; values above `5` decode as `5` |
+| FP8 logical encoding | `torch.float8_e4m3fn` |
+| FP8 physical storage dtype | `torch.uint8` |
 | FP8 requirement | PyTorch must support CPU cast to and from `torch.float8_e4m3fn` |
 
 Model code still receives decoded floating tensors. The existing model-side device move
@@ -71,6 +73,15 @@ Approximate precision for z-score data:
 | tails | saturated at `-5` and `5` |
 
 ## FP8 Environment Check
+
+FP8 uses `torch.float8_e4m3fn` as the logical encoded format, but the physical storage
+buffer returned by `allocate()` is `torch.uint8`. `encode_into()` casts input floats to
+`torch.float8_e4m3fn` and stores the raw bytes. `decode()` applies `int`, `slice`, list,
+or `torch.long` tensor indexing on the `torch.uint8` buffer first, then reinterprets the
+selected bytes as `torch.float8_e4m3fn` and casts to the requested output dtype.
+
+This avoids CPU `torch.float8_e4m3fn` advanced indexing kernels such as `index_cpu`,
+which are not implemented in some PyTorch builds. Storage remains 1 byte per element.
 
 `compression="fp8"` requires this probe to pass in the runtime environment:
 

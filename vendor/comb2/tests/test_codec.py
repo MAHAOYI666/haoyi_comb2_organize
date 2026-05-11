@@ -23,6 +23,10 @@ def _encode_decode(codec, shape, logical_dtype, x, idx=slice(None), out_dtype=No
     return codec.decode(buf, meta, idx, out_dtype=out_dtype), buf, meta
 
 
+def _fp8_expected(x: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    return x.to(torch.float8_e4m3fn).to(dtype)
+
+
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
 def test_passthrough_bit_identical(dtype: torch.dtype) -> None:
     codec = PassthroughCodec(dtype)
@@ -191,10 +195,55 @@ def test_fp8_roundtrip_when_cpu_float8_cast_supported(cpu_float8_supported: bool
     x = torch.tensor([0.0, 1.0, -1.0, 0.5, 2.0, -2.0, 3.0, -3.0], dtype=torch.float32).reshape(shape)
 
     decoded, _, _ = _encode_decode(codec, shape, torch.float16, x)
-    expected = x.to(torch.float8_e4m3fn).to(torch.float16)
+    expected = _fp8_expected(x, torch.float16)
 
     assert decoded.dtype == torch.float16
     assert torch.equal(decoded, expected)
+
+
+@pytest.mark.parametrize(
+    ("idx", "out_dtype"),
+    (
+        (3, torch.float32),
+        (slice(1, 4), torch.float16),
+        ([3, 0, 2], torch.float32),
+        (torch.tensor([1, 1, 2], dtype=torch.long), torch.float32),
+    ),
+)
+def test_fp8_decode_index_semantics_when_cpu_float8_cast_supported(
+    cpu_float8_supported: bool,
+    idx,
+    out_dtype: torch.dtype,
+) -> None:
+    if not cpu_float8_supported:
+        pytest.skip("CPU float8 cast is not supported in this PyTorch environment")
+    codec = FP8Codec()
+    shape = (5, 2, 3)
+    x = torch.linspace(-3.5, 3.5, math.prod(shape), dtype=torch.float32).reshape(shape)
+    buf, meta = codec.allocate(shape, device="cpu", logical_dtype=torch.float16)
+    codec.encode_into(buf, meta, slice(None), x)
+
+    decoded = codec.decode(buf, meta, idx, out_dtype=out_dtype)
+    expected = _fp8_expected(x[idx], out_dtype)
+
+    assert decoded.dtype == out_dtype
+    assert decoded.shape == expected.shape
+    assert torch.equal(decoded, expected)
+
+
+def test_fp8_decode_uses_logical_dtype_by_default_when_cpu_float8_cast_supported(cpu_float8_supported: bool) -> None:
+    if not cpu_float8_supported:
+        pytest.skip("CPU float8 cast is not supported in this PyTorch environment")
+    codec = FP8Codec()
+    shape = (5, 2, 3)
+    x = torch.linspace(-3.5, 3.5, math.prod(shape), dtype=torch.float32).reshape(shape)
+    buf, meta = codec.allocate(shape, device="cpu", logical_dtype=torch.bfloat16)
+    codec.encode_into(buf, meta, slice(None), x)
+
+    decoded = codec.decode(buf, meta, [3, 0, 2])
+
+    assert decoded.dtype == torch.bfloat16
+    assert torch.equal(decoded, _fp8_expected(x[[3, 0, 2]], torch.bfloat16))
 
 
 def test_fp8_raises_when_cpu_float8_cast_unsupported(cpu_float8_supported: bool) -> None:
@@ -225,10 +274,14 @@ def test_fp4_storage_bytes_formula() -> None:
 def test_fp8_storage_bytes_formula_when_supported(cpu_float8_supported: bool) -> None:
     if not cpu_float8_supported:
         pytest.skip("CPU float8 cast is not supported in this PyTorch environment")
-    shape = (10, 100, 64)
-    buf, _ = FP8Codec().allocate(shape, device="cpu", logical_dtype=torch.float16)
+    shape = (2, 3, 5)
+    codec = FP8Codec()
+    buf, meta = codec.allocate(shape, device="cpu", logical_dtype=torch.float16)
 
-    assert buf.element_size() * buf.numel() == math.prod(shape)
+    assert codec.storage_dtype == torch.uint8
+    assert meta.storage_dtype == torch.uint8
+    assert buf.dtype == torch.uint8
+    assert buf.element_size() * buf.numel() == 1 * math.prod(shape)
 
 
 def test_build_codec_rejects_unknown_name() -> None:

@@ -19,6 +19,10 @@ supported only by `compression="none"`. FP8 requires the local PyTorch build to 
 CPU casts to and from `torch.float8_e4m3fn`; unsupported environments raise instead of
 falling back.
 
+FP8 uses `torch.float8_e4m3fn` as the encoded format, but stores the physical buffer as
+`torch.uint8` raw bytes. This keeps 1 byte per element while avoiding unsupported CPU
+float8 advanced indexing kernels.
+
 Source-path validation:
 
 ```powershell

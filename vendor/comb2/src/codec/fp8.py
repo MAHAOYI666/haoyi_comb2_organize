@@ -21,13 +21,13 @@ def probe_cpu_float8_cast() -> bool:
 class FP8Codec:
     name = "fp8"
     supported_input_dtypes = COMPRESSED_FLOAT_DTYPES
-    storage_dtype = getattr(torch, "float8_e4m3fn", torch.uint8)
+    storage_dtype = torch.uint8
 
     def __init__(self):
-        storage_dtype = getattr(torch, "float8_e4m3fn", None)
-        if storage_dtype is None:
+        encoding_dtype = getattr(torch, "float8_e4m3fn", None)
+        if encoding_dtype is None:
             raise RuntimeError("FP8Codec requires torch.float8_e4m3fn, which is not available in this PyTorch build")
-        self.storage_dtype = storage_dtype
+        self.encoding_dtype = encoding_dtype
         if not probe_cpu_float8_cast():
             raise RuntimeError("FP8Codec requires CPU cast support for torch.float8_e4m3fn")
 
@@ -52,8 +52,11 @@ class FP8Codec:
         validate_input_device(x, meta, "FP8Codec")
         validate_input_dtype(x, self.supported_input_dtypes, "FP8Codec")
         validate_value_shape(x, meta, idx)
-        buf[idx] = x.to(dtype=self.storage_dtype)
+        encoded = x.to(dtype=self.encoding_dtype).contiguous().view(torch.uint8)
+        buf[idx] = encoded.to(device=meta.device)
 
     def decode(self, buf: torch.Tensor, meta: CodecMeta, idx, out_dtype=None) -> torch.Tensor:
         dtype = meta.logical_dtype if out_dtype is None else out_dtype
-        return buf[idx].to(dtype=dtype, device=meta.device)
+        raw = buf[idx].contiguous()
+        encoded = raw.view(self.encoding_dtype)
+        return encoded.to(dtype=dtype, device=meta.device)
