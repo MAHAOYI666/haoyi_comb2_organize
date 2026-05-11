@@ -36,7 +36,13 @@ class ComboBase:
 
         self.loader = ComboDataLoader(node.loader_config)
         self.loader.monitor = getattr(node, "monitor", None)
-        self.buffer = ComboBuffer(feat_size=self.loader.num_features, keepdays=self.tsDays, instsz=len(self.loader.mask.code), dtype=self.loader.dtype)
+        self.buffer = ComboBuffer(
+            feat_size=self.loader.num_features,
+            keepdays=self.tsDays,
+            instsz=len(self.loader.mask.code),
+            dtype=self.loader.dtype,
+            codec=self.loader.codec,
+        )
         self.selection = node.selection_module or DefaultSelectionModule(
             max_train_days=self.max_train_days,
             select_days=self.select_days,
@@ -250,6 +256,7 @@ class ComboBase:
             x_delay=self.retDays,
             step_size=self.tsDays,
             validinsts=plan.validinsts,
+            codec=self.loader.codec,
         )
         plan.validinsts = dataset.validinsts
         self.selection.before_fit(dataset, plan)

@@ -1,5 +1,35 @@
 # comb2 模型接入说明
 
+## Data Compression Options
+
+`comb2` supports optional feature storage compression through the loader XML attribute
+`compression`.
+
+```xml
+<loader dtype="float16" compression="fp4" />
+```
+
+Supported values are `none` (default passthrough), `fp8`, and `fp4`. Compression is
+applied only to `ComboTrainDataset.X` and `ComboBuffer.buffer` after existing feature
+preprocessing has completed. Labels, weights, masks, models, and factor files are not
+compressed.
+
+FP4/FP8 support `float16`, `float32`, and `bfloat16` logical tensors; `float64` is
+supported only by `compression="none"`. FP8 requires the local PyTorch build to support
+CPU casts to and from `torch.float8_e4m3fn`; unsupported environments raise instead of
+falling back.
+
+Source-path validation:
+
+```powershell
+$env:PYTHONPATH = "vendor/comb2"
+.\.venv\Scripts\python.exe -c "from src.codec import build_codec; print('ok')"
+.\.venv\Scripts\python.exe -m pytest vendor/comb2/tests/test_codec.py
+```
+
+See `docs/CODEC.md` for the data contract, precision notes, troubleshooting, and
+`setup.py` packaging caveats.
+
 本文档面向研究员，说明如何在 `comb2` 框架中接入自己的模型并完成训练、预测与回测。
 
 目标是让你只关注两件事：
