@@ -148,7 +148,20 @@ def write_study_reports(study: Any, study_root: Path) -> None:
                 "objective": meta.get("objective"),
                 "hard_filter_triggered": meta.get("hard_filter_triggered"),
             }
-            for key in ("sharpe_idx", "dd_li", "li_ret", "ret", "pnl", "days"):
+            for key in (
+                "role",
+                "row_label",
+                "run_start_ds",
+                "run_end_ds",
+                "score_start_ds",
+                "score_end_ds",
+                "sharpe_idx",
+                "dd_li",
+                "li_ret",
+                "ret",
+                "pnl",
+                "days",
+            ):
                 row[key] = segment.get(key)
             segment_rows.append(row)
     pd.DataFrame(segment_rows).to_csv(reports_dir / "segment_metrics.csv", index=False)

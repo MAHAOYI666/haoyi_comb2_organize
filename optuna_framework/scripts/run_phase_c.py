@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import textwrap
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree as ET
 
 import numpy as np
 
@@ -26,60 +24,6 @@ from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 
 
 SEEDS = (42, 43, 44)
-
-SEEDED_MODEL_TEMPLATE = """
-from __future__ import annotations
-
-import importlib.util
-import random
-from pathlib import Path
-
-import numpy as np
-import torch
-
-
-_ORIGINAL_MODEL_PATH = Path(__ORIGINAL_MODEL_PATH__)
-_SPEC = importlib.util.spec_from_file_location("_phase_c_seeded_base_model", _ORIGINAL_MODEL_PATH)
-_BASE_MODULE = importlib.util.module_from_spec(_SPEC)
-assert _SPEC.loader is not None
-_SPEC.loader.exec_module(_BASE_MODULE)
-
-
-def _apply_seed(seed: int) -> None:
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
-
-
-class ResearchModel(_BASE_MODULE.ResearchModel):
-    def __init__(self, config):
-        self.seed = int(config.get("seed", 42))
-        _apply_seed(self.seed)
-        super().__init__(config)
-
-    def fit(self, dataset):
-        _apply_seed(self.seed)
-        original_dataloader = getattr(_BASE_MODULE, "DataLoader", None)
-        if original_dataloader is None:
-            return super().fit(dataset)
-
-        def seeded_dataloader(*args, **kwargs):
-            if kwargs.get("generator") is None:
-                generator = torch.Generator()
-                generator.manual_seed(self.seed)
-                kwargs["generator"] = generator
-            return original_dataloader(*args, **kwargs)
-
-        _BASE_MODULE.DataLoader = seeded_dataloader
-        try:
-            return super().fit(dataset)
-        finally:
-            _BASE_MODULE.DataLoader = original_dataloader
-"""
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,7 +64,6 @@ def main() -> None:
                 )
         return
 
-    base_model_path = _baseline_model_path()
     results = []
     for candidate in candidates:
         seeds = _candidate_seeds(candidate)
@@ -134,8 +77,7 @@ def main() -> None:
                 snaptime=f"phase_c_{candidate['candidate']}_seed_{seed}_{full_segment.name}",
                 kind="phase_c",
             )
-            seeded_model_path = _write_seeded_model(run_paths.segment_dir, base_model_path)
-            overrides = _seeded_overrides(seed, seeded_model_path)
+            overrides = _seeded_overrides(seed)
             render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, candidate["params"], overrides)
             run_segment(run_paths)
             parsed = parse_full_period(run_paths.pnl_summary_path)
@@ -210,37 +152,11 @@ def _candidate_seeds(candidate: dict[str, Any]) -> tuple[int, ...]:
     return seeds
 
 
-def _seeded_overrides(seed: int, seeded_model_path: Path) -> dict[str, Any]:
+def _seeded_overrides(seed: int) -> dict[str, Any]:
     return {
         **STUDY_SPEC.fixed_overrides,
         "combo.model.seed": int(seed),
-        "combo.paths.model_path": str(seeded_model_path),
     }
-
-
-def _baseline_model_path() -> Path:
-    root = ET.parse(STUDY_SPEC.baseline_config_path).getroot()
-    paths = root.find("./combo/paths")
-    if paths is None:
-        raise ValueError("baseline XML is missing <combo><paths>")
-    raw_path = paths.get("model_path")
-    if not raw_path:
-        raise ValueError("baseline XML is missing combo.paths.model_path")
-    model_path = Path(raw_path).expanduser()
-    if not model_path.is_absolute():
-        model_path = Path(STUDY_SPEC.baseline_config_path).parent / model_path
-    return model_path.resolve()
-
-
-def _write_seeded_model(segment_dir: Path, base_model_path: Path) -> Path:
-    segment_dir.mkdir(parents=True, exist_ok=True)
-    model_path = (segment_dir / "seeded_model.py").resolve()
-    source = textwrap.dedent(SEEDED_MODEL_TEMPLATE).lstrip().replace(
-        "__ORIGINAL_MODEL_PATH__",
-        repr(str(base_model_path)),
-    )
-    model_path.write_text(source, encoding="utf-8")
-    return model_path
 
 
 if __name__ == "__main__":

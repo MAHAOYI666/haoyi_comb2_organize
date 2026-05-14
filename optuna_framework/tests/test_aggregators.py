@@ -6,7 +6,16 @@ from pathlib import Path
 
 import numpy as np
 
-from optuna_framework.aggregators import ensure_factor_audit_template, final_objective, load_baseline_thresholds, running_score
+import pytest
+
+from optuna_framework.aggregators import (
+    build_baseline_thresholds,
+    ensure_factor_audit_template,
+    final_objective,
+    load_baseline_thresholds,
+    require_tuning_period_baseline,
+    running_score,
+)
 from optuna_framework.metrics_parser import SegmentMetrics
 
 
@@ -15,6 +24,10 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def metric(sharpe: float, dd: float) -> SegmentMetrics:
     return SegmentMetrics(sharpe, dd, 0.1, 0.1, 1.0, 240, "row", ["row"])
+
+
+def metric_with_role(sharpe: float, dd: float, role: str) -> SegmentMetrics:
+    return SegmentMetrics(sharpe, dd, 0.1, 0.1, 1.0, 240, "row", ["row"], role=role)
 
 
 def test_running_score() -> None:
@@ -50,4 +63,23 @@ def test_factor_audit_template(tmp_path) -> None:
     ensure_factor_audit_template(tmp_path)
     assert path.read_text(encoding="utf-8") == first
     assert "2024/2025" in first
+
+
+def test_build_thresholds_prefers_continuous_tuning_period_for_hard_filter() -> None:
+    tuning = metric_with_role(1.4, 0.08, "tuning_period")
+    thresholds = build_baseline_thresholds(
+        {"tuning_2020_2023": tuning, "holdout_2020": metric_with_role(0.7, 0.1, "holdout")},
+        metric_with_role(1.0, 0.12, "full_period"),
+        {"full": metric_with_role(1.0, 0.12, "full_period")},
+    )
+    assert thresholds["tuning_period"]["sharpe_idx"] == 1.4
+    assert thresholds["hard_filter"]["min_sharpe_threshold"] == pytest.approx(1.1)
+    assert thresholds["hard_filter"]["max_dd_threshold"] == pytest.approx(0.104)
+    assert require_tuning_period_baseline(thresholds)["dd_li"] == 0.08
+
+
+def test_require_tuning_period_baseline_rejects_legacy_thresholds() -> None:
+    legacy = load_baseline_thresholds(FIXTURES / "baseline_thresholds.json")
+    with pytest.raises(ValueError, match="continuous tuning_period"):
+        require_tuning_period_baseline(legacy)
 

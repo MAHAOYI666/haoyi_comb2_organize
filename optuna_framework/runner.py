@@ -57,6 +57,8 @@ def run_segment(run_paths: RunPaths) -> object:
             start_ds=run_paths.segment.start_ds,
             end_ds=run_paths.segment.end_ds,
             role=run_paths.segment.role,
+            score_start_ds=run_paths.segment.scoring_start_ds,
+            score_end_ds=run_paths.segment.scoring_end_ds,
         )
     except Exception as exc:
         _mark_failed(run_paths)

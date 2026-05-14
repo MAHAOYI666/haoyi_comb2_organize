@@ -7,9 +7,14 @@ from optuna_framework.specs import SegmentSpec, StudySpec
 
 
 TUNING_SEGMENTS = (
-    SegmentSpec("seg01", "tuning", 20210104, 20211231),
-    SegmentSpec("seg02", "tuning", 20220104, 20221230),
-    SegmentSpec("seg03", "tuning", 20230103, 20231229),
+    SegmentSpec(
+        "tuning_2020_2023",
+        "tuning_period",
+        20200102,
+        20231229,
+        score_start_ds=20210104,
+        score_end_ds=20231229,
+    ),
 )
 
 HOLDOUT_SEGMENTS = (

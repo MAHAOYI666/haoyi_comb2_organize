@@ -39,7 +39,6 @@ MODEL_PATCH_KEYS = {
     "config.combo.model.@dropout",
     "config.combo.model.@hiddenSize",
     "config.combo.model.@fcSize",
-    "config.combo.model.@epochs",
     "config.combo.model.@scheduler_step_size",
     "config.combo.model.@scheduler_gamma",
 }
@@ -90,8 +89,11 @@ def render_config(
     resolved_meta = {
         "trial_number": run_paths.trial_number,
         "segment": run_paths.segment.name,
+        "role": run_paths.segment.role,
         "start_ds": run_paths.segment.start_ds,
         "end_ds": run_paths.segment.end_ds,
+        "score_start_ds": run_paths.segment.scoring_start_ds,
+        "score_end_ds": run_paths.segment.scoring_end_ds,
         "output_root": str(run_paths.output_root),
         "checkpoint_root": str(run_paths.checkpoint_root),
         "snaptime": run_paths.snaptime,

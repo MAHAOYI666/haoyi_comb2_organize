@@ -1,37 +1,4 @@
-"""Manual seed sanity check runner.
-
-Required manual patch for ``eg-torch/model.py`` before executing real runs:
-
-```diff
-diff --git a/eg-torch/model.py b/eg-torch/model.py
---- a/eg-torch/model.py
-+++ b/eg-torch/model.py
-@@
-+import random
-+import numpy as np
-@@
- class ResearchModel:
-     def __init__(self, config: dict[str, Any]):
-@@
-         self.loss_fn = TrainLoss()
-+        self.seed = int(config.get("seed", 42))
-@@
-     def fit(self, dataset):
-+        torch.manual_seed(self.seed)
-+        np.random.seed(self.seed)
-+        random.seed(self.seed)
-+        if torch.cuda.is_available():
-+            torch.cuda.manual_seed_all(self.seed)
-+            torch.backends.cudnn.benchmark = False
-+            torch.backends.cudnn.deterministic = True
-         self.trainii = dataset.validinsts.detach().cpu().to(torch.long).clone()
-@@
--        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
-+        g = torch.Generator()
-+        g.manual_seed(self.seed)
-+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, generator=g)
-```
-"""
+"""Manual seed sanity check runner."""
 
 from __future__ import annotations
 
@@ -52,7 +19,7 @@ from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description="Run two same-seed baseline seg01 checks.")
+    parser = argparse.ArgumentParser(description="Run two same-seed baseline tuning-period checks.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned commands without running runCombo.py")
     parser.add_argument("--study-root", default=None, help="Override default study root")
     parser.add_argument("--seed", type=int, default=42, help="Seed to check")
@@ -65,7 +32,7 @@ def main() -> None:
     args = parse_args()
     study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.segment_by_name("seg01")
+    segment = STUDY_SPEC.tuning_segments[0]
     params = adapter.baseline_params()
     run_paths_list = []
     for repeat in (1, 2):

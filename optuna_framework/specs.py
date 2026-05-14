@@ -15,6 +15,26 @@ class SegmentSpec:
     role: str
     start_ds: int
     end_ds: int
+    score_start_ds: int | None = None
+    score_end_ds: int | None = None
+
+    @property
+    def scoring_start_ds(self) -> int:
+        """Return the objective/scoring start date for this run."""
+
+        return self.start_ds if self.score_start_ds is None else self.score_start_ds
+
+    @property
+    def scoring_end_ds(self) -> int:
+        """Return the objective/scoring end date for this run."""
+
+        return self.end_ds if self.score_end_ds is None else self.score_end_ds
+
+    @property
+    def has_separate_scoring_window(self) -> bool:
+        """Return whether the run and scoring windows differ."""
+
+        return self.scoring_start_ds != self.start_ds or self.scoring_end_ds != self.end_ds
 
 
 @dataclass(frozen=True)

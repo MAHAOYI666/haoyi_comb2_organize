@@ -13,26 +13,29 @@ from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 
 def test_render_baseline_params_only_changes_path_whitelist(tmp_path) -> None:
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.segment_by_name("seg01")
+    segment = STUDY_SPEC.tuning_segments[0]
     run_paths = build_trial_run_paths(tmp_path, 7, segment)
     materialized = render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, adapter.baseline_params())
     diffs = structured_xml_diff(STUDY_SPEC.baseline_config_path, run_paths.config_path)
     assert_only_allowed_diffs(diffs, PATH_PATCH_KEYS)
     root = ET.parse(run_paths.config_path).getroot()
-    assert root.find("./strategy").get("start_ds") == "20210104"
-    assert root.find("./strategy").get("end_ds") == "20211231"
-    assert root.find("./combo/runtime").get("snaptime") == "trial_00007_seg01"
+    assert root.find("./strategy").get("start_ds") == "20200102"
+    assert root.find("./strategy").get("end_ds") == "20231229"
+    assert root.find("./combo/runtime").get("snaptime") == "trial_00007_tuning_2020_2023"
     assert root.find("./combo/paths").get("model_path") == str((get_repo_root() / "eg-torch" / "model.py").resolve())
     assert root.find("./strategy").get("path") == str((get_repo_root() / "alpha_strategy.py").resolve())
     assert root.find("./constants").get("output_root") == str(run_paths.output_root)
     assert root.find("./constants").get("checkpoint_root") == str(run_paths.checkpoint_root)
+    meta = json.loads(run_paths.resolved_meta_path.read_text(encoding="utf-8"))
+    assert meta["score_start_ds"] == 20210104
+    assert meta["score_end_ds"] == 20231229
     assert materialized["scheduler_step_size"] == 10
     assert json.loads(run_paths.params_path.read_text(encoding="utf-8"))["scheduler_step_size"] == 10
 
 
 def test_fixed_overrides_take_effect(tmp_path) -> None:
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.segment_by_name("seg01")
+    segment = STUDY_SPEC.tuning_segments[0]
     run_paths = build_trial_run_paths(tmp_path, 8, segment)
     render_config(
         STUDY_SPEC.baseline_config_path,
@@ -60,7 +63,7 @@ def test_apply_fixed_override_rejects_missing_element() -> None:
 
 def test_fixed_override_can_create_combo_output_element(tmp_path) -> None:
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.segment_by_name("seg01")
+    segment = STUDY_SPEC.tuning_segments[0]
     run_paths = build_trial_run_paths(tmp_path, 9, segment)
 
     render_config(

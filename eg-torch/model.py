@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import random
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -99,9 +101,25 @@ class ResearchModel:
         self.scheduler_step_size = int(config.get("scheduler_step_size", 10))
         self.scheduler_gamma = float(config.get("scheduler_gamma", 0.5))
         self.grad_clip = float(config.get("grad_clip", 10.0))
+        self.seed = int(config.get("seed", 42))
         self.trainii: torch.Tensor | None = None
         self.model: Model | None = None
         self.loss_fn = TrainLoss()
+        self._apply_seed()
+
+    def _apply_seed(self) -> None:
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+
+    def _dataloader_generator(self) -> torch.Generator:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        return generator
 
     def _init_model(self, trainii: torch.Tensor) -> Model:
         model = Model(
@@ -146,6 +164,7 @@ class ResearchModel:
         return float(loss.detach().cpu())
 
     def fit(self, dataset):
+        self._apply_seed()
         self.trainii = dataset.validinsts.detach().cpu().to(torch.long).clone()
         self.model = self._init_model(self.trainii)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -154,7 +173,7 @@ class ResearchModel:
             step_size=self.scheduler_step_size,
             gamma=self.scheduler_gamma,
         )
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, generator=self._dataloader_generator())
         self.model.train()
 
         for epoch in range(self.epochs):

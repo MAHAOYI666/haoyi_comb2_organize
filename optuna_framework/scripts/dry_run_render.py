@@ -1,4 +1,4 @@
-"""Render one baseline-equivalent seg01 config to ``/tmp/dry_run``."""
+"""Render one baseline-equivalent tuning-period config under ``optuna_runs``."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ if __package__ in (None, ""):
     bootstrap_repo_imports()
 
 from optuna_framework.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
-from optuna_framework.paths import build_baseline_run_paths
+from optuna_framework.paths import build_baseline_run_paths, get_repo_root
 from optuna_framework.scripts._script_common import adapter_for_name
 from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 
@@ -19,8 +19,8 @@ def main() -> None:
     """Render a dry-run config and verify XML differences are whitelisted."""
 
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.segment_by_name("seg01")
-    dry_root = Path("/tmp/dry_run").resolve()
+    segment = STUDY_SPEC.tuning_segments[0]
+    dry_root = (get_repo_root() / "optuna_runs" / "dry_run_render").resolve()
     run_paths = build_baseline_run_paths(dry_root, segment)
     params = adapter.baseline_params()
     render_config(

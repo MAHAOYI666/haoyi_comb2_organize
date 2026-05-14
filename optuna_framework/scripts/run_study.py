@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_framework.aggregators import final_objective, load_baseline_thresholds, running_score
+from optuna_framework.aggregators import final_objective, load_baseline_thresholds, require_tuning_period_baseline
 from optuna_framework.config_renderer import render_config
 from optuna_framework.paths import build_trial_run_paths, resolve_study_root
 from optuna_framework.runner import SegmentRunError
@@ -58,6 +58,7 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
     adapter = adapter_for_name(STUDY_SPEC.adapter_name)
     threshold_path = study_root / "baseline" / "baseline_thresholds.json"
     thresholds = load_baseline_thresholds(threshold_path)
+    require_tuning_period_baseline(thresholds)
 
     def objective(trial: Any) -> float:
         try:
@@ -72,16 +73,14 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
         trial_dir = study_root / "trials" / f"trial_{trial.number:05d}"
         init_trial_meta(trial_dir, trial.number, materialized, [segment.name for segment in STUDY_SPEC.tuning_segments])
         segment_metrics = []
-        sharpes = []
         try:
             for step, segment in enumerate(STUDY_SPEC.tuning_segments, start=1):
                 run_paths = build_trial_run_paths(study_root, trial.number, segment)
                 render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, params, STUDY_SPEC.fixed_overrides)
                 metrics = run_segment(run_paths)
                 segment_metrics.append(metrics)
-                sharpes.append(metrics.sharpe_idx)
                 update_segment(trial_dir, segment.name, "complete", metrics.to_dict())
-                score = running_score(sharpes)
+                score = metrics.sharpe_idx
                 trial.report(score, step=step)
                 if trial.should_prune():
                     update_trial_state(trial_dir, "pruned", objective=score)
