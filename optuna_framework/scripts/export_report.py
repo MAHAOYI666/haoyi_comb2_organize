@@ -14,7 +14,15 @@ if __package__ in (None, ""):
     bootstrap_repo_imports()
 
 from optuna_framework.paths import resolve_study_root
-from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
+from optuna_framework.studies.eg_torch_v1 import (
+    ADAPTER_NAME,
+    BASELINE_CONFIG_PATH,
+    FIXED_OVERRIDES,
+    FULL_RUN_WINDOW,
+    SCORING_WINDOW,
+    STUDY_NAME,
+    TUNING_RUN_WINDOW,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,7 +38,7 @@ def main() -> None:
     """Export or print the report target."""
 
     args = parse_args()
-    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
+    study_root = resolve_study_root(args.study_root, STUDY_NAME)
     report_path = study_root / "REPORT.md"
     if args.dry_run:
         print(f"[DRY-RUN] report_path={report_path}")
@@ -51,17 +59,21 @@ def _build_report(study_root: Path) -> str:
         title = "no improvement found"
     lines = [f"# {title}", ""]
     lines.append("## Experiment")
-    lines.append(f"- study: {STUDY_SPEC.name}")
-    lines.append(f"- adapter: {STUDY_SPEC.adapter_name}")
-    lines.append(f"- baseline config: {STUDY_SPEC.baseline_config_path}")
-    lines.append(f"- fixed_overrides: `{STUDY_SPEC.fixed_overrides}`")
+    lines.append(f"- study: {STUDY_NAME}")
+    lines.append(f"- adapter: {ADAPTER_NAME}")
+    lines.append(f"- baseline config: {BASELINE_CONFIG_PATH}")
+    lines.append(f"- fixed_overrides: `{FIXED_OVERRIDES}`")
     lines.append("")
-    lines.append("## Segments")
-    for segment in STUDY_SPEC.baseline_segments():
-        lines.append(f"- {segment.name}: {segment.role} {segment.start_ds}-{segment.end_ds}")
+    lines.append("## Windows")
+    lines.append(f"- baseline and Phase C run: {FULL_RUN_WINDOW[0]}-{FULL_RUN_WINDOW[1]}")
+    lines.append(f"- Phase A/B run: {TUNING_RUN_WINDOW[0]}-{TUNING_RUN_WINDOW[1]}")
+    lines.append(f"- Phase A/B scoring: {SCORING_WINDOW[0]}-{SCORING_WINDOW[1]}")
     lines.append("")
     lines.append("## Baseline")
     if baseline:
+        tuning = baseline.get("tuning_period", {})
+        if tuning:
+            lines.append(f"- tuning_period: sharpe_idx={tuning.get('sharpe_idx')}, dd_li={tuning.get('dd_li')}, days={tuning.get('days')}")
         for name, metric in baseline.get("by_segment", {}).items():
             lines.append(f"- {name}: sharpe_idx={metric['sharpe_idx']}, dd_li={metric['dd_li']}, days={metric['days']}")
         full = baseline.get("full_period", {})

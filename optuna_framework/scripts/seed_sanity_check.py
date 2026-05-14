@@ -11,9 +11,16 @@ if __package__ in (None, ""):
 
 from optuna_framework.config_renderer import render_config
 from optuna_framework.paths import build_named_run_paths, resolve_study_root
-from optuna_framework.runner import build_run_command, run_segment
+from optuna_framework.runner import build_run_command, run_inference
 from optuna_framework.scripts._script_common import adapter_for_name, print_command
-from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
+from optuna_framework.studies.eg_torch_v1 import (
+    ADAPTER_NAME,
+    BASELINE_CONFIG_PATH,
+    FIXED_OVERRIDES,
+    SCORING_WINDOW,
+    STUDY_NAME,
+    TUNING_RUN_WINDOW,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,19 +37,18 @@ def main() -> None:
     """Run or print the same-seed sanity check."""
 
     args = parse_args()
-    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    segment = STUDY_SPEC.tuning_segments[0]
+    study_root = resolve_study_root(args.study_root, STUDY_NAME)
+    adapter = adapter_for_name(ADAPTER_NAME)
     params = adapter.baseline_params()
     run_paths_list = []
     for repeat in (1, 2):
-        segment_dir = study_root / "seed_sanity" / f"seed_{args.seed}_repeat_{repeat}" / segment.name
         run_paths = build_named_run_paths(
             study_root,
-            segment_dir,
-            segment,
-            snaptime=f"seed_sanity_seed_{args.seed}_repeat_{repeat}_{segment.name}",
+            f"seed_sanity/seed_{args.seed}_repeat_{repeat}",
             kind="seed_sanity",
+            run_window=TUNING_RUN_WINDOW,
+            score_window=SCORING_WINDOW,
+            snaptime=f"seed_sanity_seed_{args.seed}_repeat_{repeat}",
         )
         run_paths_list.append(run_paths)
 
@@ -54,9 +60,9 @@ def main() -> None:
 
     metrics = []
     for run_paths in run_paths_list:
-        overrides = {**STUDY_SPEC.fixed_overrides, "combo.model.seed": args.seed}
-        render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, params, overrides)
-        metrics.append(run_segment(run_paths))
+        overrides = {**FIXED_OVERRIDES, "combo.model.seed": args.seed}
+        render_config(BASELINE_CONFIG_PATH, run_paths, adapter, params, overrides)
+        metrics.append(run_inference(run_paths))
     diff = abs(metrics[0].sharpe_idx - metrics[1].sharpe_idx)
     print(f"repeat_1_sharpe_idx={metrics[0].sharpe_idx:.8f}")
     print(f"repeat_2_sharpe_idx={metrics[1].sharpe_idx:.8f}")

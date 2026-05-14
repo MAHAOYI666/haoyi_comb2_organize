@@ -13,7 +13,7 @@ from optuna_framework.paths import build_trial_run_paths, resolve_study_root
 from optuna_framework.runner import build_run_command
 from optuna_framework.scripts._script_common import adapter_for_name, print_command
 from optuna_framework.scripts.run_study import OPTUNA_STUDY_NAME, make_callback, make_objective, storage_url
-from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
+from optuna_framework.studies.eg_torch_v1 import ADAPTER_NAME, SCORING_WINDOW, STUDY_NAME, TUNING_RUN_WINDOW
 from optuna_framework.study_utils import completed_history_count, create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
 
 
@@ -31,16 +31,17 @@ def main() -> None:
     """Run or print smoke-study setup."""
 
     args = parse_args()
-    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
+    study_root = resolve_study_root(args.study_root, STUDY_NAME)
+    adapter = adapter_for_name(ADAPTER_NAME)
     if args.dry_run:
         print(f"[DRY-RUN] smoke study_root={study_root}")
         print(f"[DRY-RUN] storage={storage_url(study_root, 'study_smoke.db')}")
         print("[DRY-RUN] sampler=TPESampler(n_startup_trials=2, multivariate=True, group=True, seed=42)")
         print("[DRY-RUN] pruner=MedianPruner(n_startup_trials=2, n_warmup_steps=2, interval_steps=1)")
-        for segment in STUDY_SPEC.tuning_segments:
-            run_paths = build_trial_run_paths(study_root, 0, segment)
-            print_command(f"[DRY-RUN] smoke/trial_00000/{segment.name}", run_paths.config_path, build_run_command(run_paths.config_path))
+        print(f"[DRY-RUN] run_window={TUNING_RUN_WINDOW[0]}-{TUNING_RUN_WINDOW[1]}")
+        print(f"[DRY-RUN] scoring_window={SCORING_WINDOW[0]}-{SCORING_WINDOW[1]}")
+        run_paths = build_trial_run_paths(study_root, 0, TUNING_RUN_WINDOW, SCORING_WINDOW)
+        print_command("[DRY-RUN] smoke/trial_00000", run_paths.config_path, build_run_command(run_paths.config_path))
         return
 
     study_root.mkdir(parents=True, exist_ok=True)

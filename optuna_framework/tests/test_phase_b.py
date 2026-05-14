@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from optuna_framework.metrics_parser import SegmentMetrics
+from optuna_framework.metrics_parser import WindowMetrics
 from optuna_framework.scripts.run_phase_b import _phase_b_rejection_reasons
 
 
-def metric(sharpe: float, dd: float) -> SegmentMetrics:
-    return SegmentMetrics(sharpe, dd, 0.1, 0.1, 1.0, 240, "row", ["row"], role="tuning_period")
+def metric(sharpe: float, dd: float) -> WindowMetrics:
+    return WindowMetrics(sharpe, dd, 0.1, 0.1, 1.0, 240, "row", ["row"])
 
 
 def test_phase_b_rejects_seed_below_continuous_baseline_thresholds() -> None:

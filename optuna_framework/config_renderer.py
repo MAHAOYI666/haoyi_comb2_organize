@@ -68,8 +68,8 @@ def render_config(
     root = tree.getroot()
 
     materialized = adapter.apply_params_to_xml(root, params)
-    _set_attr(root, "./strategy", "start_ds", run_paths.segment.start_ds)
-    _set_attr(root, "./strategy", "end_ds", run_paths.segment.end_ds)
+    _set_attr(root, "./strategy", "start_ds", run_paths.run_start_ds)
+    _set_attr(root, "./strategy", "end_ds", run_paths.run_end_ds)
     _set_attr(root, "./constants", "output_root", str(run_paths.output_root))
     _set_attr(root, "./constants", "checkpoint_root", str(run_paths.checkpoint_root))
     _set_attr(root, "./combo/runtime", "snaptime", run_paths.snaptime)
@@ -79,7 +79,7 @@ def render_config(
 
     _resolve_relative_paths(root, baseline_config_path.parent)
 
-    run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
+    run_paths.run_dir.mkdir(parents=True, exist_ok=True)
     run_paths.output_root.mkdir(parents=True, exist_ok=True)
     run_paths.checkpoint_root.mkdir(parents=True, exist_ok=True)
 
@@ -88,12 +88,14 @@ def render_config(
     _write_json(run_paths.params_path, materialized)
     resolved_meta = {
         "trial_number": run_paths.trial_number,
-        "segment": run_paths.segment.name,
-        "role": run_paths.segment.role,
-        "start_ds": run_paths.segment.start_ds,
-        "end_ds": run_paths.segment.end_ds,
-        "score_start_ds": run_paths.segment.scoring_start_ds,
-        "score_end_ds": run_paths.segment.scoring_end_ds,
+        "run_window": {
+            "start_ds": run_paths.run_start_ds,
+            "end_ds": run_paths.run_end_ds,
+        },
+        "score_window": {
+            "start_ds": run_paths.score_start_ds,
+            "end_ds": run_paths.score_end_ds,
+        },
         "output_root": str(run_paths.output_root),
         "checkpoint_root": str(run_paths.checkpoint_root),
         "snaptime": run_paths.snaptime,
