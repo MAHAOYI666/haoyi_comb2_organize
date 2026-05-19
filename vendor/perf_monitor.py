@@ -19,6 +19,7 @@ class PerfMonitorConfig:
     print_summary: bool = True
     collect_gpu: bool = True
     sync_cuda: bool = False
+    verbose: bool = False
 
 
 class PerfMonitor:
@@ -193,8 +194,21 @@ class PerfMonitor:
             return None
         return None
 
-    @staticmethod
-    def _format_float(value: float | None) -> str:
-        if value is None:
-            return ""
-        return f"{value:.3f}"
+
+
+def current_rss_mb() -> float:
+    rss = PerfMonitor._read_rss_mb()
+    return 0.0 if rss is None else rss
+
+
+def progress_line(stage: str, current: int, total: int, start_time: float, details: str = "") -> str:
+    suffix = f" ({details})" if details else ""
+    return (
+        f"[INFO|{time.strftime('%H:%M:%S', time.localtime())}] {stage}--"
+        f"updates {current}/{total} mem {current_rss_mb():.2f} MB--"
+        f"{time.perf_counter() - start_time:.2f} secs{suffix}"
+    )
+
+
+def print_progress(stage: str, current: int, total: int, start_time: float, details: str = "", final: bool = False):
+    print(progress_line(stage, current, total, start_time, details), end="\n" if final else "\r", flush=True)

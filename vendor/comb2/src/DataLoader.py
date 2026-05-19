@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import sys
+import time
+from pathlib import Path
 from typing import Iterable, Protocol, Sequence
 
 import numpy as np
@@ -12,6 +15,11 @@ from factorsim import IndexMask, Memmaper2
 from torch.utils.data import Dataset
 
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, to_bool_mask, truncate, winsorize_by_quantile
+
+ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
+if str(ORGANIZE_ROOT) not in sys.path:
+    sys.path.insert(0, str(ORGANIZE_ROOT))
+from vendor.perf_monitor import print_progress
 
 MASK = IndexMask()
 
@@ -31,6 +39,7 @@ class MemmapFeatureSource:
         self.paths = list(paths)
         self.dtype = dtype
         self.feature_dim = len(self.paths)
+        self.verbose = False
         self._cache: dict[str, Memmaper2] = {}
         self._day_cache: dict[int, torch.Tensor] = {}
 
@@ -121,6 +130,7 @@ class LoaderConfig:
     valid_path: str
     filtered_path: str
     base_universe_path: str | None = None
+    verbose: bool = False
 
 
 class ComboDataLoader:
@@ -137,6 +147,8 @@ class ComboDataLoader:
         self.filtered_source = MemmapMaskSource(self.config.filtered_path)
         self.base_universe_source = MemmapMaskSource(self.config.base_universe_path)
         self.num_features = self.factor_source.feature_dim + self.cube_source.feature_dim
+        self.verbose = bool(getattr(config, "verbose", False))
+        self.factor_source.verbose = self.verbose
 
     def date2didx(self, ds: int) -> int:
         didx = int(self.mask.date2didx(int(ds)))
@@ -255,10 +267,14 @@ class ComboTrainDataset(Dataset):
         self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
         self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
 
+        progress_start = time.perf_counter()
+        loaded_days = 0
         for window_start in range(0, self.ndays, self.step_size):
             window_end = min(window_start + self.step_size, self.ndays)
             feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
+            load_start = time.perf_counter()
             loader.prefetch_features(feature_days)
+            feature_load_time = time.perf_counter() - load_start
             for offset in range(window_start, window_end):
                 label_didx = self.start_didx + offset
                 feature_didx = label_didx - self.x_delay + 1
@@ -269,6 +285,10 @@ class ComboTrainDataset(Dataset):
                 self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
                 self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
                 self.W[offset] = w[self.validinsts].to(loader.dtype)
+                loaded_days += 1
+            if loader.verbose:
+                detail = f"days {feature_days[0]}-{feature_days[-1]}, load {feature_load_time:.2f}s"
+                print_progress("Stage:load_train_days", loaded_days, self.ndays, progress_start, detail, final=loaded_days == self.ndays)
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []

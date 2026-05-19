@@ -7,6 +7,9 @@ import importlib.util
 import os
 import re
 import shutil
+import sys
+import time
+from pathlib import Path
 from io import BytesIO
 from typing import Any
 
@@ -14,6 +17,11 @@ import torch
 
 from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig, nan_to_num
 from .selection import DefaultSelectionModule
+
+ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
+if str(ORGANIZE_ROOT) not in sys.path:
+    sys.path.insert(0, str(ORGANIZE_ROOT))
+from vendor.perf_monitor import print_progress
 
 
 class ComboBase:
@@ -243,6 +251,8 @@ class ComboBase:
             f"[TRAIN] ds={ds} target_ds={plan.target_ds} "
             f"loading_days={plan.loading_days} raw_ndays={plan.raw_ndays} ndays={plan.ndays} tsDays={self.tsDays}"
         )
+        train_start = time.perf_counter()
+        dataset_start = time.perf_counter()
         dataset = ComboTrainDataset(
             self.loader,
             end_ds=plan.target_ds,
@@ -251,12 +261,28 @@ class ComboBase:
             step_size=self.tsDays,
             validinsts=plan.validinsts,
         )
+        dataset_time = time.perf_counter() - dataset_start
         plan.validinsts = dataset.validinsts
+        selection_start = time.perf_counter()
         self.selection.before_fit(dataset, plan)
+        before_fit_time = time.perf_counter() - selection_start
         print(f"[TRAIN] dataset_len={len(dataset)} valid_instruments={dataset.numValidinsts}")
         self.model = self.research_model_cls(self._model_config())
+        fit_start = time.perf_counter()
         self.model.fit(dataset)
+        fit_time = time.perf_counter() - fit_start
+        selection_start = time.perf_counter()
         self.selection.after_fit(self.model, plan)
+        after_fit_time = time.perf_counter() - selection_start
+        if getattr(self.loader, "verbose", False):
+            print_progress(
+                f"Stage:Train ds={ds}",
+                1,
+                1,
+                train_start,
+                f"dataset {dataset_time:.2f}, before_fit {before_fit_time:.2f}, fit {fit_time:.2f}, after_fit {after_fit_time:.2f}",
+                final=True,
+            )
         print(f"[TRAIN] finished ds={ds} target_ds={plan.target_ds}")
 
     def needTrain(self, ds: int) -> bool:

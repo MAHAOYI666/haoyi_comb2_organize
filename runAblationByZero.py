@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import re
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +25,7 @@ from comb2_pcmaster import DailyBacktest
 from factorsim import IndexMask
 from runCombo import Node, build_backtest_node, build_strategy_file, dump_alpha_analysis, print_daily_metrics
 from src.DataLoader import nan_to_num
-from vendor.perf_monitor import PerfMonitor
+from vendor.perf_monitor import PerfMonitor, print_progress
 
 organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
 organize_config_module = importlib.util.module_from_spec(organize_config_spec)
@@ -144,8 +145,18 @@ class AblationCombo(ComboBase):
 
         self.current_gen_ds = ds
         items = list(self.variant_features.items())
-        for start in range(0, len(items), self.ablation_batch_size):
+        batch_start = time.perf_counter()
+        total_batches = (len(items) + self.ablation_batch_size - 1) // self.ablation_batch_size
+        for batch_idx, start in enumerate(range(0, len(items), self.ablation_batch_size), start=1):
             self._store_feature_batch(feature_window, valid_mask, items[start : start + self.ablation_batch_size])
+            if getattr(self.loader, "verbose", False):
+                print_progress(
+                    f"Stage:ablation_predict ds={ds}",
+                    batch_idx,
+                    total_batches,
+                    batch_start,
+                    final=batch_idx == total_batches,
+                )
 
         baseline_alpha = self.variant_alphas["baseline"]
         self.node.alpha[:] = baseline_alpha
@@ -228,10 +239,18 @@ def run_group(
         else:
             loop_backtest = DailyBacktest(build_backtest_node(strategy_path, variant_config(organize_config, ablation_root / "baseline_probe")))
 
-    for date in sorted(loop_backtest.vwap_data.index):
+    dates = sorted(loop_backtest.vwap_data.index)
+    date_start = time.perf_counter()
+    combine_time = 0.0
+    backtest_time = 0.0
+    verbose = bool(monitor.config.verbose)
+    for date_idx, date in enumerate(dates, start=1):
         date_int = int(date)
+        stage_start = time.perf_counter()
         with monitor.section("combine", date=date_int):
             combo.Combine(date_int)
+        combine_time += time.perf_counter() - stage_start
+        stage_start = time.perf_counter()
         with monitor.section("backtest_step", date=date_int):
             baseline_metrics = None
             for name, backtest in backtests.items():
@@ -239,8 +258,18 @@ def run_group(
                 metrics = backtest.step(date_int, pd.Series(alpha, index=codes))
                 if name == "baseline":
                     baseline_metrics = metrics
+        backtest_time += time.perf_counter() - stage_start
         if baseline_metrics is not None:
             print_daily_metrics(baseline_metrics)
+        if verbose:
+            print_progress(
+                "Stage:ablation_group_dates",
+                date_idx,
+                len(dates),
+                date_start,
+                f"combine {combine_time:.2f}, backtest {backtest_time:.2f}, variants {len(backtests)}",
+                final=date_idx == len(dates),
+            )
 
     with monitor.section("backtest_finalize"):
         for backtest in backtests.values():
@@ -262,7 +291,9 @@ def main():
         selected_features = parse_features(args.features)
         if selected_features is None:
             selected_features = list(range(probe_combo.loader.num_features))
-        for group_idx, group_features in enumerate(feature_groups(selected_features, args.feature_group_size), start=1):
+        groups = feature_groups(selected_features, args.feature_group_size)
+        groups_start = time.perf_counter()
+        for group_idx, group_features in enumerate(groups, start=1):
             print(f"[ABLATION] group={group_idx} features={group_features[0]}-{group_features[-1]} count={len(group_features)}")
             run_group(
                 organize_config=organize_config,
@@ -273,6 +304,8 @@ def main():
                 monitor=monitor,
                 include_baseline_output=group_idx == 1,
             )
+            if monitor.config.verbose:
+                print_progress("Stage:ablation_groups", group_idx, len(groups), groups_start, final=group_idx == len(groups))
     finally:
         monitor.close()
 

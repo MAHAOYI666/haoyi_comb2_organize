@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+import time
 from dataclasses import fields
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from src.DataLoader import ComboDataLoader, ComboTrainDataset
 from comb2_pcmaster import BacktestNode, DailyBacktest
 from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
-from vendor.perf_monitor import PerfMonitor
+from vendor.perf_monitor import PerfMonitor, print_progress
 
 organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
 organize_config_module = importlib.util.module_from_spec(organize_config_spec)
@@ -42,7 +43,9 @@ class Node:
 
         self.model_config = dict(config["model"])
         loader_fields = {field.name for field in fields(LoaderConfig)}
-        self.loader_config = LoaderConfig(**{key: value for key, value in config["loader"].items() if key in loader_fields})
+        loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
+        loader_config["verbose"] = bool(getattr(self, "verbose", False))
+        self.loader_config = LoaderConfig(**loader_config)
 
 
 def print_daily_metrics(metrics: dict):
@@ -92,8 +95,6 @@ def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFra
     if alpha.index.nlevels > 1:
         alpha = alpha.reset_index("times", drop=True).sort_index()
     date_idx = alpha.index.astype(int)
-    end_time = min(int(date_idx[-1]), 20240101)
-    date_idx = date_idx[date_idx < end_time]
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
@@ -256,12 +257,33 @@ def main():
         runner = ExperimentRunner(organize_config, monitor)
         runner.setup()
 
-        for date in runner.dates():
+        dates = runner.dates()
+        loop_start = time.perf_counter()
+        combine_time = 0.0
+        alpha_time = 0.0
+        backtest_time = 0.0
+        verbose = bool(monitor.config.verbose)
+        for update_idx, date in enumerate(dates, start=1):
             date_int = int(date)
+            section_start = time.perf_counter()
             runner.combo.Combine(date_int)
+            combine_time += time.perf_counter() - section_start
+            section_start = time.perf_counter()
             alpha = runner.alpha_convert(date_int)
+            alpha_time += time.perf_counter() - section_start
+            section_start = time.perf_counter()
             metrics = runner.backtest_step(date_int, alpha)
+            backtest_time += time.perf_counter() - section_start
             print_daily_metrics(metrics)
+            if verbose:
+                print_progress(
+                    "Stage:runCombo",
+                    update_idx,
+                    len(dates),
+                    loop_start,
+                    f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, backtest {backtest_time:.2f}",
+                    final=update_idx == len(dates),
+                )
 
         runner.backtest_finalize()
         runner.alpha_analysis()

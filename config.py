@@ -44,6 +44,7 @@ DEFAULT_CONFIG = {
             "model_keep_num": 2,
             "select_days": 100,
             "max_train_days": 2000,
+            "verbose": False,
         },
         "model": {},
         "loader": {
@@ -85,6 +86,7 @@ DEFAULT_CONFIG = {
         "print_summary": True,
         "collect_gpu": True,
         "sync_cuda": False,
+        "verbose": False,
     },
 }
 
