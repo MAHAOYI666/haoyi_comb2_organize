@@ -101,6 +101,7 @@ class ResearchModel:
         self.scheduler_step_size = int(config.get("scheduler_step_size", 10))
         self.scheduler_gamma = float(config.get("scheduler_gamma", 0.5))
         self.grad_clip = float(config.get("grad_clip", 10.0))
+        self.early_stopping_patience = int(config.get("early_stopping_patience", 5))
         self.seed = int(config.get("seed", 42))
         self.trainii: torch.Tensor | None = None
         self.model: Model | None = None
@@ -175,6 +176,9 @@ class ResearchModel:
         )
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, generator=self._dataloader_generator())
         self.model.train()
+        best_loss = float("inf")
+        best_state_dict = None
+        stale_epochs = 0
 
         for epoch in range(self.epochs):
             total_loss = 0.0
@@ -195,7 +199,22 @@ class ResearchModel:
                 total_loss += self._loss_to_float(loss)
                 batches += 1
             scheduler.step()
-            print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={total_loss / max(batches, 1):.6f}")
+            avg_loss = total_loss / max(batches, 1)
+            print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={avg_loss:.6f}")
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                best_state_dict = {key: value.detach().cpu().clone() for key, value in self.model.state_dict().items()}
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
+                if stale_epochs >= self.early_stopping_patience:
+                    print(
+                        f"[FIT] early stopping at epoch={epoch + 1}/{self.epochs} "
+                        f"best_loss={best_loss:.6f}"
+                    )
+                    break
+        if best_state_dict is not None:
+            self.model.load_state_dict(best_state_dict)
         return self
 
     @torch.no_grad()
