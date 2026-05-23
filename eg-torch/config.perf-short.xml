@@ -1,7 +1,7 @@
 <config>
   <constants
     cache_path="/home/shared/data1/factorsim_data/Cache"
-    factor_root="/home/shared/data1/factorsim_data/Factor/FactorData/ZsimPool"
+    factor_root="/root/ml_data/ZsimPool"
     output_root="output-torch-perf-short"
     checkpoint_root="checkpoints-torch-perf-short"
   />

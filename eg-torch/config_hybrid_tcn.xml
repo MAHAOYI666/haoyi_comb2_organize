@@ -2,19 +2,19 @@
   <constants
     cache_path="/home/shared/data1/factorsim_data/Cache"
     factor_root="/root/ml_data/ZsimPool"
-    output_root="output-torch"
-    checkpoint_root="checkpoints-torch"
+    output_root="output-torch-hybrid-tcn"
+    checkpoint_root="checkpoints-torch-hybrid-tcn"
   />
 
   <strategy start_ds="20200101" end_ds="20240631" path="../alpha_strategy.py" />
 
   <combo>
     <paths
-      model_path="model.py"
+      model_path="model_hybrid_tcn.py"
     />
 
     <runtime
-      snaptime="example_torch"
+      snaptime="example_torch_hybrid_tcn"
       livetrading="false"
       trainDelay="0"
       retDays="5"
@@ -38,6 +38,14 @@
       scheduler_gamma="0.5"
       grad_clip="10.0"
       seed="42"
+      modelType="hybrid_tcn"
+      useTcn="true"
+      useHandcrafted="true"
+      tcnChannels="128"
+      tcnLayers="1"
+      tcnKernelSize="3"
+      tcnDropout="0.5"
+      tcnDilationBase="1"
     />
 
     <loader dtype="float16" data_start_ds="20160101">

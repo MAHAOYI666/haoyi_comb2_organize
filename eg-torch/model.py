@@ -138,9 +138,9 @@ class ResearchModel:
 
     def _batch_to_device(self, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor):
         return (
-            x.to(self.device, dtype=torch.float32),
-            y.to(self.device, dtype=torch.float32),
-            w.to(self.device, dtype=torch.float32),
+            x.to(self.device, dtype=torch.float32, non_blocking=True),
+            y.to(self.device, dtype=torch.float32, non_blocking=True),
+            w.to(self.device, dtype=torch.float32, non_blocking=True),
         )
 
     def _zero_grad(self, optimizer):
@@ -174,7 +174,13 @@ class ResearchModel:
             step_size=self.scheduler_step_size,
             gamma=self.scheduler_gamma,
         )
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, generator=self._dataloader_generator())
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            generator=self._dataloader_generator(),
+            pin_memory=self.device.type == "cuda",
+        )
         self.model.train()
         best_loss = float("inf")
         best_state_dict = None
