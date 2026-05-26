@@ -40,6 +40,8 @@ DEFAULT_CONFIG = {
             "trainDelay": 1,
             "retDays": 1,
             "tsDays": 8,
+            "load_chunk_days": None,
+            "processed_feature_cache": False,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
             "select_days": 100,
@@ -78,6 +80,9 @@ DEFAULT_CONFIG = {
         "reserve_cash": 0.95,
         "verbose": False,
         "universe": "base",
+        "execution_price": "vwap30",
+        "drawdown_stop": 0.0,
+        "cooldown_days": 0,
     },
     "monitor": {
         "enabled": False,
@@ -150,7 +155,7 @@ def _coerce_like(default_value, value: str):
         return None
     if default_value is None:
         stripped = value.strip()
-        return None if stripped == "" else stripped
+        return None if stripped == "" else _parse_scalar(stripped)
     if isinstance(default_value, bool):
         return _parse_bool(value)
     if isinstance(default_value, int) and not isinstance(default_value, bool):
@@ -235,7 +240,8 @@ def _apply_constant_paths(config: dict) -> dict:
     updated["combo"]["paths"]["checkpoint_root"] = constants["checkpoint_root"]
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
-    updated["combo"]["loader"]["label_path"] = str(cache_path / "1d_DailyLabel" / "DailyLabel.label1d")
+    if updated["combo"]["loader"].get("label_path") is None:
+        updated["combo"]["loader"]["label_path"] = str(cache_path / "1d_DailyLabel" / "DailyLabel.label1d")
     updated["combo"]["loader"]["ashare_data_path"] = str(cache_path)
     updated["combo"]["loader"]["valid_path"] = str(cache_path / "Ashare")
     updated["combo"]["loader"]["filtered_path"] = str(cache_path / "AshareFiltered")

@@ -94,6 +94,8 @@ class PerfMonitor:
         return decorator
 
     def patch_method(self, cls: type, method_name: str, event: str, date_arg: str | None = None):
+        if not hasattr(cls, method_name):
+            return
         original = getattr(cls, method_name)
         if getattr(original, "_perf_patched", False):
             return
@@ -182,6 +184,10 @@ class PerfMonitor:
             "reserved_mb": self._torch.cuda.memory_reserved() / 1024 / 1024,
             "device": self._gpu_device,
         }
+
+    @staticmethod
+    def _format_float(value: float | None) -> str:
+        return "" if value is None else f"{value:.6f}"
 
     @staticmethod
     def _read_rss_mb() -> float | None:

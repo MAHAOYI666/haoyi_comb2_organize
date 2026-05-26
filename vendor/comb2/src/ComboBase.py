@@ -33,6 +33,8 @@ class ComboBase:
         self.trainDelay = node.trainDelay
         self.retDays = node.retDays
         self.tsDays = node.tsDays
+        self.load_chunk_days = node.load_chunk_days
+        self.processed_feature_cache = bool(node.processed_feature_cache)
         self.model_smooth_rate = node.model_smooth_rate
         self.model_keep_num = node.model_keep_num
         self.select_days = node.select_days
@@ -43,6 +45,7 @@ class ComboBase:
             os.makedirs(self.modelDir, exist_ok=True)
 
         self.loader = ComboDataLoader(node.loader_config)
+        self.loader.set_processed_feature_cache_enabled(self.processed_feature_cache)
         self.loader.monitor = getattr(node, "monitor", None)
         self.buffer = ComboBuffer(feat_size=self.loader.num_features, keepdays=self.tsDays, instsz=len(self.loader.mask.code), dtype=self.loader.dtype)
         self.selection = node.selection_module or DefaultSelectionModule(
@@ -211,7 +214,7 @@ class ComboBase:
         didx_list = [end_didx - (self.tsDays - 1) + i for i in range(self.tsDays)]
         feature_window = nan_to_num(self.buffer.get(didx_list), 0.0).to(self.loader.dtype)
         cur_pred = self._predict_with_refill(self.model, feature_window)
-        if self.oldModel is not None:
+        if self.oldModel is not None and self.model_smooth_rate < 1.0:
             old_pred = self._predict_with_refill(self.oldModel, feature_window)
             cur_pred = cur_pred * self.model_smooth_rate + old_pred * (1 - self.model_smooth_rate)
         valid_mask = self.loader.gen_valid_mask(ds)
@@ -258,8 +261,10 @@ class ComboBase:
             end_ds=plan.target_ds,
             ndays=plan.ndays,
             x_delay=self.retDays,
-            step_size=self.tsDays,
+            ts_days=self.tsDays,
             validinsts=plan.validinsts,
+            load_chunk_days=self.load_chunk_days,
+            processed_feature_cache=self.processed_feature_cache,
         )
         dataset_time = time.perf_counter() - dataset_start
         plan.validinsts = dataset.validinsts

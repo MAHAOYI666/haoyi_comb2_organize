@@ -19,6 +19,8 @@
       trainDelay="0"
       retDays="5"
       tsDays="5"
+      load_chunk_days="128"
+      processed_feature_cache="false"
       model_smooth_rate="0.7"
       model_keep_num="0"
       select_days="20"

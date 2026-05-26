@@ -166,6 +166,9 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         cache_path=organize_config["constants"]["cache_path"],
         verbose=bool(backtest_config["verbose"]),
         universe=backtest_config.get("universe", "base"),
+        execution_price=backtest_config.get("execution_price", "vwap30"),
+        drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
+        cooldown_days=int(backtest_config.get("cooldown_days", 0)),
     )
 
 

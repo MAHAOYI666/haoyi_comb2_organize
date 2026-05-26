@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import os
 import sys
@@ -99,11 +100,33 @@ class MemmapLabelSource:
         self.path = path
         self.dtype = dtype
         self._mmap = Memmaper2(path)
+        self._day_cache: dict[int, torch.Tensor] = {}
 
     def load_day(self, ds: int) -> torch.Tensor:
-        data = self._mmap.load(start_ds=int(ds), end_ds=int(ds))[:]
+        ds = int(ds)
+        cached = self._day_cache.pop(ds, None)
+        if cached is not None:
+            return cached
+        data = self._mmap.load(start_ds=ds, end_ds=ds)[:]
         label = torch.as_tensor(np.asarray(data)[0], dtype=self.dtype)
         return label
+
+    def prefetch_days(self, days: Sequence[int]):
+        days = list(dict.fromkeys(int(ds) for ds in days))
+        if not days:
+            return
+        needed_days = [ds for ds in days if ds not in self._day_cache]
+        if not needed_days:
+            return
+        start_ds = min(needed_days)
+        end_ds = max(needed_days)
+        day_set = set(needed_days)
+        trading_days = [int(ds) for ds in MASK.date if start_ds <= int(ds) <= end_ds]
+        data = self._mmap.load(start_ds=start_ds, end_ds=end_ds)[:]
+        arr = np.asarray(data)
+        for offset, ds in enumerate(trading_days[: len(arr)]):
+            if ds in day_set:
+                self._day_cache[ds] = torch.as_tensor(arr[offset], dtype=self.dtype)
 
 
 class MemmapMaskSource:
@@ -149,6 +172,9 @@ class ComboDataLoader:
         self.num_features = self.factor_source.feature_dim + self.cube_source.feature_dim
         self.verbose = bool(getattr(config, "verbose", False))
         self.factor_source.verbose = self.verbose
+        self._processed_feature_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
+        self._processed_feature_cache_enabled = False
+        self._processed_feature_cache_max_days = 0
 
     def date2didx(self, ds: int) -> int:
         didx = int(self.mask.date2didx(int(ds)))
@@ -162,8 +188,22 @@ class ComboDataLoader:
         aligned = self.didx2date(self.date2didx(ds))
         return max(aligned, self.data_start_ds)
 
-    def gen_feature(self, ds: int) -> torch.Tensor:
-        ds = self.align_date(ds)
+    def set_processed_feature_cache_enabled(self, enabled: bool):
+        self._processed_feature_cache_enabled = bool(enabled)
+        if not self._processed_feature_cache_enabled:
+            self._processed_feature_cache_max_days = 0
+            self._processed_feature_cache.clear()
+
+    def set_processed_feature_cache_max_days(self, days: int):
+        self._processed_feature_cache_enabled = True
+        self._processed_feature_cache_max_days = max(0, int(days))
+        if self._processed_feature_cache_max_days == 0:
+            self._processed_feature_cache.clear()
+            return
+        while len(self._processed_feature_cache) > self._processed_feature_cache_max_days:
+            self._processed_feature_cache.popitem(last=False)
+
+    def _build_feature(self, ds: int) -> torch.Tensor:
         factor = self.factor_source.load_day(ds).to(torch.float32)
         cube = self.cube_source.load_day(ds).to(torch.float32)
         if cube.shape[1] == 0:
@@ -173,13 +213,40 @@ class ComboDataLoader:
         feature[torch.isinf(feature)] = torch.nan
         feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
         feature = truncate(feature, -4.0, 4.0)
-        feature = nan_to_num(feature, 0.0)
-        return feature.to(self.dtype)
+        feature = nan_to_num(feature, 0.0).to(self.dtype)
+        return feature
+
+    def _cache_processed_feature(self, ds: int, feature: torch.Tensor):
+        if not self._processed_feature_cache_enabled or self._processed_feature_cache_max_days <= 0:
+            return
+        self._processed_feature_cache[ds] = feature
+        while len(self._processed_feature_cache) > self._processed_feature_cache_max_days:
+            self._processed_feature_cache.popitem(last=False)
+
+    def gen_feature(self, ds: int) -> torch.Tensor:
+        ds = self.align_date(ds)
+        cached = self._processed_feature_cache.get(ds)
+        if cached is not None:
+            self._processed_feature_cache.move_to_end(ds)
+            return cached
+        feature = self._build_feature(ds)
+        self._cache_processed_feature(ds, feature)
+        return feature
 
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
         self.factor_source.prefetch_days(days)
         self.cube_source.prefetch_days(days)
+
+    def prefetch_labels(self, days: Sequence[int], ret_days: int = 1):
+        label_days: list[int] = []
+        for ds in days:
+            end_didx = self.date2didx(self.align_date(ds))
+            start_didx = end_didx - int(ret_days) + 1
+            if start_didx < self.data_start_didx:
+                raise ValueError(f"not enough label history for ds={ds}, ret_days={ret_days}")
+            label_days.extend(self.didx2date(didx) for didx in range(start_didx, end_didx + 1))
+        self.label_source.prefetch_days(label_days)
 
     def gen_base_universe_mask(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
@@ -243,16 +310,31 @@ class ComboDataLoader:
 
 
 class ComboTrainDataset(Dataset):
-    def __init__(self, loader: ComboDataLoader, end_ds: int, ndays: int, x_delay: int, step_size: int, validinsts: torch.Tensor | None = None):
+    def __init__(
+        self,
+        loader: ComboDataLoader,
+        end_ds: int,
+        ndays: int,
+        x_delay: int,
+        ts_days: int,
+        validinsts: torch.Tensor | None = None,
+        load_chunk_days: int | None = None,
+        processed_feature_cache: bool = False,
+    ):
         self.loader = loader
         self.end_ds = loader.align_date(end_ds)
         self.ndays = int(ndays)
         self.x_delay = int(x_delay)
-        self.step_size = int(step_size)
+        self.ts_days = int(ts_days)
+        self.load_chunk_days = int(load_chunk_days or self.ts_days)
         self.feat_size = loader.num_features
         self.end_didx = loader.date2didx(self.end_ds)
         self.start_didx = max(loader.data_start_didx + self.x_delay - 1, self.end_didx - self.ndays + 1)
         self.ndays = self.end_didx - self.start_didx + 1
+        if processed_feature_cache:
+            loader.set_processed_feature_cache_max_days(self.ndays)
+        else:
+            loader.set_processed_feature_cache_enabled(False)
 
         instsz = len(MASK.code)
         if validinsts is None:
@@ -269,11 +351,13 @@ class ComboTrainDataset(Dataset):
 
         progress_start = time.perf_counter()
         loaded_days = 0
-        for window_start in range(0, self.ndays, self.step_size):
-            window_end = min(window_start + self.step_size, self.ndays)
+        for window_start in range(0, self.ndays, self.load_chunk_days):
+            window_end = min(window_start + self.load_chunk_days, self.ndays)
             feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
+            label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
             load_start = time.perf_counter()
             loader.prefetch_features(feature_days)
+            loader.prefetch_labels(label_days, ret_days=self.x_delay)
             feature_load_time = time.perf_counter() - load_start
             for offset in range(window_start, window_end):
                 label_didx = self.start_didx + offset
@@ -299,13 +383,13 @@ class ComboTrainDataset(Dataset):
         return torch.where(stacked.any(dim=0))[0]
 
     def __len__(self) -> int:
-        return max(0, self.ndays - self.step_size + 1)
+        return max(0, self.ndays - self.ts_days + 1)
 
     def __getitem__(self, idx: int):
-        feature_window = nan_to_num(self.X[idx:idx + self.step_size], 0.0).to(self.loader.dtype)
-        y = self.Y[idx + self.step_size - 1]
-        w = self.W[idx + self.step_size - 1]
-        return idx, feature_window, y, w
+        x = self.X[idx:idx + self.ts_days].to(self.loader.dtype)
+        y = self.Y[idx + self.ts_days - 1]
+        w = self.W[idx + self.ts_days - 1]
+        return idx, x, y, w
 
 
 class ComboBuffer:
