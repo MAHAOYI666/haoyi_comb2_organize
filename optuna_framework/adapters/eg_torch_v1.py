@@ -6,6 +6,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from optuna_framework.adapters.base import ModelAdapter
+from optuna_framework.paths import get_repo_root
 
 
 class EgTorchV1Adapter(ModelAdapter):
@@ -26,7 +27,6 @@ class EgTorchV1Adapter(ModelAdapter):
             "dropout": 0.5,
             "hiddenSize": 512,
             "fcSize": 256,
-            "epochs": 15,
             "scheduler_step_ratio": 0.7,
             "scheduler_gamma": 0.5,
         }
@@ -40,16 +40,16 @@ class EgTorchV1Adapter(ModelAdapter):
             "dropout": trial.suggest_float("dropout", 0.2, 0.6),
             "hiddenSize": trial.suggest_categorical("hiddenSize", list(self.hidden_sizes)),
             "fcSize": trial.suggest_categorical("fcSize", list(self.fc_sizes)),
-            "epochs": trial.suggest_int("epochs", 5, 25),
             "scheduler_step_ratio": trial.suggest_categorical("scheduler_step_ratio", list(self.scheduler_step_ratios)),
             "scheduler_gamma": trial.suggest_float("scheduler_gamma", 0.3, 0.9),
         }
 
-    def materialize_params(self, params: dict[str, Any]) -> dict[str, Any]:
+    def materialize_params(self, params: dict[str, Any], baseline_epochs: int | None = None) -> dict[str, Any]:
         """Add derived scheduler fields to the search-space parameters."""
 
         materialized = dict(params)
-        epochs = int(materialized["epochs"])
+        epochs = int(baseline_epochs if baseline_epochs is not None else self._baseline_epochs())
+        materialized["epochs"] = epochs
         ratio = float(materialized["scheduler_step_ratio"])
         materialized["scheduler_step_size"] = max(1, int(epochs * ratio))
         return materialized
@@ -57,22 +57,30 @@ class EgTorchV1Adapter(ModelAdapter):
     def apply_params_to_xml(self, root: ET.Element, params: dict[str, Any]) -> dict[str, Any]:
         """Patch model hyperparameters into ``<combo><model>``."""
 
-        materialized = self.materialize_params(params)
         model = root.find("./combo/model")
         if model is None:
             raise ValueError("baseline XML is missing <combo><model>")
+        materialized = self.materialize_params(params, baseline_epochs=_xml_int_attr(model, "epochs", self._baseline_epochs()))
         for key in (
             "lr",
             "weight_decay",
             "dropout",
             "hiddenSize",
             "fcSize",
-            "epochs",
             "scheduler_step_size",
             "scheduler_gamma",
         ):
             model.set(key, _format_xml_value(materialized[key]))
         return materialized
+
+    def _baseline_epochs(self) -> int:
+        """Read the default epoch count from the baseline eg-torch XML."""
+
+        root = ET.parse(get_repo_root() / "eg-torch" / "config.xml").getroot()
+        model = root.find("./combo/model")
+        if model is None:
+            raise ValueError("baseline XML is missing <combo><model>")
+        return _xml_int_attr(model, "epochs", 15)
 
 
 def _format_xml_value(value: Any) -> str:
@@ -85,4 +93,11 @@ def _format_xml_value(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.12g}"
     return str(value)
+
+
+def _xml_int_attr(element: ET.Element, attr: str, default: int) -> int:
+    raw_value = element.get(attr)
+    if raw_value is None:
+        return int(default)
+    return int(raw_value)
 

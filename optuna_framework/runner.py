@@ -6,14 +6,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from optuna_framework.metrics_parser import parse_segment_metrics
+from optuna_framework.metrics_parser import parse_window_metrics
 from optuna_framework.paths import get_repo_root
 from optuna_framework.specs import RunPaths
-from optuna_framework.trial_meta import update_segment
+from optuna_framework.trial_meta import update_window
 
 
-class SegmentRunError(RuntimeError):
-    """Raised when one segment subprocess fails or emits invalid metrics."""
+class InferenceRunError(RuntimeError):
+    """Raised when one inference subprocess fails or emits invalid metrics."""
 
 
 def build_run_command(config_path: str | Path) -> list[str]:
@@ -33,11 +33,11 @@ def command_to_string(cmd: list[str]) -> str:
     return " ".join(f'"{part}"' if " " in part else part for part in cmd)
 
 
-def run_segment(run_paths: RunPaths) -> object:
-    """Execute one rendered segment and return parsed metrics."""
+def run_inference(run_paths: RunPaths) -> object:
+    """Execute one rendered inference run and return parsed scoring metrics."""
 
     cmd = build_run_command(run_paths.config_path)
-    run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
+    run_paths.run_dir.mkdir(parents=True, exist_ok=True)
     with run_paths.stdout_path.open("w", encoding="utf-8") as stdout_file, run_paths.stderr_path.open("w", encoding="utf-8") as stderr_file:
         proc = subprocess.run(
             cmd,
@@ -49,28 +49,29 @@ def run_segment(run_paths: RunPaths) -> object:
 
     try:
         if proc.returncode != 0:
-            raise SegmentRunError(_format_failed_run_message(run_paths, cmd, proc.returncode))
+            raise InferenceRunError(_format_failed_run_message(run_paths, cmd, proc.returncode))
         if not run_paths.pnl_summary_path.exists() or run_paths.pnl_summary_path.stat().st_size <= 0:
-            raise SegmentRunError(f"missing or empty pnl_summary.csv: {run_paths.pnl_summary_path}")
-        metrics = parse_segment_metrics(
+            raise InferenceRunError(f"missing or empty pnl_summary.csv: {run_paths.pnl_summary_path}")
+        metrics = parse_window_metrics(
             run_paths.pnl_summary_path,
-            start_ds=run_paths.segment.start_ds,
-            end_ds=run_paths.segment.end_ds,
-            role=run_paths.segment.role,
+            run_start_ds=run_paths.run_start_ds,
+            run_end_ds=run_paths.run_end_ds,
+            score_start_ds=run_paths.score_start_ds,
+            score_end_ds=run_paths.score_end_ds,
         )
     except Exception as exc:
         _mark_failed(run_paths)
-        if isinstance(exc, SegmentRunError):
+        if isinstance(exc, InferenceRunError):
             raise
-        raise SegmentRunError(f"invalid metrics for {run_paths.segment.name}: {exc}") from exc
+        raise InferenceRunError(f"invalid metrics for {run_paths.run_dir}: {exc}") from exc
     return metrics
 
 
 def _format_failed_run_message(run_paths: RunPaths, cmd: list[str], returncode: int) -> str:
-    """Build an actionable error message for a failed segment subprocess."""
+    """Build an actionable error message for a failed inference subprocess."""
 
     details = [
-        f"runCombo failed for {run_paths.segment.name} with returncode={returncode}",
+        f"runCombo failed for {run_paths.run_dir} with returncode={returncode}",
         f"command: {command_to_string(cmd)}",
         f"config: {run_paths.config_path}",
         f"stdout_log: {run_paths.stdout_path}",
@@ -104,4 +105,4 @@ def _mark_failed(run_paths: RunPaths) -> None:
         return
     meta_path = trial_dir / "trial_meta.json"
     if meta_path.exists():
-        update_segment(trial_dir, run_paths.segment.name, "failed")
+        update_window(trial_dir, "failed")

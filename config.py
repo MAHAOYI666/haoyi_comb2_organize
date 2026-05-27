@@ -58,9 +58,12 @@ DEFAULT_CONFIG = {
                 "alpha4_20251008_04",
                 "alpha5_20251008_05",
             ),
+            "style_factor_paths": (),
+            "alpha_factor_paths": (),
             "label_path": None,
             "ashare_data_path": None,
             "dtype": torch.float16,
+            "compression": "none",
             "data_start_ds": 20160101,
             "valid_path": None,
             "filtered_path": None,
@@ -192,20 +195,28 @@ def _parse_section_attributes(element: ET.Element | None, default_section: dict,
     return parsed
 
 
-def _parse_factor_paths(loader_element: ET.Element | None, default_paths) -> tuple[str, ...] | None:
-    if loader_element is None:
+def _parse_path_list(parent_element: ET.Element | None, tag: str, default_paths=()) -> tuple[str, ...] | None:
+    if parent_element is None:
         return None
-    factor_paths_element = loader_element.find("factor_paths")
-    if factor_paths_element is None:
+    path_list_element = parent_element.find(tag)
+    if path_list_element is None:
         return None
     paths = []
-    for path_element in factor_paths_element.findall("path"):
+    for path_element in path_list_element.findall("path"):
         path_value = (path_element.text or "").strip()
         if path_value:
             paths.append(path_value)
     if not paths:
         return tuple(default_paths)
     return tuple(paths)
+
+
+def _parse_factor_paths(loader_element: ET.Element | None, default_paths) -> tuple[str, ...] | None:
+    return _parse_path_list(loader_element, "factor_paths", default_paths)
+
+
+def _parse_style_factor_paths(loader_element: ET.Element | None) -> tuple[str, ...] | None:
+    return _parse_path_list(loader_element, "style_factor_paths", ())
 
 
 def _resolve_path(value: str | None, base_dir: Path) -> str | None:
@@ -253,10 +264,20 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
 
-    factor_paths = resolved["combo"]["loader"].get("factor_paths")
-    if factor_paths is not None:
-        factor_root = resolved["constants"]["factor_root"]
-        resolved["combo"]["loader"]["factor_paths"] = tuple(_resolve_factor_path(factor_root, path) for path in factor_paths)
+    factor_root = resolved["constants"]["factor_root"]
+    alpha_paths = resolved["combo"]["loader"].get("factor_paths") or ()
+    style_paths = resolved["combo"]["loader"].get("style_factor_paths") or ()
+    resolved_alpha_paths = tuple(_resolve_factor_path(factor_root, path) for path in alpha_paths)
+    resolved_style_paths = tuple(_resolve_factor_path(factor_root, path) for path in style_paths)
+
+    resolved["combo"]["loader"]["alpha_factor_paths"] = resolved_alpha_paths
+    resolved["combo"]["loader"]["style_factor_paths"] = resolved_style_paths
+    resolved["combo"]["loader"]["factor_paths"] = resolved_alpha_paths + resolved_style_paths
+
+    resolved["combo"]["model"]["alpha_feature_count"] = len(resolved_alpha_paths)
+    resolved["combo"]["model"]["style_feature_count"] = len(resolved_style_paths)
+    resolved["combo"]["model"]["total_feature_count"] = len(resolved_alpha_paths) + len(resolved_style_paths)
+    resolved["combo"]["model"]["use_style_gate"] = len(resolved_style_paths) > 0
     return resolved
 
 
@@ -279,9 +300,13 @@ def _load_xml_config(path: str) -> dict:
             "loader": _parse_section_attributes(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]),
             "defaults": _parse_section_attributes(combo_element.find("defaults"), DEFAULT_CONFIG["combo"]["defaults"]),
         }
-        factor_paths = _parse_factor_paths(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]["factor_paths"])
+        loader_element = combo_element.find("loader")
+        factor_paths = _parse_factor_paths(loader_element, DEFAULT_CONFIG["combo"]["loader"]["factor_paths"])
+        style_factor_paths = _parse_style_factor_paths(loader_element)
         if factor_paths is not None:
             combo["loader"]["factor_paths"] = factor_paths
+        if style_factor_paths is not None:
+            combo["loader"]["style_factor_paths"] = style_factor_paths
 
     backtest = _parse_section_attributes(root.find("backtest"), DEFAULT_CONFIG["backtest"])
     monitor = _parse_section_attributes(root.find("monitor"), DEFAULT_CONFIG["monitor"])

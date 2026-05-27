@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import random
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -99,9 +101,26 @@ class ResearchModel:
         self.scheduler_step_size = int(config.get("scheduler_step_size", 10))
         self.scheduler_gamma = float(config.get("scheduler_gamma", 0.5))
         self.grad_clip = float(config.get("grad_clip", 10.0))
+        self.early_stopping_patience = int(config.get("early_stopping_patience", 5))
+        self.seed = int(config.get("seed", 42))
         self.trainii: torch.Tensor | None = None
         self.model: Model | None = None
         self.loss_fn = TrainLoss()
+        self._apply_seed()
+
+    def _apply_seed(self) -> None:
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+
+    def _dataloader_generator(self) -> torch.Generator:
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        return generator
 
     def _init_model(self, trainii: torch.Tensor) -> Model:
         model = Model(
@@ -119,9 +138,9 @@ class ResearchModel:
 
     def _batch_to_device(self, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor):
         return (
-            x.to(self.device, dtype=torch.float32),
-            y.to(self.device, dtype=torch.float32),
-            w.to(self.device, dtype=torch.float32),
+            x.to(self.device, dtype=torch.float32, non_blocking=True),
+            y.to(self.device, dtype=torch.float32, non_blocking=True),
+            w.to(self.device, dtype=torch.float32, non_blocking=True),
         )
 
     def _zero_grad(self, optimizer):
@@ -146,6 +165,7 @@ class ResearchModel:
         return float(loss.detach().cpu())
 
     def fit(self, dataset):
+        self._apply_seed()
         self.trainii = dataset.validinsts.detach().cpu().to(torch.long).clone()
         self.model = self._init_model(self.trainii)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -154,8 +174,17 @@ class ResearchModel:
             step_size=self.scheduler_step_size,
             gamma=self.scheduler_gamma,
         )
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            generator=self._dataloader_generator(),
+            pin_memory=self.device.type == "cuda",
+        )
         self.model.train()
+        best_loss = float("inf")
+        best_state_dict = None
+        stale_epochs = 0
 
         for epoch in range(self.epochs):
             total_loss = 0.0
@@ -176,7 +205,22 @@ class ResearchModel:
                 total_loss += self._loss_to_float(loss)
                 batches += 1
             scheduler.step()
-            print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={total_loss / max(batches, 1):.6f}")
+            avg_loss = total_loss / max(batches, 1)
+            print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={avg_loss:.6f}")
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                best_state_dict = {key: value.detach().cpu().clone() for key, value in self.model.state_dict().items()}
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
+                if stale_epochs >= self.early_stopping_patience:
+                    print(
+                        f"[FIT] early stopping at epoch={epoch + 1}/{self.epochs} "
+                        f"best_loss={best_loss:.6f}"
+                    )
+                    break
+        if best_state_dict is not None:
+            self.model.load_state_dict(best_state_dict)
         return self
 
     @torch.no_grad()
