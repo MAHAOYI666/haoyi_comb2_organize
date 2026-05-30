@@ -406,9 +406,6 @@ class ComboTrainDataset(Dataset):
             self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
             self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
 
-        loop_gen_feature = monitor.accumulator("dataset_init.loop.gen_feature", date=self.end_ds) if monitor else None
-        loop_gen_label = monitor.accumulator("dataset_init.loop.gen_label", date=self.end_ds) if monitor else None
-        loop_tensor_assign = monitor.accumulator("dataset_init.loop.tensor_assign", date=self.end_ds) if monitor else None
         progress_start = time.perf_counter()
         loaded_days = 0
         with _maybe_section(monitor, "dataset_init.loop_total", self.end_ds, level="full"):
@@ -425,44 +422,20 @@ class ComboTrainDataset(Dataset):
                     feature_didx = label_didx - self.x_delay + 1
                     label_ds = loader.didx2date(label_didx)
                     feature_ds = loader.didx2date(feature_didx)
-                    if loop_gen_feature is not None and monitor.detail_enabled("full"):
-                        with loop_gen_feature.tick():
-                            x = loader.gen_feature(feature_ds)
-                    else:
-                        x = loader.gen_feature(feature_ds)
-                    if loop_gen_label is not None and monitor.detail_enabled("full"):
-                        with loop_gen_label.tick():
-                            y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                    else:
-                        y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                    if loop_tensor_assign is not None and monitor.detail_enabled("full"):
-                        with loop_tensor_assign.tick():
-                            self.codec.encode_into(
-                                self.X,
-                                self.X_meta,
-                                offset,
-                                torch.nan_to_num(x[self.validinsts], nan=0.0),
-                            )
-                            self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-                            self.W[offset] = w[self.validinsts].to(loader.dtype)
-                    else:
-                        self.codec.encode_into(
-                            self.X,
-                            self.X_meta,
-                            offset,
-                            torch.nan_to_num(x[self.validinsts], nan=0.0),
-                        )
-                        self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-                        self.W[offset] = w[self.validinsts].to(loader.dtype)
+                    x = loader.gen_feature(feature_ds)
+                    y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
+                    self.codec.encode_into(
+                        self.X,
+                        self.X_meta,
+                        offset,
+                        torch.nan_to_num(x[self.validinsts], nan=0.0),
+                    )
+                    self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
+                    self.W[offset] = w[self.validinsts].to(loader.dtype)
                     loaded_days += 1
                 if loader.verbose:
                     detail = f"days {feature_days[0]}-{feature_days[-1]}, load {feature_load_time:.2f}s"
                     print_progress("Stage:load_train_days", loaded_days, self.ndays, progress_start, detail, final=loaded_days == self.ndays)
-
-        if loop_gen_feature is not None and monitor.detail_enabled("full"):
-            loop_gen_feature.flush()
-            loop_gen_label.flush()
-            loop_tensor_assign.flush()
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []
