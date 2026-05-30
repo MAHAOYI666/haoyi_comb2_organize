@@ -207,6 +207,9 @@ class ExperimentRunner:
         self.backtest.finalize()
 
     def alpha_analysis(self):
+        if not self.combo_config["output"].get("enable_alpha_analysis", True):
+            print("[IC] alpha analysis disabled by config")
+            return
         dump_alpha_analysis(self.node, self.combo_config)
 
 

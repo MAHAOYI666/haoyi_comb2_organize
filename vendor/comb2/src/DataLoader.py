@@ -16,6 +16,7 @@ import torch
 from factorsim import IndexMask, Memmaper2
 from torch.utils.data import Dataset
 
+from .codec import Codec, PassthroughCodec, build_codec
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, to_bool_mask, truncate, winsorize_by_quantile
 
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
@@ -29,7 +30,7 @@ MASK = IndexMask()
 def _maybe_section(monitor, event: str, ds: int | None = None, *, level: str = "full"):
     if monitor is None:
         return nullcontext()
-    return monitor.maybe_section(event, date=ds, level=level)
+    return monitor.section(event, date=ds)
 
 
 class FeatureSource(Protocol):
@@ -166,6 +167,7 @@ class LoaderConfig:
     data_start_ds: int
     valid_path: str
     filtered_path: str
+    compression: str = "none"
     base_universe_path: str | None = None
     verbose: bool = False
 
@@ -174,6 +176,7 @@ class ComboDataLoader:
     def __init__(self, config: LoaderConfig, cube_source: FeatureSource | None = None, feature_cache_size: int = 2500, label_cache_size: int = 2500):
         self.config = config
         self.dtype = self.config.dtype
+        self.codec = build_codec(self.config.compression, self.dtype)
         self.mask = MASK
         self.data_start_ds = int(self.config.data_start_ds)
         self.data_start_didx = int(self.mask.date2didx(self.data_start_ds))
@@ -367,8 +370,10 @@ class ComboTrainDataset(Dataset):
         validinsts: torch.Tensor | None = None,
         load_chunk_days: int | None = None,
         processed_feature_cache: bool = False,
+        codec: Codec | None = None,
     ):
         self.loader = loader
+        self.codec = codec or PassthroughCodec(loader.dtype)
         self.end_ds = loader.align_date(end_ds)
         self.ndays = int(ndays)
         self.x_delay = int(x_delay)
@@ -393,7 +398,11 @@ class ComboTrainDataset(Dataset):
             self.validinsts = torch.arange(instsz)
             self.numValidinsts = instsz
         with _maybe_section(monitor, "dataset_init.alloc_xyw", self.end_ds, level="full"):
-            self.X = torch.zeros((self.ndays, self.numValidinsts, self.feat_size), dtype=loader.dtype)
+            self.X, self.X_meta = self.codec.allocate(
+                (self.ndays, self.numValidinsts, self.feat_size),
+                device="cpu",
+                logical_dtype=loader.dtype,
+            )
             self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
             self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
 
@@ -428,11 +437,21 @@ class ComboTrainDataset(Dataset):
                         y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
                     if loop_tensor_assign is not None and monitor.detail_enabled("full"):
                         with loop_tensor_assign.tick():
-                            self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
+                            self.codec.encode_into(
+                                self.X,
+                                self.X_meta,
+                                offset,
+                                torch.nan_to_num(x[self.validinsts], nan=0.0),
+                            )
                             self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
                             self.W[offset] = w[self.validinsts].to(loader.dtype)
                     else:
-                        self.X[offset] = torch.nan_to_num(x[self.validinsts], nan=0.0)
+                        self.codec.encode_into(
+                            self.X,
+                            self.X_meta,
+                            offset,
+                            torch.nan_to_num(x[self.validinsts], nan=0.0),
+                        )
                         self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
                         self.W[offset] = w[self.validinsts].to(loader.dtype)
                     loaded_days += 1
@@ -457,27 +476,45 @@ class ComboTrainDataset(Dataset):
         return max(0, self.ndays - self.ts_days + 1)
 
     def __getitem__(self, idx: int):
-        x = self.X[idx:idx + self.ts_days].to(self.loader.dtype)
+        x = self.codec.decode(
+            self.X,
+            self.X_meta,
+            slice(idx, idx + self.ts_days),
+            out_dtype=self.loader.dtype,
+        )
+        x = nan_to_num(x, 0.0).to(self.loader.dtype)
         y = self.Y[idx + self.ts_days - 1]
         w = self.W[idx + self.ts_days - 1]
         return idx, x, y, w
 
 
 class ComboBuffer:
-    def __init__(self, feat_size: int, keepdays: int, instsz: int | None = None, dtype: torch.dtype | None = None):
+    def __init__(
+        self,
+        feat_size: int,
+        keepdays: int,
+        instsz: int | None = None,
+        dtype: torch.dtype | None = None,
+        codec: Codec | None = None,
+    ):
         self.feat_size = feat_size
         self.keepdays = keepdays
         self.instsz = instsz or len(MASK.code)
         self.dtype = dtype or torch.float16
-        self.buffer = torch.zeros((keepdays, self.instsz, feat_size), dtype=self.dtype)
+        self.codec = codec or PassthroughCodec(self.dtype)
+        self.buffer, self.meta = self.codec.allocate(
+            (keepdays, self.instsz, feat_size),
+            device="cpu",
+            logical_dtype=self.dtype,
+        )
         self.start_didx = -1
 
     def append(self, x: torch.Tensor, didx: int):
         if self.start_didx < 0:
             self.start_didx = didx
         pos = (didx - self.start_didx) % self.keepdays
-        self.buffer[pos] = x.to(self.dtype)
+        self.codec.encode_into(self.buffer, self.meta, pos, x)
 
     def get(self, didx_list: Iterable[int]) -> torch.Tensor:
         pos_list = [int((didx - self.start_didx) % self.keepdays) for didx in didx_list]
-        return self.buffer[pos_list]
+        return self.codec.decode(self.buffer, self.meta, pos_list, out_dtype=self.dtype)

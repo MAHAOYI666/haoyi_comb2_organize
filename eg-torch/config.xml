@@ -28,7 +28,7 @@
     />
 
     <model
-      device="cpu"
+      device="cuda"
       hiddenSize="512"
       fcSize="256"
       dropout="0.5"

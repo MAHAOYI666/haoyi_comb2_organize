@@ -47,7 +47,13 @@ class ComboBase:
         self.loader = ComboDataLoader(node.loader_config)
         self.loader.set_processed_feature_cache_enabled(self.processed_feature_cache)
         self.loader.monitor = getattr(node, "monitor", None)
-        self.buffer = ComboBuffer(feat_size=self.loader.num_features, keepdays=self.tsDays, instsz=len(self.loader.mask.code), dtype=self.loader.dtype)
+        self.buffer = ComboBuffer(
+            feat_size=self.loader.num_features,
+            keepdays=self.tsDays,
+            instsz=len(self.loader.mask.code),
+            dtype=self.loader.dtype,
+            codec=self.loader.codec,
+        )
         self.selection = node.selection_module or DefaultSelectionModule(
             max_train_days=self.max_train_days,
             select_days=self.select_days,
@@ -265,6 +271,7 @@ class ComboBase:
             validinsts=plan.validinsts,
             load_chunk_days=self.load_chunk_days,
             processed_feature_cache=self.processed_feature_cache,
+            codec=self.loader.codec,
         )
         dataset_time = time.perf_counter() - dataset_start
         plan.validinsts = dataset.validinsts

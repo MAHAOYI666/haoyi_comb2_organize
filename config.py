@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
         "output": {
             "alpha_history_path": str(COMB2_ROOT / "output" / "alpha_history.pt"),
             "log_path": str(COMB2_ROOT / "output" / "train.log"),
+            "enable_alpha_analysis": True,
         },
         "runtime": {
             "snaptime": "mlp_minimal",
@@ -63,6 +64,7 @@ DEFAULT_CONFIG = {
             "label_path": None,
             "ashare_data_path": None,
             "dtype": torch.float16,
+            "compression": "none",
             "data_start_ds": 20160101,
             "valid_path": None,
             "filtered_path": None,

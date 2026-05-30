@@ -9,3 +9,6 @@ pdm.lock
 pyproject.toml
 output**/
 checkpoints**/
+optuna_runs/
+AGENTS.md
+
