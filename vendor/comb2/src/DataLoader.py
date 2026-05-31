@@ -9,9 +9,10 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, Protocol, Sequence
+from typing import Any, Iterable, Protocol, Sequence
 
 import numpy as np
+import pandas as pd
 import torch
 from factorsim import IndexMask, Memmaper2
 from torch.utils.data import Dataset
@@ -43,38 +44,110 @@ class FeatureSource(Protocol):
         ...
 
 
-class MemmapFeatureSource:
-    def __init__(self, paths: Sequence[str], dtype: torch.dtype):
-        self.paths = list(paths)
-        self.dtype = dtype
-        self.feature_dim = len(self.paths)
-        self.verbose = False
-        self._cache: dict[str, Memmaper2] = {}
-        self._day_cache: dict[int, torch.Tensor] = {}
+@dataclass(frozen=True)
+class OpSpec:
+    name: str
+    params: dict[str, Any]
 
-    def _mmap(self, path: str) -> Memmaper2:
-        if path not in self._cache:
-            self._cache[path] = Memmaper2(path)
-        return self._cache[path]
+
+@dataclass(frozen=True)
+class FeatureSpec:
+    kind: str
+    name: str
+    path: str | None = None
+    mode: str = "read_dump"
+    config_path: str | None = None
+    ops: tuple[OpSpec, ...] = ()
+
+
+def _coerce_op_spec(value: OpSpec | dict[str, Any]) -> OpSpec:
+    if isinstance(value, OpSpec):
+        return value
+    return OpSpec(name=str(value["name"]), params=dict(value.get("params", {})))
+
+
+def _coerce_feature_spec(value: FeatureSpec | dict[str, Any]) -> FeatureSpec:
+    if isinstance(value, FeatureSpec):
+        return value
+    ops = tuple(_coerce_op_spec(op) for op in value.get("ops", ()))
+    return FeatureSpec(
+        kind=str(value["kind"]),
+        name=str(value["name"]),
+        path=value.get("path"),
+        mode=str(value.get("mode", "read_dump")),
+        config_path=value.get("config_path"),
+        ops=ops,
+    )
+
+
+def _apply_feature_ops(x: torch.Tensor, ops: Sequence[OpSpec]) -> torch.Tensor:
+    if not ops:
+        return x
+    out = x.to(torch.float32)
+    for op in ops:
+        name = op.name.strip().lower()
+        params = op.params
+        if name in {"cs_zscore", "zscore"}:
+            out = cs_zscore(out.unsqueeze(0)).squeeze(0)
+        elif name == "truncate":
+            out = truncate(out, float(params.get("min", -4.0)), float(params.get("max", 4.0)))
+        elif name in {"nan_to_num", "fillna"}:
+            out = nan_to_num(out, float(params.get("value", 0.0)))
+        elif name == "winsorize_by_quantile":
+            out = winsorize_by_quantile(out, float(params.get("low", 0.01)), float(params.get("high", 0.99)))
+        elif name == "normalize_by_max_abs":
+            out = normalize_by_max_abs(out)
+        else:
+            raise ValueError(f"unsupported feature op: {op.name}")
+    return out
+
+
+class FeatureItemSource:
+    feature_dim = 1
+
+    def __init__(self, spec: FeatureSpec, dtype: torch.dtype):
+        self.spec = spec
+        self.name = spec.name
+        self.dtype = dtype
+
+    def _load_raw_day(self, ds: int) -> torch.Tensor:
+        raise NotImplementedError
 
     def load_day(self, ds: int) -> torch.Tensor:
-        ds = int(ds)
-        cached = self._day_cache.pop(ds, None)
+        x = self._load_raw_day(int(ds))
+        x = _apply_feature_ops(x, self.spec.ops)
+        x[torch.isinf(x)] = torch.nan
+        return x.to(self.dtype)
+
+    def prefetch_days(self, days: Sequence[int]):
+        return None
+
+
+class MemmapFactorItemSource(FeatureItemSource):
+    def __init__(self, spec: FeatureSpec, dtype: torch.dtype):
+        super().__init__(spec, dtype)
+        if not spec.path:
+            raise ValueError(f"factor feature {spec.name!r} requires path")
+        self.path = spec.path
+        self._mmap: Memmaper2 | None = None
+        self._day_cache: dict[int, torch.Tensor] = {}
+
+    def _get_mmap(self) -> Memmaper2:
+        if self._mmap is None:
+            self._mmap = Memmaper2(self.path)
+        return self._mmap
+
+    def _load_raw_day(self, ds: int) -> torch.Tensor:
+        cached = self._day_cache.pop(int(ds), None)
         if cached is not None:
             return cached
         monitor = getattr(self, "monitor", None)
-        values = []
-        with _maybe_section(monitor, "mmap_feature.load", ds, level="full"):
-            for path in self.paths:
-                data = self._mmap(path).load(start_ds=ds, end_ds=ds)[:]
-                values.append(torch.as_tensor(np.asarray(data)[0], dtype=self.dtype))
-        with _maybe_section(monitor, "mmap_feature.stack", ds, level="full"):
-            return torch.stack(values, dim=-1)
+        with _maybe_section(monitor, "feature.factor_item_load", ds, level="full"):
+            data = self._get_mmap().load(start_ds=ds, end_ds=ds)[:]
+        return torch.as_tensor(np.asarray(data)[0], dtype=self.dtype)
 
     def prefetch_days(self, days: Sequence[int]):
         days = list(dict.fromkeys(int(ds) for ds in days))
-        if not days:
-            return
         needed_days = [ds for ds in days if ds not in self._day_cache]
         if not needed_days:
             return
@@ -82,16 +155,74 @@ class MemmapFeatureSource:
         end_ds = max(needed_days)
         day_set = set(needed_days)
         trading_days = [int(ds) for ds in MASK.date if start_ds <= int(ds) <= end_ds]
-        values_by_day = {ds: [] for ds in needed_days}
-        for path in self.paths:
-            data = self._mmap(path).load(start_ds=start_ds, end_ds=end_ds)[:]
-            arr = np.asarray(data)
-            for offset, ds in enumerate(trading_days[: len(arr)]):
-                if ds in day_set:
-                    values_by_day[ds].append(torch.as_tensor(arr[offset], dtype=self.dtype))
-        for ds, values in values_by_day.items():
-            if len(values) == len(self.paths):
-                self._day_cache[ds] = torch.stack(values, dim=-1)
+        data = self._get_mmap().load(start_ds=start_ds, end_ds=end_ds)[:]
+        arr = np.asarray(data)
+        for offset, ds in enumerate(trading_days[: len(arr)]):
+            if ds in day_set:
+                self._day_cache[ds] = torch.as_tensor(arr[offset], dtype=self.dtype)
+
+
+class AlphaParquetItemSource(FeatureItemSource):
+    def __init__(self, spec: FeatureSpec, dtype: torch.dtype, codes: Sequence[int | str]):
+        super().__init__(spec, dtype)
+        if spec.mode != "read_dump":
+            raise NotImplementedError(f"alpha mode {spec.mode!r} is not implemented in the MVP")
+        if not spec.path:
+            raise ValueError(f"alpha feature {spec.name!r} requires path")
+        self.path = spec.path
+        self.codes = [str(code).zfill(6) for code in codes]
+        self._frame: pd.DataFrame | None = None
+
+    def _load_frame(self) -> pd.DataFrame:
+        if self._frame is None:
+            frame = pd.read_parquet(self.path)
+            frame.index = frame.index.astype(int)
+            frame.columns = frame.columns.astype(str).str.zfill(6)
+            self._frame = frame.sort_index().reindex(columns=self.codes)
+        return self._frame
+
+    def _load_raw_day(self, ds: int) -> torch.Tensor:
+        monitor = getattr(self, "monitor", None)
+        with _maybe_section(monitor, "feature.alpha_parquet_load", ds, level="full"):
+            frame = self._load_frame()
+            if int(ds) not in frame.index:
+                raise KeyError(f"alpha feature {self.name!r} missing date {ds} in {self.path}")
+            row = frame.loc[int(ds)]
+        return torch.as_tensor(row.to_numpy(dtype=np.float32), dtype=self.dtype)
+
+
+class CompositeFeatureSource:
+    def __init__(self, specs: Sequence[FeatureSpec], dtype: torch.dtype, codes: Sequence[int | str]):
+        if not specs:
+            raise ValueError("at least one feature is required")
+        self.specs = tuple(specs)
+        self.dtype = dtype
+        self.sources = [self._build_source(spec, dtype, codes) for spec in self.specs]
+        self.feature_dim = sum(source.feature_dim for source in self.sources)
+        self.feature_names = tuple(source.name for source in self.sources)
+
+    def _build_source(self, spec: FeatureSpec, dtype: torch.dtype, codes: Sequence[int | str]) -> FeatureItemSource:
+        kind = spec.kind.strip().lower()
+        if kind == "factor":
+            return MemmapFactorItemSource(spec, dtype)
+        if kind == "alpha":
+            return AlphaParquetItemSource(spec, dtype, codes)
+        raise ValueError(f"unsupported feature kind: {spec.kind}")
+
+    def _sync_monitor_refs(self):
+        monitor = getattr(self, "monitor", None)
+        for source in self.sources:
+            source.monitor = monitor
+
+    def load_day(self, ds: int) -> torch.Tensor:
+        self._sync_monitor_refs()
+        parts = [source.load_day(ds) for source in self.sources]
+        return torch.stack(parts, dim=-1)
+
+    def prefetch_days(self, days: Sequence[int]):
+        self._sync_monitor_refs()
+        for source in self.sources:
+            source.prefetch_days(days)
 
 
 class EmptyCubeSource:
@@ -167,7 +298,9 @@ class LoaderConfig:
     data_start_ds: int
     valid_path: str
     filtered_path: str
+    features: Sequence[FeatureSpec] | None = None
     compression: str = "none"
+    apply_global_ops: bool = True
     base_universe_path: str | None = None
     verbose: bool = False
 
@@ -180,23 +313,30 @@ class ComboDataLoader:
         self.mask = MASK
         self.data_start_ds = int(self.config.data_start_ds)
         self.data_start_didx = int(self.mask.date2didx(self.data_start_ds))
-        self.factor_source = MemmapFeatureSource(self.config.factor_paths, dtype=self.dtype)
+        raw_feature_specs = self.config.features or tuple(
+            FeatureSpec(kind="factor", name=Path(path).name, path=path) for path in self.config.factor_paths
+        )
+        feature_specs = tuple(_coerce_feature_spec(spec) for spec in raw_feature_specs)
+        self.feature_source = CompositeFeatureSource(feature_specs, dtype=self.dtype, codes=self.mask.code)
+        self.factor_source = self.feature_source
         self.cube_source = cube_source or EmptyCubeSource(dtype=self.dtype)
         self.label_source = MemmapLabelSource(self.config.label_path, dtype=self.dtype)
         self.valid_source = MemmapMaskSource(self.config.valid_path)
         self.filtered_source = MemmapMaskSource(self.config.filtered_path)
         self.base_universe_source = MemmapMaskSource(self.config.base_universe_path)
         self.monitor = None
-        self.num_features = self.factor_source.feature_dim + self.cube_source.feature_dim
+        self.num_features = self.feature_source.feature_dim + self.cube_source.feature_dim
+        self.feature_names = tuple(self.feature_source.feature_names) + tuple(
+            f"cube_{idx:03d}" for idx in range(self.cube_source.feature_dim)
+        )
         self.verbose = bool(getattr(config, "verbose", False))
-        self.factor_source.verbose = self.verbose
         self._feature_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
         self._feature_cache_size = int(feature_cache_size)
         self._label_cache: OrderedDict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
         self._label_cache_size = int(label_cache_size)
 
     def _sync_monitor_refs(self):
-        self.factor_source.monitor = self.monitor
+        self.feature_source.monitor = self.monitor
         self.label_source.monitor = self.monitor
         self.valid_source.monitor = self.monitor
         self.filtered_source.monitor = self.monitor
@@ -243,8 +383,8 @@ class ComboDataLoader:
 
     def _build_feature(self, ds: int) -> torch.Tensor:
         self._sync_monitor_refs()
-        with _maybe_section(self.monitor, "gen_feature.factor_load", ds, level="full"):
-            factor = self.factor_source.load_day(ds).to(torch.float32)
+        with _maybe_section(self.monitor, "gen_feature.feature_load", ds, level="full"):
+            factor = self.feature_source.load_day(ds).to(torch.float32)
         with _maybe_section(self.monitor, "gen_feature.cube_load", ds, level="full"):
             cube = self.cube_source.load_day(ds).to(torch.float32)
         if cube.shape[1] == 0:
@@ -252,11 +392,12 @@ class ComboDataLoader:
         else:
             feature = torch.cat([factor, cube], dim=-1)
         feature[torch.isinf(feature)] = torch.nan
-        with _maybe_section(self.monitor, "gen_feature.cs_zscore", ds, level="full"):
-            feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
-        with _maybe_section(self.monitor, "gen_feature.truncate_nan_to_num", ds, level="full"):
-            feature = truncate(feature, -4.0, 4.0)
-            feature = nan_to_num(feature, 0.0)
+        if self.config.apply_global_ops:
+            with _maybe_section(self.monitor, "gen_feature.cs_zscore", ds, level="full"):
+                feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
+            with _maybe_section(self.monitor, "gen_feature.truncate_nan_to_num", ds, level="full"):
+                feature = truncate(feature, -4.0, 4.0)
+                feature = nan_to_num(feature, 0.0)
         return feature.to(self.dtype)
 
     def gen_feature(self, ds: int) -> torch.Tensor:
@@ -271,7 +412,7 @@ class ComboDataLoader:
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
         self._sync_monitor_refs()
-        self.factor_source.prefetch_days(days)
+        self.feature_source.prefetch_days(days)
         self.cube_source.prefetch_days(days)
 
     def prefetch_labels(self, days: Sequence[int], ret_days: int = 1):

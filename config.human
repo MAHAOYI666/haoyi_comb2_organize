@@ -464,6 +464,7 @@ XML：
 | `valid_path` | 自动派生 | path | 交易有效 mask，默认 `{cache}/Ashare`。 |
 | `filtered_path` | 自动派生 | path | 过滤后 mask，默认 `{cache}/AshareFiltered`。 |
 | `base_universe_path` | 自动派生 | path | base universe mask，默认 `{cache}/1d_StockMask2/StockMask2.BaseUnivMask`。 |
+| `apply_global_ops` | `true` | bool | 是否在所有 feature 拼接后继续执行默认全局 `cs_zscore -> truncate(-4,4) -> nan_to_num(0)`。 |
 
 ### 10.1 factor_paths 写法
 
@@ -475,6 +476,51 @@ XML：
 ```
 
 如果 `<factor_paths>` 存在但没有任何非空 `<path>`，则回退到默认 factor list。
+
+### 10.1.1 features 写法
+
+`features` 是 `factor_paths` 的泛化形式，可以混合普通因子和已经 dump 的 alpha parquet：
+
+```xml
+<features>
+  <factor name="factor_a" path="factor_a">
+    <op name="truncate" min="-4" max="4" />
+    <op name="nan_to_num" value="0" />
+  </factor>
+  <alpha name="base_lgbm" dump_path="/exp/base_lgbm/output/alpha.parquet" mode="read_dump">
+    <op name="cs_zscore" />
+    <op name="truncate" min="-3" max="3" />
+    <op name="nan_to_num" value="0" />
+  </alpha>
+</features>
+```
+
+当前 MVP 支持：
+
+| 标签 | 说明 |
+|---|---|
+| `<factor>` | 读取 Memmaper2 因子；相对 `path` 会拼到 `constants.factor_root`。 |
+| `<alpha>` | 读取 `alpha.parquet`；`path` 和 `dump_path` 等价，当前仅支持 `mode="read_dump"`。 |
+
+支持的 `<op>`：
+
+| op | 参数 |
+|---|---|
+| `cs_zscore` / `zscore` | 无 |
+| `truncate` | `min` / `max` |
+| `nan_to_num` / `fillna` | `value` |
+| `winsorize_by_quantile` | `low` / `high` |
+| `normalize_by_max_abs` | 无 |
+
+如果不配置 `<features>`，仍使用旧的 `<factor_paths>`。
+
+默认仍会在所有 feature 拼接后执行全局预处理。若 alpha 条目已经通过 `<op>` 完成标准化，可在 `<loader>` 上设置：
+
+```xml
+<loader apply_global_ops="false">
+  ...
+</loader>
+```
 
 ### 10.2 compression
 

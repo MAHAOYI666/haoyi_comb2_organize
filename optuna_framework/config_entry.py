@@ -7,14 +7,13 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_framework.aggregators import build_baseline_thresholds
-from optuna_framework.config_renderer import render_config
+from optuna_framework.baseline_runner import run_baseline_evaluations
 from optuna_framework.gpu_allocation import GpuAllocator
-from optuna_framework.metrics_parser import parse_full_period
-from optuna_framework.paths import build_baseline_run_paths, build_trial_run_paths
+from optuna_framework.paths import build_trial_run_paths
 from optuna_framework.plugin_loader import load_plugin
-from optuna_framework.runner import build_run_command, command_to_string, run_segment
+from optuna_framework.runner import build_run_command, command_to_string
 from optuna_framework.scripts.run_study import make_callback, make_objective, storage_url
+from optuna_framework.status import log_status
 from optuna_framework.study_utils import (
     completed_history_count,
     create_study,
@@ -75,8 +74,8 @@ def run_optuna_from_config(config_path: str | Path) -> bool:
     if run_config.n_trials is not None:
         study_spec = replace(study_spec, n_trials=run_config.n_trials)
 
-    print(
-        "[OPTUNA]",
+    log_status(
+        "config start",
         f"mode={run_config.mode}",
         f"plugin={run_config.plugin_path}",
         f"study_root={run_config.study_root}",
@@ -85,7 +84,14 @@ def run_optuna_from_config(config_path: str | Path) -> bool:
     )
 
     if run_config.mode == "baseline":
-        _run_baseline(study_spec, loaded.adapter, run_config.study_root, dry_run=run_config.dry_run)
+        _run_baseline(
+            study_spec,
+            loaded.adapter,
+            run_config.study_root,
+            dry_run=run_config.dry_run,
+            n_jobs=run_config.n_jobs,
+            devices=run_config.devices,
+        )
     elif run_config.mode == "smoke":
         _run_smoke(
             study_spec,
@@ -111,7 +117,14 @@ def run_optuna_from_config(config_path: str | Path) -> bool:
     elif run_config.mode == "auto":
         threshold_path = run_config.study_root / "baseline" / "baseline_thresholds.json"
         if not threshold_path.exists() or run_config.dry_run:
-            _run_baseline(study_spec, loaded.adapter, run_config.study_root, dry_run=run_config.dry_run)
+            _run_baseline(
+                study_spec,
+                loaded.adapter,
+                run_config.study_root,
+                dry_run=run_config.dry_run,
+                n_jobs=run_config.n_jobs,
+                devices=run_config.devices,
+            )
         _run_study(
             study_spec,
             loaded.adapter,
@@ -194,35 +207,15 @@ def load_optuna_run_config(config_path: str | Path) -> ConfigOptunaRun:
     )
 
 
-def _run_baseline(study_spec: Any, adapter: Any, study_root: Path, dry_run: bool = False) -> None:
-    params = adapter.baseline_params()
-    if dry_run:
-        print(f"[DRY-RUN] baseline study_root={study_root}")
-        for segment in study_spec.baseline_segments():
-            run_paths = build_baseline_run_paths(study_root, segment)
-            _print_command(f"[DRY-RUN] baseline/{segment.name}", run_paths.config_path, build_run_command(run_paths.config_path))
-        return
-
-    by_segment = {}
-    full_metrics = None
-    full_by_year = {}
-    for segment in study_spec.baseline_segments():
-        run_paths = build_baseline_run_paths(study_root, segment)
-        render_config(study_spec.baseline_config_path, run_paths, adapter, params, study_spec.fixed_overrides)
-        metrics = run_segment(run_paths)
-        if segment.name == "full_period":
-            full_by_year = parse_full_period(run_paths.pnl_summary_path)
-            full_metrics = full_by_year["full"]
-        else:
-            by_segment[segment.name] = metrics
-
-    if full_metrics is None:
-        raise RuntimeError("full_period baseline metrics were not produced")
-    thresholds = build_baseline_thresholds(by_segment, full_metrics, full_by_year)
-    threshold_path = study_root / "baseline" / "baseline_thresholds.json"
-    threshold_path.parent.mkdir(parents=True, exist_ok=True)
-    threshold_path.write_text(_json_dumps(thresholds), encoding="utf-8")
-    print(f"baseline_thresholds={threshold_path}")
+def _run_baseline(
+    study_spec: Any,
+    adapter: Any,
+    study_root: Path,
+    dry_run: bool = False,
+    n_jobs: int = 1,
+    devices: tuple[str, ...] = (),
+) -> None:
+    run_baseline_evaluations(study_spec, adapter, study_root, dry_run=dry_run, n_jobs=n_jobs, devices=devices)
 
 
 def _run_study(
@@ -253,6 +246,15 @@ def _run_study(
     study = create_study(optuna_study_name, storage_url(study_root), smoke=False, n_startup_trials=startup_trials)
     maybe_enqueue_baseline(study, adapter.baseline_params())
     remaining = max(0, study_spec.n_trials - completed_history_count(study))
+    log_status(
+        "study start",
+        f"name={optuna_study_name}",
+        f"study_root={study_root}",
+        f"target_trials={study_spec.n_trials}",
+        f"remaining={remaining}",
+        f"n_jobs={int(n_jobs)}",
+        f"devices={','.join(devices) if devices else 'default'}",
+    )
     optimize_study(
         study,
         make_objective(study_root, study_spec, adapter, cleanup_bad_trials=cleanup_bad_trials, gpu_allocator=gpu_allocator),
@@ -262,6 +264,7 @@ def _run_study(
     )
     write_study_reports(study, study_root)
     export_optuna_visualizations(study, study_root)
+    log_status("study done", f"reports={study_root / 'reports'}")
 
 
 def _run_smoke(
@@ -293,6 +296,15 @@ def _run_smoke(
     study = create_study(optuna_study_name, storage_url(study_root, "study_smoke.db"), smoke=True, n_startup_trials=startup_trials)
     maybe_enqueue_baseline(study, adapter.baseline_params())
     remaining = max(0, int(n_trials) - completed_history_count(study))
+    log_status(
+        "smoke start",
+        f"name={optuna_study_name}",
+        f"study_root={study_root}",
+        f"target_trials={int(n_trials)}",
+        f"remaining={remaining}",
+        f"n_jobs={int(n_jobs)}",
+        f"devices={','.join(devices) if devices else 'default'}",
+    )
     optimize_study(
         study,
         make_objective(study_root, study_spec, adapter, gpu_allocator=gpu_allocator),
@@ -301,6 +313,7 @@ def _run_smoke(
         n_jobs=int(n_jobs),
     )
     write_study_reports(study, study_root)
+    log_status("smoke done", f"reports={study_root / 'reports'}")
 
 
 def _read_optuna_element(config_path: Path) -> ET.Element | None:
@@ -379,9 +392,3 @@ def _parse_devices(value: str) -> tuple[str, ...]:
 def _print_command(prefix: str, config_path: Path, cmd: list[str]) -> None:
     print(f"{prefix} config={config_path}")
     print(f"{prefix} cmd={command_to_string(cmd)}")
-
-
-def _json_dumps(payload: dict[str, Any]) -> str:
-    import json
-
-    return json.dumps(payload, indent=2, sort_keys=True) + "\n"

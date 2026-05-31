@@ -1,3 +1,3 @@
-from src.DataLoader import LoaderConfig
+from src.DataLoader import FeatureSpec, LoaderConfig, OpSpec
 
-__all__ = ["LoaderConfig"]
+__all__ = ["FeatureSpec", "LoaderConfig", "OpSpec"]

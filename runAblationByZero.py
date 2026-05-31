@@ -55,11 +55,8 @@ class AblationCombo(ComboBase):
         return self.train_enabled and super().needTrain(ds)
 
     def _feature_variant_name(self, feature_idx: int) -> str:
-        factor_paths = list(self.loader.config.factor_paths)
-        if feature_idx < len(factor_paths):
-            feature_name = Path(factor_paths[feature_idx]).name
-        else:
-            feature_name = f"feature_{feature_idx:03d}"
+        feature_names = list(getattr(self.loader, "feature_names", ()))
+        feature_name = feature_names[feature_idx] if feature_idx < len(feature_names) else f"feature_{feature_idx:03d}"
         feature_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", feature_name).strip("._-")
         if not feature_name:
             feature_name = f"feature_{feature_idx:03d}"

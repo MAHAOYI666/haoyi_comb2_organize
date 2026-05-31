@@ -23,7 +23,7 @@ cd /root/autodl-tmp/haoyi_comb2_organize
 python3 -m pip install -r optuna_framework/requirements-optuna.txt
 export STUDY_ROOT=/root/autodl-tmp/haoyi_comb2_organize/optuna_runs/study_eg_torch_v1
 python3 optuna_framework/scripts/dry_run_render.py
-python3 optuna_framework/scripts/run_baseline.py --model-dir eg-torch --study-root "$STUDY_ROOT"
+python3 optuna_framework/scripts/run_baseline.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-jobs 2 --gpus 0,1
 python3 optuna_framework/scripts/run_smoke.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-trials 3
 python3 optuna_framework/scripts/run_study.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-trials 60
 python3 optuna_framework/scripts/run_phase_b.py --model-dir eg-torch --study-root "$STUDY_ROOT"
@@ -199,6 +199,8 @@ Long-task scripts support `--dry-run`. Dry-run prints planned config paths and
 Use `--study-root` to override the default
 `optuna_runs/study_eg_torch_v1` location. Each trial and segment receives a
 separate config, output root, checkpoint root, log files, and snaptime.
+Baseline and Phase A study runs support `--n-jobs` plus `--gpus`, for example
+`--n-jobs 2 --gpus 0,1`, to run independent segments/trials on multiple GPUs.
 
 ## Design Notes
 

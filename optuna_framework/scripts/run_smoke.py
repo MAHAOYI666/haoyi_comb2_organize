@@ -13,6 +13,7 @@ from optuna_framework.paths import build_trial_run_paths, resolve_study_root
 from optuna_framework.runner import build_run_command
 from optuna_framework.scripts._script_common import add_study_args, load_study_and_adapter, print_command
 from optuna_framework.scripts.run_study import make_callback, make_objective, storage_url
+from optuna_framework.status import log_status
 from optuna_framework.study_utils import completed_history_count, create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
 
 
@@ -50,8 +51,18 @@ def main() -> None:
     study = create_study(optuna_study_name, storage_url(study_root, "study_smoke.db"), smoke=True, n_startup_trials=args.startup_trials)
     maybe_enqueue_baseline(study, adapter.baseline_params())
     remaining = max(0, int(args.n_trials) - completed_history_count(study))
+    log_status(
+        "smoke start",
+        f"name={optuna_study_name}",
+        f"study_root={study_root}",
+        f"target_trials={int(args.n_trials)}",
+        f"remaining={remaining}",
+        "n_jobs=1",
+        "devices=default",
+    )
     optimize_study(study, make_objective(study_root, study_spec, adapter), remaining, callbacks=[make_callback(study_root)])
     write_study_reports(study, study_root)
+    log_status("smoke done", f"reports={study_root / 'reports'}")
 
 
 if __name__ == "__main__":

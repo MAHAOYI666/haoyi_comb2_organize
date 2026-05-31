@@ -3,9 +3,11 @@ from __future__ import annotations
 import math
 
 import pytest
+import pandas as pd
 import torch
 
 from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
+from src.DataLoader import AlphaParquetItemSource, FeatureSpec, OpSpec
 
 
 FLOAT_DTYPES = (torch.float16, torch.float32, torch.float64, torch.bfloat16)
@@ -309,3 +311,80 @@ def test_config_accepts_loader_compression_attribute(tmp_path) -> None:
 
     assert load_config()["combo"]["loader"]["compression"] == "none"
     assert loaded["combo"]["loader"]["compression"] == "fp4"
+
+
+def test_config_accepts_loader_features(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    alpha_path = tmp_path / "alpha.parquet"
+    xml_path.write_text(
+        f"""
+        <config>
+          <constants factor_root="factors" />
+          <combo>
+            <loader dtype="float16">
+              <features>
+                <factor name="factor_a" path="factor_a">
+                  <op name="truncate" min="-2" max="2" />
+                </factor>
+                <alpha name="base_lgbm" dump_path="{alpha_path}" mode="read_dump">
+                  <op name="nan_to_num" value="0" />
+                </alpha>
+              </features>
+            </loader>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    features = loaded["combo"]["loader"]["features"]
+
+    assert len(features) == 2
+    assert features[0]["kind"] == "factor"
+    assert features[0]["name"] == "factor_a"
+    assert features[0]["path"].endswith("/factors/factor_a")
+    assert features[0]["ops"][0]["params"] == {"min": -2, "max": 2}
+    assert features[1]["kind"] == "alpha"
+    assert features[1]["path"] == str(alpha_path.resolve())
+    assert loaded["combo"]["loader"]["apply_global_ops"] is True
+
+
+def test_config_accepts_apply_global_ops_flag(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        '<config><combo><loader apply_global_ops="false" /></combo></config>',
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+
+    assert loaded["combo"]["loader"]["apply_global_ops"] is False
+
+
+def test_alpha_parquet_item_source_loads_date_and_reindexes_codes(tmp_path) -> None:
+    alpha_path = tmp_path / "alpha.parquet"
+    pd.DataFrame(
+        [[1.0, 2.0], [3.0, 4.0]],
+        index=[20200101, 20200102],
+        columns=["1", "000002"],
+    ).to_parquet(alpha_path)
+    source = AlphaParquetItemSource(
+        FeatureSpec(
+            kind="alpha",
+            name="base",
+            path=str(alpha_path),
+            ops=(OpSpec("nan_to_num", {"value": 0.0}),),
+        ),
+        dtype=torch.float32,
+        codes=["000001", "000002", "000003"],
+    )
+
+    loaded = source.load_day(20200102)
+
+    assert loaded.dtype == torch.float32
+    assert torch.equal(loaded, torch.tensor([3.0, 4.0, 0.0]))

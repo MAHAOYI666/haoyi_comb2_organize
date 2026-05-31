@@ -19,6 +19,7 @@ from optuna_framework.paths import build_trial_run_paths, resolve_study_root
 from optuna_framework.runner import SegmentRunError
 from optuna_framework.runner import build_run_command, run_segment
 from optuna_framework.scripts._script_common import add_study_args, load_study_and_adapter, print_command
+from optuna_framework.status import log_status
 from optuna_framework.study_utils import (
     append_resource_metric,
     cleanup_bad_trial_artifacts,
@@ -78,12 +79,14 @@ def make_objective(
         materialized = adapter.materialize_params(params)
         trial_dir = study_root / "trials" / f"trial_{trial.number:05d}"
         init_trial_meta(trial_dir, trial.number, materialized, [segment.name for segment in study_spec.tuning_segments])
+        log_status(f"trial={trial.number:05d} start", f"params={_format_params(materialized)}", f"dir={trial_dir}")
         segment_metrics = []
         sharpes = []
         gpu_lease = gpu_allocator.acquire() if gpu_allocator is not None else None
         fixed_overrides = dict(study_spec.fixed_overrides)
         if gpu_lease is not None:
             fixed_overrides["combo.model.device"] = gpu_lease.device
+            log_status(f"trial={trial.number:05d} gpu={gpu_lease.device}")
         try:
             for step, segment in enumerate(study_spec.tuning_segments, start=1):
                 run_paths = build_trial_run_paths(study_root, trial.number, segment)
@@ -94,8 +97,15 @@ def make_objective(
                 update_segment(trial_dir, segment.name, "complete", metrics.to_dict())
                 score = running_score(sharpes)
                 trial.report(score, step=step)
+                log_status(
+                    f"trial={trial.number:05d} segment={segment.name} progress",
+                    f"step={step}/{len(study_spec.tuning_segments)}",
+                    f"score={score:.6g}",
+                    f"sharpe={metrics.sharpe_idx:.6g}",
+                )
                 if trial.should_prune():
                     update_trial_state(trial_dir, "pruned", objective=score)
+                    log_status(f"trial={trial.number:05d} pruned", f"score={score:.6g}", f"step={step}")
                     raise TrialPruned()
             objective_value, hard_filter_triggered = final_objective(segment_metrics, thresholds["hard_filter"])
             update_trial_state(
@@ -106,13 +116,20 @@ def make_objective(
             )
             if cleanup_bad_trials and hard_filter_triggered:
                 cleanup_bad_trial_artifacts(trial_dir)
+            log_status(
+                f"trial={trial.number:05d} done",
+                f"objective={objective_value:.6g}",
+                f"hard_filter={str(hard_filter_triggered).lower()}",
+            )
             return objective_value
-        except SegmentRunError:
+        except SegmentRunError as exc:
             update_trial_state(trial_dir, "failed")
+            log_status(f"trial={trial.number:05d} failed", str(exc).splitlines()[0])
             raise
         finally:
             if gpu_lease is not None:
                 gpu_lease.release()
+                log_status(f"trial={trial.number:05d} gpu_released={gpu_lease.device}")
 
     return objective
 
@@ -126,6 +143,14 @@ def make_callback(study_root: Path) -> Any:
         with lock:
             append_resource_metric(study_root, trial)
             write_study_reports(study, study_root)
+            completed = completed_history_count(study)
+            log_status(
+                "progress",
+                f"completed={completed}",
+                f"last_trial={getattr(trial, 'number', '')}",
+                f"last_state={str(getattr(trial, 'state', '')).split('.')[-1]}",
+                f"best={_best_value_text(study)}",
+            )
             failed = sum(1 for item in study.trials if str(item.state).endswith("FAIL"))
             if failed > 5:
                 print(f"Warning: failed trial count is {failed}; manual review recommended.")
@@ -159,6 +184,15 @@ def run_phase_a(args: argparse.Namespace) -> None:
     study = create_study(optuna_study_name, storage_url(study_root), smoke=False, n_startup_trials=args.startup_trials)
     maybe_enqueue_baseline(study, adapter.baseline_params())
     remaining = max(0, n_trials - completed_history_count(study))
+    log_status(
+        "study start",
+        f"name={optuna_study_name}",
+        f"study_root={study_root}",
+        f"target_trials={n_trials}",
+        f"remaining={remaining}",
+        f"n_jobs={n_jobs}",
+        f"devices={','.join(devices) if devices else 'default'}",
+    )
     optimize_study(
         study,
         make_objective(study_root, study_spec, adapter, cleanup_bad_trials=args.cleanup_bad_trials, gpu_allocator=gpu_allocator),
@@ -168,6 +202,7 @@ def run_phase_a(args: argparse.Namespace) -> None:
     )
     write_study_reports(study, study_root)
     export_optuna_visualizations(study, study_root)
+    log_status("study done", f"reports={study_root / 'reports'}")
 
 
 def main() -> None:
@@ -187,6 +222,29 @@ def _parse_devices(value: str) -> tuple[str, ...]:
         else:
             devices.append(f"cuda:{int(item)}")
     return tuple(devices)
+
+
+def _format_params(params: dict[str, Any], max_items: int = 12) -> str:
+    items = list(params.items())
+    shown = ", ".join(f"{key}={_short_value(value)}" for key, value in items[:max_items])
+    if len(items) > max_items:
+        shown += f", ...(+{len(items) - max_items})"
+    return "{" + shown + "}"
+
+
+def _short_value(value: Any, max_chars: int = 80) -> str:
+    text = str(value)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _best_value_text(study: Any) -> str:
+    try:
+        best = study.best_value
+    except Exception:
+        return "none"
+    return f"{best:.6g}"
 
 
 if __name__ == "__main__":
