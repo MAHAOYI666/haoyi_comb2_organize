@@ -1,6 +1,6 @@
 __pycache__/
 *.py[cod]
-
+.*
 .venv/
 .pdm-build/
 .pdm-python

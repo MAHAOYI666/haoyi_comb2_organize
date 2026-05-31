@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from optuna_framework.aggregators import ensure_factor_audit_template, final_objective, load_baseline_thresholds, running_score
+from optuna_framework.aggregators import final_objective, load_baseline_thresholds, running_score
 from optuna_framework.metrics_parser import SegmentMetrics
 
 
@@ -41,13 +41,4 @@ def test_missing_thresholds_message(tmp_path) -> None:
         assert "请先人工运行 run_baseline.py" in str(exc)
     else:
         raise AssertionError("expected FileNotFoundError")
-
-
-def test_factor_audit_template(tmp_path) -> None:
-    path = ensure_factor_audit_template(tmp_path)
-    assert path.exists()
-    first = path.read_text(encoding="utf-8")
-    ensure_factor_audit_template(tmp_path)
-    assert path.read_text(encoding="utf-8") == first
-    assert "2024/2025" in first
 

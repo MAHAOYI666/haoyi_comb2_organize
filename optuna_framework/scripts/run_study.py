@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +14,11 @@ if __package__ in (None, ""):
 
 from optuna_framework.aggregators import final_objective, load_baseline_thresholds, running_score
 from optuna_framework.config_renderer import render_config
+from optuna_framework.gpu_allocation import GpuAllocator
 from optuna_framework.paths import build_trial_run_paths, resolve_study_root
 from optuna_framework.runner import SegmentRunError
 from optuna_framework.runner import build_run_command, run_segment
-from optuna_framework.scripts._script_common import adapter_for_name, print_command
-from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
+from optuna_framework.scripts._script_common import add_study_args, load_study_and_adapter, print_command
 from optuna_framework.study_utils import (
     append_resource_metric,
     cleanup_bad_trial_artifacts,
@@ -31,17 +32,18 @@ from optuna_framework.study_utils import (
 from optuna_framework.trial_meta import init_trial_meta, update_segment, update_trial_state
 
 
-OPTUNA_STUDY_NAME = "eg_torch_v1"
-
-
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
 
     parser = argparse.ArgumentParser(description="Run Phase A Optuna search.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned study setup without running optimize")
     parser.add_argument("--study-root", default=None, help="Override default study root")
-    parser.add_argument("--n-trials", type=int, default=STUDY_SPEC.n_trials, help="Override trial count")
+    parser.add_argument("--n-trials", type=int, default=None, help="Override trial count")
+    parser.add_argument("--n-jobs", type=int, default=None, help="Number of parallel Optuna trials")
+    parser.add_argument("--gpus", default="", help="Comma-separated GPU ids or devices, for example: 0,1 or cuda:0,cuda:1")
+    parser.add_argument("--startup-trials", type=int, default=None, help="Override TPESampler/MedianPruner startup trials")
     parser.add_argument("--cleanup-bad-trials", action="store_true", help="Remove heavyweight artifacts for rejected trials")
+    add_study_args(parser)
     return parser.parse_args()
 
 
@@ -52,10 +54,15 @@ def storage_url(study_root: Path, filename: str = "study.db") -> str:
     return "sqlite:///" + str(db_path).replace("\\", "/")
 
 
-def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
+def make_objective(
+    study_root: Path,
+    study_spec: Any,
+    adapter: Any,
+    cleanup_bad_trials: bool = False,
+    gpu_allocator: Any = None,
+) -> Any:
     """Create the Optuna objective closure."""
 
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
     threshold_path = study_root / "baseline" / "baseline_thresholds.json"
     thresholds = load_baseline_thresholds(threshold_path)
 
@@ -70,13 +77,17 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
         params = adapter.suggest_params(trial)
         materialized = adapter.materialize_params(params)
         trial_dir = study_root / "trials" / f"trial_{trial.number:05d}"
-        init_trial_meta(trial_dir, trial.number, materialized, [segment.name for segment in STUDY_SPEC.tuning_segments])
+        init_trial_meta(trial_dir, trial.number, materialized, [segment.name for segment in study_spec.tuning_segments])
         segment_metrics = []
         sharpes = []
+        gpu_lease = gpu_allocator.acquire() if gpu_allocator is not None else None
+        fixed_overrides = dict(study_spec.fixed_overrides)
+        if gpu_lease is not None:
+            fixed_overrides["combo.model.device"] = gpu_lease.device
         try:
-            for step, segment in enumerate(STUDY_SPEC.tuning_segments, start=1):
+            for step, segment in enumerate(study_spec.tuning_segments, start=1):
                 run_paths = build_trial_run_paths(study_root, trial.number, segment)
-                render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, params, STUDY_SPEC.fixed_overrides)
+                render_config(study_spec.baseline_config_path, run_paths, adapter, params, fixed_overrides)
                 metrics = run_segment(run_paths)
                 segment_metrics.append(metrics)
                 sharpes.append(metrics.sharpe_idx)
@@ -99,6 +110,9 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
         except SegmentRunError:
             update_trial_state(trial_dir, "failed")
             raise
+        finally:
+            if gpu_lease is not None:
+                gpu_lease.release()
 
     return objective
 
@@ -106,12 +120,15 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
 def make_callback(study_root: Path) -> Any:
     """Create a lightweight reporting/resource callback."""
 
+    lock = threading.Lock()
+
     def callback(study: Any, trial: Any) -> None:
-        append_resource_metric(study_root, trial)
-        write_study_reports(study, study_root)
-        failed = sum(1 for item in study.trials if str(item.state).endswith("FAIL"))
-        if failed > 5:
-            print(f"Warning: failed trial count is {failed}; manual review recommended.")
+        with lock:
+            append_resource_metric(study_root, trial)
+            write_study_reports(study, study_root)
+            failed = sum(1 for item in study.trials if str(item.state).endswith("FAIL"))
+            if failed > 5:
+                print(f"Warning: failed trial count is {failed}; manual review recommended.")
 
     return callback
 
@@ -119,26 +136,35 @@ def make_callback(study_root: Path) -> Any:
 def run_phase_a(args: argparse.Namespace) -> None:
     """Run the formal Phase A study."""
 
-    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
+    study_spec, adapter, _plugin = load_study_and_adapter(args)
+    study_root = resolve_study_root(args.study_root, study_spec.name)
+    n_trials = study_spec.n_trials if args.n_trials is None else int(args.n_trials)
+    devices = _parse_devices(args.gpus)
+    n_jobs = int(args.n_jobs) if args.n_jobs is not None else (len(devices) if devices else 1)
     if args.dry_run:
         print(f"[DRY-RUN] Phase A study_root={study_root}")
         print(f"[DRY-RUN] storage={storage_url(study_root)}")
-        print(f"[DRY-RUN] n_trials={args.n_trials} n_jobs=1")
-        for segment in STUDY_SPEC.tuning_segments:
+        print(f"[DRY-RUN] n_trials={n_trials} n_jobs={n_jobs}")
+        print(f"[DRY-RUN] startup_trials={8 if args.startup_trials is None else int(args.startup_trials)}")
+        if devices:
+            print(f"[DRY-RUN] devices={','.join(devices)}")
+        for segment in study_spec.tuning_segments:
             run_paths = build_trial_run_paths(study_root, 0, segment)
             print_command(f"[DRY-RUN] trial_00000/{segment.name}", run_paths.config_path, build_run_command(run_paths.config_path))
         return
 
     study_root.mkdir(parents=True, exist_ok=True)
-    study = create_study(OPTUNA_STUDY_NAME, storage_url(study_root), smoke=False)
+    gpu_allocator = GpuAllocator(devices) if devices else None
+    optuna_study_name = study_spec.adapter_name or study_spec.name
+    study = create_study(optuna_study_name, storage_url(study_root), smoke=False, n_startup_trials=args.startup_trials)
     maybe_enqueue_baseline(study, adapter.baseline_params())
-    remaining = max(0, int(args.n_trials) - completed_history_count(study))
+    remaining = max(0, n_trials - completed_history_count(study))
     optimize_study(
         study,
-        make_objective(study_root, cleanup_bad_trials=args.cleanup_bad_trials),
+        make_objective(study_root, study_spec, adapter, cleanup_bad_trials=args.cleanup_bad_trials, gpu_allocator=gpu_allocator),
         remaining,
         callbacks=[make_callback(study_root)],
+        n_jobs=n_jobs,
     )
     write_study_reports(study, study_root)
     export_optuna_visualizations(study, study_root)
@@ -148,6 +174,19 @@ def main() -> None:
     """Script entry point."""
 
     run_phase_a(parse_args())
+
+
+def _parse_devices(value: str) -> tuple[str, ...]:
+    devices = []
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if item.startswith("cuda:"):
+            devices.append(item)
+        else:
+            devices.append(f"cuda:{int(item)}")
+    return tuple(devices)
 
 
 if __name__ == "__main__":

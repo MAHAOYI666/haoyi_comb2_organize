@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 
 def bootstrap_repo_imports() -> None:
@@ -15,14 +15,21 @@ def bootstrap_repo_imports() -> None:
         sys.path.insert(0, cwd)
 
 
-def adapter_for_name(name: str) -> Any:
-    """Return an adapter instance by registered name."""
+def add_study_args(parser: argparse.ArgumentParser) -> None:
+    """Add generic model-owned plugin selection arguments."""
 
-    from optuna_framework.adapters.eg_torch_v1 import EgTorchV1Adapter
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--model-dir", default=None, help="Model directory containing optuna_plugin.py")
+    group.add_argument("--plugin", default=None, help="Explicit optuna_plugin.py path")
 
-    if name == EgTorchV1Adapter.name:
-        return EgTorchV1Adapter()
-    raise KeyError(f"unknown adapter: {name}")
+
+def load_study_and_adapter(args: argparse.Namespace):
+    """Load the selected Optuna study spec and adapter."""
+
+    from optuna_framework.plugin_loader import load_plugin
+
+    loaded = load_plugin(model_dir=getattr(args, "model_dir", None), plugin=getattr(args, "plugin", None))
+    return loaded.study_spec, loaded.adapter, loaded
 
 
 def fixture_thresholds_path() -> Path:
@@ -40,4 +47,3 @@ def print_command(prefix: str, config_path: Path, cmd: list[str]) -> None:
 
     print(f"{prefix} config={config_path}")
     print(f"{prefix} cmd={command_to_string(cmd)}")
-

@@ -51,12 +51,14 @@ class StudySpec:
 
     name: str
     baseline_config_path: Path
-    adapter_name: str
+    adapter_name: str | None
     tuning_segments: tuple[SegmentSpec, ...]
     holdout_segments: tuple[SegmentSpec, ...]
     baseline_only_segments: tuple[SegmentSpec, ...]
     n_trials: int = 60
     fixed_overrides: dict[str, Any] = field(default_factory=dict)
+    plugin_path: Path | None = None
+    phase_b_seeds: tuple[int, ...] = (42, 43, 44)
 
     def baseline_segments(self) -> tuple[SegmentSpec, ...]:
         """Return all segments that baseline evaluation should render."""
@@ -81,4 +83,3 @@ class StudySpec:
 
         role_set = set(roles)
         return tuple(segment for segment in self.all_segments() if segment.role in role_set)
-

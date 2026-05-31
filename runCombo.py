@@ -13,6 +13,9 @@ import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
+organize_root_path = str(ORGANIZE_ROOT)
+if organize_root_path not in sys.path:
+    sys.path.insert(0, organize_root_path)
 for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"):
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
@@ -23,6 +26,7 @@ from src.DataLoader import ComboDataLoader, ComboTrainDataset
 from comb2_pcmaster import BacktestNode, DailyBacktest
 from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
+from optuna_framework.config_entry import is_optuna_enabled, run_optuna_from_config
 from vendor.perf_monitor import PerfMonitor, print_progress
 
 organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
@@ -255,6 +259,10 @@ def install_research_model_decorators(monitor: PerfMonitor, research_model_cls: 
 def main():
     args = parse_args()
     config_path = args.config_flag or args.config
+    if is_optuna_enabled(config_path):
+        run_optuna_from_config(config_path)
+        return
+
     organize_config = organize_config_module.load_config(config_path)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:
