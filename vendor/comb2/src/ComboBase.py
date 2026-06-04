@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import importlib.util
 import os
 import re
@@ -64,6 +65,13 @@ class ComboBase:
         self.reset_buffer = True
         self.alpha_history = node.alpha_history
         self.research_model_cls = self._load_research_model_class(self.model_path)
+
+    def _release_torch_cache(self, tag: str):
+        gc.collect()
+        if not torch.cuda.is_available():
+            return
+        torch.cuda.empty_cache()
+        print(f"[CUDA] tag={tag} cache_released")
 
     def _model_config(self) -> dict[str, Any]:
         model_config = dict(getattr(self.node, "model_config", {}))
@@ -252,8 +260,11 @@ class ComboBase:
             model_data_in_memory = BytesIO()
             self.model.save(model_data_in_memory)
             model_data_in_memory.seek(0)
+            self.oldModel = None
+            self._release_torch_cache("before_old_model_replace")
             self.oldModel = self.research_model_cls(self._model_config())
             self.oldModel.load(model_data_in_memory)
+            self._release_torch_cache("after_old_model_replace")
 
         self.reset_buffer = True
         print(
@@ -279,10 +290,14 @@ class ComboBase:
         self.selection.before_fit(dataset, plan)
         before_fit_time = time.perf_counter() - selection_start
         print(f"[TRAIN] dataset_len={len(dataset)} valid_instruments={dataset.numValidinsts}")
+        self.model = None
+        self._release_torch_cache("before_new_model_fit")
         self.model = self.research_model_cls(self._model_config())
         fit_start = time.perf_counter()
         self.model.fit(dataset)
         fit_time = time.perf_counter() - fit_start
+        dataset = None
+        self._release_torch_cache("after_fit_dataset_release")
         selection_start = time.perf_counter()
         self.selection.after_fit(self.model, plan)
         after_fit_time = time.perf_counter() - selection_start
@@ -364,6 +379,9 @@ class ComboBase:
         model_path = os.path.join(model_dir, "model")
         if not os.path.exists(model_path):
             return False
+        self.model = None
+        self.oldModel = None
+        self._release_torch_cache("before_checkpoint_load")
         self.model = self.research_model_cls(self._model_config())
         self.model.load(model_path)
         old_model_path = os.path.join(model_dir, "oldmodel")
