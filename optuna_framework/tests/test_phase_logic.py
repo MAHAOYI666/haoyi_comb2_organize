@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from optuna_detailed.metrics_parser import WindowMetrics
-from optuna_detailed.scripts.run_phase_b import _phase_b_rejection_reasons
-from optuna_detailed.scripts.run_phase_c import _accept_candidate
+from optuna_framework.metrics_parser import WindowMetrics
+from optuna_framework.scripts.run_phase_b import _phase_b_rejection_reasons
+from optuna_framework.scripts.run_phase_c import _accept_candidate
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

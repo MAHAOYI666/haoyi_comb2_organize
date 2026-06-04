@@ -13,7 +13,7 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args
 
 
 def parse_args() -> argparse.Namespace:

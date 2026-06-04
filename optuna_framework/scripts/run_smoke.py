@@ -9,12 +9,12 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.paths import build_trial_run_paths
-from optuna_detailed.runner import build_run_command
-from optuna_detailed.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
-from optuna_detailed.scripts.run_study import make_callback, make_objective, storage_url
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_utils import completed_history_count, create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
+from optuna_framework.paths import build_trial_run_paths
+from optuna_framework.runner import build_run_command
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
+from optuna_framework.scripts.run_study import make_callback, make_objective, storage_url
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_utils import completed_history_count, create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
 
 
 def parse_args() -> argparse.Namespace:

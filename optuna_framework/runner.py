@@ -1,4 +1,4 @@
-﻿"""Run rendered ``runCombo.py`` configs and validate resulting metrics."""
+"""Run rendered ``runCombo.py`` configs and validate resulting metrics."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from optuna_detailed.metrics_parser import parse_window_metrics
-from optuna_detailed.paths import get_repo_root
-from optuna_detailed.specs import RunPaths
-from optuna_detailed.trial_meta import update_window
+from optuna_framework.metrics_parser import parse_window_metrics
+from optuna_framework.paths import get_repo_root
+from optuna_framework.specs import RunPaths
+from optuna_framework.trial_meta import update_window
 
 
 class InferenceRunError(RuntimeError):

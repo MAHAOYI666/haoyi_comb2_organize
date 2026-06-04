@@ -1,4 +1,4 @@
-﻿"""Shared utilities for Optuna scripts.
+"""Shared utilities for Optuna scripts.
 
 This module intentionally delays imports of optional dependencies such as
 ``optuna``, ``psutil``, and Plotly-backed Optuna visualizations until the
@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 
-from optuna_detailed.runner import InferenceRunError
+from optuna_framework.runner import InferenceRunError
 
 
 def missing_dependency_message(package: str) -> str:

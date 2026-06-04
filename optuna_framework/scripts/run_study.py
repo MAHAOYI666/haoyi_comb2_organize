@@ -11,13 +11,13 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.aggregators import final_objective, load_baseline_thresholds, require_tuning_period_baseline
-from optuna_detailed.config_renderer import render_config
-from optuna_detailed.paths import build_trial_run_paths
-from optuna_detailed.runner import InferenceRunError, build_run_command, run_inference
-from optuna_detailed.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_utils import (
+from optuna_framework.aggregators import final_objective, load_baseline_thresholds, require_tuning_period_baseline
+from optuna_framework.config_renderer import render_config
+from optuna_framework.paths import build_trial_run_paths
+from optuna_framework.runner import InferenceRunError, build_run_command, run_inference
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_utils import (
     append_resource_metric,
     cleanup_bad_trial_artifacts,
     completed_history_count,
@@ -27,7 +27,7 @@ from optuna_detailed.study_utils import (
     optimize_study,
     write_study_reports,
 )
-from optuna_detailed.trial_meta import init_trial_meta, update_trial_state, update_window
+from optuna_framework.trial_meta import init_trial_meta, update_trial_state, update_window
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,7 +59,7 @@ def make_objective(config: Any, cleanup_bad_trials: bool = False) -> Any:
         try:
             from optuna import TrialPruned
         except ImportError as exc:
-            from optuna_detailed.study_utils import missing_dependency_message
+            from optuna_framework.study_utils import missing_dependency_message
 
             raise RuntimeError(missing_dependency_message("optuna")) from exc
 

@@ -1,14 +1,14 @@
-﻿"""Centralized path construction for Optuna inference runs."""
+"""Centralized path construction for Optuna inference runs."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from optuna_detailed.specs import RunPaths
+from optuna_framework.specs import RunPaths
 
 
 def get_repo_root() -> Path:
-    """Return the repository root that contains ``optuna_detailed``."""
+    """Return the repository root that contains ``optuna_framework``."""
 
     return Path(__file__).resolve().parents[1]
 

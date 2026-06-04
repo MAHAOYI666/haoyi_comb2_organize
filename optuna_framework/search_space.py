@@ -6,12 +6,12 @@ import math
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_detailed.study_config import ParamSpec, StudyConfig, parse_scalar
-from optuna_detailed.xml_patcher import get_section_attr, set_section_attr
+from optuna_framework.study_config import ParamSpec, StudyConfig, parse_scalar
+from optuna_framework.xml_patcher import get_section_attr, set_section_attr
 
 
 class ConfigDrivenAdapter:
-    """Adapter that derives search behavior from ``optuna_detailed/config.xml``."""
+    """Adapter that derives search behavior from ``optuna_framework/config.xml``."""
 
     name = "config_driven"
 

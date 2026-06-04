@@ -14,14 +14,14 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.aggregators import load_baseline_thresholds
-from optuna_detailed.config_renderer import render_config
-from optuna_detailed.metrics_parser import parse_full_period
-from optuna_detailed.paths import build_named_run_paths
-from optuna_detailed.runner import build_run_command, run_inference
-from optuna_detailed.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, fixture_thresholds_path, load_config_from_args, print_command
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_config import PhaseBConfig, PhaseCConfig
+from optuna_framework.aggregators import load_baseline_thresholds
+from optuna_framework.config_renderer import render_config
+from optuna_framework.metrics_parser import parse_full_period
+from optuna_framework.paths import build_named_run_paths
+from optuna_framework.runner import build_run_command, run_inference
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, fixture_thresholds_path, load_config_from_args, print_command
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_config import PhaseBConfig, PhaseCConfig
 
 
 def parse_args() -> argparse.Namespace:

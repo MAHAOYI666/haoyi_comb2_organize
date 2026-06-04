@@ -10,12 +10,12 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.config_validator import build_validation_plan, write_config_plan
-from optuna_detailed.scripts._script_common import add_common_config_args, load_config_from_args
+from optuna_framework.config_validator import build_validation_plan, write_config_plan
+from optuna_framework.scripts._script_common import add_common_config_args, load_config_from_args
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate optuna_detailed config.xml.")
+    parser = argparse.ArgumentParser(description="Validate optuna_framework config.xml.")
     add_common_config_args(parser)
     return parser.parse_args()
 

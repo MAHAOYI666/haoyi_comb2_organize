@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_detailed.paths import get_repo_root, resolve_study_root
+from optuna_framework.paths import get_repo_root, resolve_study_root
 
 
-DEFAULT_CONFIG_PATH = get_repo_root() / "optuna_detailed" / "config.xml"
+DEFAULT_CONFIG_PATH = get_repo_root() / "optuna_framework" / "config.xml"
 VALID_PARAM_TYPES = {"float", "int", "categorical"}
 VALID_SECTIONS = {"model", "runtime"}
 
@@ -96,7 +96,7 @@ def default_config_path() -> Path:
 
 
 def load_study_config(config_path: str | Path | None = None, study_root_override: str | Path | None = None) -> StudyConfig:
-    """Load and resolve one ``optuna_detailed`` XML config."""
+    """Load and resolve one ``optuna_framework`` XML config."""
 
     resolved_config_path = Path(config_path or DEFAULT_CONFIG_PATH).expanduser()
     if not resolved_config_path.is_absolute():

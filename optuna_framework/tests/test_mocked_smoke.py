@@ -5,11 +5,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from optuna_detailed.metrics_parser import WindowMetrics
-from optuna_detailed.scripts import run_study
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_config import load_study_config
-from optuna_detailed.study_utils import create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
+from optuna_framework.metrics_parser import WindowMetrics
+from optuna_framework.scripts import run_study
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_config import load_study_config
+from optuna_framework.study_utils import create_study, maybe_enqueue_baseline, optimize_study, write_study_reports
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

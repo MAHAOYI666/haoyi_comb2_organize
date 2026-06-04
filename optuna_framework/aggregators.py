@@ -1,4 +1,4 @@
-﻿"""Objective scoring, hard filters, and audit helpers."""
+"""Objective scoring, hard filters, and audit helpers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from optuna_detailed.metrics_parser import WindowMetrics
+from optuna_framework.metrics_parser import WindowMetrics
 
 
 HARD_FILTER_MISSING_MESSAGE = (

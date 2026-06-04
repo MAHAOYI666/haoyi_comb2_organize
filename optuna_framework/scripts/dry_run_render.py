@@ -9,10 +9,10 @@ if __package__ in (None, ""):
 
 import argparse
 
-from optuna_detailed.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
-from optuna_detailed.paths import build_baseline_run_paths, get_repo_root
-from optuna_detailed.scripts._script_common import add_common_config_args, ensure_plan_for_args, load_config_from_args
-from optuna_detailed.search_space import ConfigDrivenAdapter
+from optuna_framework.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
+from optuna_framework.paths import build_baseline_run_paths, get_repo_root
+from optuna_framework.scripts._script_common import add_common_config_args, ensure_plan_for_args, load_config_from_args
+from optuna_framework.search_space import ConfigDrivenAdapter
 
 
 def parse_args() -> argparse.Namespace:

@@ -9,11 +9,11 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_detailed.config_renderer import render_config
-from optuna_detailed.paths import build_named_run_paths
-from optuna_detailed.runner import build_run_command, run_inference
-from optuna_detailed.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
-from optuna_detailed.search_space import ConfigDrivenAdapter
+from optuna_framework.config_renderer import render_config
+from optuna_framework.paths import build_named_run_paths
+from optuna_framework.runner import build_run_command, run_inference
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
+from optuna_framework.search_space import ConfigDrivenAdapter
 
 
 def parse_args() -> argparse.Namespace:

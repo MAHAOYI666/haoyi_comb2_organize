@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from optuna_detailed.config_validator import build_validation_plan
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_config import load_study_config
+from optuna_framework.config_validator import build_validation_plan
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_config import load_study_config
 
 
 def test_default_config_loads_and_baseline_params(tmp_path) -> None:

@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from optuna_detailed.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
-from optuna_detailed.paths import build_trial_run_paths, get_repo_root
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.study_config import load_study_config
+from optuna_framework.config_renderer import OPTUNA_RUNTIME_PATCH_KEYS, assert_only_allowed_diffs, render_config, structured_xml_diff
+from optuna_framework.paths import build_trial_run_paths, get_repo_root
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_config import load_study_config
 
 
 def test_render_baseline_params_writes_paths_and_fixed_override(tmp_path) -> None:
@@ -35,9 +35,9 @@ def test_cli_dry_run_does_not_launch_runcombo(tmp_path) -> None:
     proc = subprocess.run(
         [
             sys.executable,
-            "optuna_detailed/scripts/run_baseline.py",
+            "optuna_framework/scripts/run_baseline.py",
             "--config",
-            "optuna_detailed/config.xml",
+            "optuna_framework/config.xml",
             "--study-root",
             str(tmp_path / "study"),
             "--dry-run",
@@ -59,9 +59,9 @@ def test_dry_run_render_cli_outputs_plan_and_rendered_config(tmp_path) -> None:
     proc = subprocess.run(
         [
             sys.executable,
-            "optuna_detailed/scripts/dry_run_render.py",
+            "optuna_framework/scripts/dry_run_render.py",
             "--config",
-            "optuna_detailed/config.xml",
+            "optuna_framework/config.xml",
             "--study-root",
             str(tmp_path / "study"),
         ],

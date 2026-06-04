@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_detailed.study_config import ParamSpec, StudyConfig, VALID_PARAM_TYPES, VALID_SECTIONS, parse_scalar
-from optuna_detailed.xml_patcher import find_section, get_section_attr, read_model_path, xml_attr_path
+from optuna_framework.study_config import ParamSpec, StudyConfig, VALID_PARAM_TYPES, VALID_SECTIONS, parse_scalar
+from optuna_framework.xml_patcher import find_section, get_section_attr, read_model_path, xml_attr_path
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,7 @@ def write_config_plan(plan: ValidationPlan, path: str | Path | None = None) -> P
     target = Path(path) if path is not None else config_plan_path(plan.config)
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# optuna_detailed config plan",
+        "# optuna_framework config plan",
         "",
         f"status: {plan.status}",
         f"plan_hash: {plan.plan_hash}",

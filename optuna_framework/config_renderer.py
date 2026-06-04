@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_detailed.search_space import ConfigDrivenAdapter
-from optuna_detailed.specs import RunPaths
-from optuna_detailed.study_config import StudyConfig
-from optuna_detailed.xml_patcher import apply_fixed_override, coerce_scalar, format_xml_value, indent_xml, resolve_relative_paths
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.specs import RunPaths
+from optuna_framework.study_config import StudyConfig
+from optuna_framework.xml_patcher import apply_fixed_override, coerce_scalar, format_xml_value, indent_xml, resolve_relative_paths
 
 
 PATH_PATCH_KEYS = {
