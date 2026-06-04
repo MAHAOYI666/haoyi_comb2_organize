@@ -23,6 +23,9 @@ class DataLoader:
     def get_vwap(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_IntraVwap" / "IntraVwap.VwapBegin30")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
+    def get_open(self, start_ds, end_ds) -> pd.DataFrame:
+        return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.open")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
     def get_close(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.close")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 

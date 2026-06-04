@@ -29,6 +29,9 @@ class BacktestNode:
     cache_path: str = ""
     verbose: bool = False
     universe: str = "base"
+    execution_price: str = "vwap30"
+    drawdown_stop: float = 0.0
+    cooldown_days: int = 0
     holdings: pd.Series | None = None
     last_hold: pd.Series | None = None
     yesterday: int | None = None
@@ -79,7 +82,12 @@ class DailyBacktest:
 
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
-        self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+        if self.node.execution_price == "vwap30":
+            self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+        elif self.node.execution_price == "open":
+            self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds).ffill()
+        else:
+            raise ValueError(f"Unknown execution_price: {self.node.execution_price}")
         self.close_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds).ffill()
         self.market_cap = self.dataloader.get_market_cap(self.node.start_ds, self.node.end_ds).ffill()
         self.suspend = self.dataloader.get_suspend(self.node.start_ds, self.node.end_ds)
@@ -97,6 +105,8 @@ class DailyBacktest:
         self.node.fig, self.node.ax = None, None
         self.node.daily_metrics_written = False
         self.node.prev_total_asset = None
+        self.equity_peak = float(self.node.cash)
+        self.cooldown_left = 0
         self.cash = float(self.node.cash)
         self.daily_metrics_path = os.path.join(self.node.output_path, self.node.daily_metrics_file)
         self.pnl_summary_path = os.path.join(self.node.output_path, "pnl_summary.csv")
@@ -168,9 +178,21 @@ class DailyBacktest:
 
         self._advance_from_previous_close(date)
         vwap_today = self.vwap_data.loc[date]
+        pre_trade_total = self._total_asset(vwap_today)
+        stop_triggered = False
+        if self.node.drawdown_stop > 0 and pre_trade_total / self.equity_peak - 1.0 <= -self.node.drawdown_stop:
+            stop_triggered = True
+            self.cooldown_left = max(self.cooldown_left, int(self.node.cooldown_days))
+            self.equity_peak = float(pre_trade_total)
+
         signals = self._coerce_alpha(alpha).fillna(0.0)
-        signal_masked = signals * self.universe.loc[date].fillna(0.0)
-        target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
+        if stop_triggered or self.cooldown_left > 0:
+            target_weight = pd.Series(dtype=float)
+            if not stop_triggered:
+                self.cooldown_left -= 1
+        else:
+            signal_masked = signals * self.universe.loc[date].fillna(0.0)
+            target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
         self.node.position_history.append(pd.DataFrame([target_weight], index=[date], columns=self.universe.columns))
         tvr_cost = 0.0
 
@@ -220,6 +242,7 @@ class DailyBacktest:
 
         close_today = self.close_data.loc[date]
         total = self._total_asset(close_today)
+        self.equity_peak = max(self.equity_peak, float(total))
         pnl = 0.0 if self.node.prev_total_asset is None else float(total - self.node.prev_total_asset)
         self.node.prev_total_asset = float(total)
         tvr = float(tvr_cost / target_value.sum()) if target_value.sum() != 0 else 0.0

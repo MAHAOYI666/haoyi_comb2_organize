@@ -1,7 +1,7 @@
 <config>
   <constants
     cache_path="/home/shared/data1/factorsim_data/Cache"
-    factor_root="/root/ml_data/ZsimPool"
+    factor_root="/home/shared/data1/factorsim_data/Factor/FactorData/ZsimPool"
     output_root="output-torch-perf-short"
     checkpoint_root="checkpoints-torch-perf-short"
   />
@@ -19,6 +19,8 @@
       trainDelay="0"
       retDays="5"
       tsDays="5"
+      load_chunk_days="128"
+      processed_feature_cache="false"
       model_smooth_rate="0.7"
       model_keep_num="0"
       select_days="20"

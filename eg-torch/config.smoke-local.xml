@@ -1,20 +1,18 @@
 <config>
   <constants
-    cache_path="/home/shared/data1/factorsim_data/Cache"
-    factor_root="/home/shared/data1/factorsim_data/Factor/FactorData/ZsimPool"
-    output_root="output-torch-perf-short-cuda"
-    checkpoint_root="checkpoints-torch-perf-short-cuda"
+    cache_path="/root/ml-data1-pvc/factorsim_data/Cache"
+    factor_root="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool"
+    output_root="output-torch-smoke-local"
+    checkpoint_root="checkpoints-torch-smoke-local"
   />
 
   <strategy start_ds="20200120" end_ds="20200210" path="../alpha_strategy.py" />
 
   <combo>
-    <paths
-      model_path="model.py"
-    />
+    <paths model_path="model.py" />
 
     <runtime
-      snaptime="perf_short_cuda"
+      snaptime="smoke_local"
       livetrading="false"
       trainDelay="0"
       retDays="5"
@@ -28,7 +26,7 @@
     />
 
     <model
-      device="cuda"
+      device="cpu"
       hiddenSize="512"
       fcSize="256"
       dropout="0.5"
@@ -63,10 +61,10 @@
 
   <monitor
     enabled="true"
-    output_path="output-torch-perf-short-cuda/perf_metrics.csv"
+    output_path="output-torch-smoke-local/perf_metrics.csv"
     format="csv"
     print_summary="true"
     collect_gpu="true"
-    sync_cuda="true"
+    sync_cuda="false"
   />
 </config>
