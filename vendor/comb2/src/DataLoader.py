@@ -590,13 +590,7 @@ class ComboTrainDataset(Dataset):
         return max(0, self.ndays - self.ts_days + 1)
 
     def __getitem__(self, idx: int):
-        x = self.codec.decode(
-            self.X,
-            self.X_meta,
-            slice(idx, idx + self.ts_days),
-            out_dtype=self.loader.dtype,
-        )
-        x = nan_to_num(x, 0.0).to(self.loader.dtype)
+        x = self.codec.decode(self.X, self.X_meta, slice(idx, idx + self.ts_days), out_dtype=self.loader.dtype)
         y = self.Y[idx + self.ts_days - 1]
         w = self.W[idx + self.ts_days - 1]
         return idx, x, y, w
