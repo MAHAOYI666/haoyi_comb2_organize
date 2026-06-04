@@ -28,7 +28,7 @@
     scoring_end_ds="20231229"
   />
 
-  <!-- fixed_overrides：每次渲染 run config 时都会固定写入的 XML 属性。 -->
+  <!-- fixed_overrides：每次渲染 run config 时都会固定写入的 XML 属性。 不要动这个-->
   <!-- override.path：点分形式的 XML 路径，例如 combo.model.seed 或 combo.output.enable_alpha_analysis。 -->
   <!-- override.value：写入该 XML 属性的固定值。 -->
   <fixed_overrides>
