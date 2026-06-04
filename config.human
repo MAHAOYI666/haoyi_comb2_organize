@@ -1,0 +1,750 @@
+# comb2_organize 参数速查表
+
+本文从 `config.py` 的 XML 解析逻辑出发，说明 `comb2_organize` 支持哪些配置项、默认值、类型转换、路径解析规则，以及运行时这些参数大致流向哪里。
+
+## 1. XML 总体结构
+
+`config.py` 只接受 XML 配置文件，根节点必须是：
+
+```xml
+<config>
+  <constants ... />
+  <strategy ... />
+  <combo>
+    <paths ... />
+    <output ... />
+    <runtime ... />
+    <model ... />
+    <loader ...>
+      <factor_paths>
+        <path>factor_name_or_path</path>
+      </factor_paths>
+    </loader>
+    <defaults ... />
+  </combo>
+  <backtest ... />
+  <monitor ... />
+</config>
+```
+
+解析入口：
+
+```python
+load_config(path)
+```
+
+主要规则：
+
+- XML 根节点必须是 `<config>`。
+- 除 `<combo><model ... />` 以外，其他节点不允许出现默认配置之外的未知属性。
+- `<combo><model ... />` 允许额外属性，供研究模型自定义读取。
+- XML 中缺失的配置会从 `DEFAULT_CONFIG` 补齐。
+- XML 属性值会根据默认值类型自动转换：bool / int / float / torch dtype / string。
+- `factor_paths` 必须通过 `<factor_paths><path>...</path></factor_paths>` 子节点配置，不能直接写成 loader 属性。
+
+---
+
+## 2. 类型转换规则
+
+### bool
+
+支持：
+
+```text
+true:  1, true, yes, y, on
+false: 0, false, no, n, off
+```
+
+大小写不敏感。
+
+### int / float
+
+根据默认值类型转换。
+
+例如：
+
+```xml
+<runtime max_train_days="2000" model_smooth_rate="0.7" />
+```
+
+会得到：
+
+```python
+max_train_days: int
+model_smooth_rate: float
+```
+
+### dtype
+
+支持：
+
+```text
+float16
+float32
+float64
+bfloat16
+```
+
+例如：
+
+```xml
+<loader dtype="float16" />
+```
+
+会得到：
+
+```python
+torch.float16
+```
+
+### None 默认值字段
+
+如果默认值是 `None`：
+
+- XML 属性为空字符串 `""` 会解析成 `None`
+- 否则会尝试解析成 bool / int / float，最后保留 string
+
+---
+
+## 3. 路径解析规则
+
+这些字段会被当作路径解析：
+
+```text
+constants.cache_path
+constants.factor_root
+constants.output_root
+constants.checkpoint_root
+strategy.path
+combo.paths.base_dir
+combo.paths.output_dir
+combo.paths.model_path
+combo.paths.checkpoint_root
+combo.output.alpha_history_path
+combo.output.log_path
+combo.loader.label_path
+combo.loader.ashare_data_path
+combo.loader.valid_path
+combo.loader.filtered_path
+combo.loader.base_universe_path
+backtest.output_path
+monitor.output_path
+```
+
+规则：
+
+- 绝对路径保持绝对路径。
+- 相对路径会相对配置文件所在目录解析。
+- `factor_paths` 里的每个 `<path>`：
+  - 如果是绝对路径，保持原样。
+  - 如果是相对路径或因子名，会拼到 `constants.factor_root` 下。
+
+例如配置文件在 `eg-torch/config.xml`：
+
+```xml
+<constants
+  cache_path="/root/ml-data1-pvc/factorsim_data/Cache"
+  factor_root="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool"
+/>
+
+<loader dtype="float16">
+  <factor_paths>
+    <path>cyz_20231130_01</path>
+  </factor_paths>
+</loader>
+```
+
+最终 factor 路径类似：
+
+```text
+/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_01
+```
+
+---
+
+## 4. constants
+
+XML：
+
+```xml
+<constants
+  cache_path="data/Cache"
+  factor_root="data/Factor/FactorData"
+  output_root="vendor/comb2/output"
+  checkpoint_root=""
+/>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `cache_path` | `data/Cache` | path | 数据缓存根目录。代码会在其下拼 `AshareCache`。 |
+| `factor_root` | `data/Factor/FactorData` | path | 因子根目录。`factor_paths` 中的相对 path 会拼到这里。 |
+| `output_root` | `vendor/comb2/output` | path | 输出根目录，会派生 backtest、alpha_history、log 等路径。 |
+| `checkpoint_root` | `None` | path / None | checkpoint 根目录。为 `None` 或空时不保存 checkpoint。 |
+
+派生规则：
+
+```python
+cache_path = constants.cache_path / "AshareCache"
+combo.paths.output_dir = constants.output_root
+combo.paths.checkpoint_root = constants.checkpoint_root
+combo.output.alpha_history_path = constants.output_root / "alpha_history.pt"
+combo.output.log_path = constants.output_root / "train.log"
+backtest.output_path = constants.output_root / "backtest"
+```
+
+如果 `combo.loader.label_path` 没有显式配置，还会自动派生：
+
+```text
+{cache_path}/1d_DailyLabel/DailyLabel.label1d
+```
+
+同时自动派生：
+
+```text
+combo.loader.ashare_data_path      = {cache_path}
+combo.loader.valid_path            = {cache_path}/Ashare
+combo.loader.filtered_path         = {cache_path}/AshareFiltered
+combo.loader.base_universe_path    = {cache_path}/1d_StockMask2/StockMask2.BaseUnivMask
+```
+
+---
+
+## 5. strategy
+
+XML：
+
+```xml
+<strategy
+  start_ds="20200101"
+  end_ds="20240628"
+  path="../alpha_strategy.py"
+/>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---:|---|---|
+| `start_ds` | `20160111` | int | 回测开始日期，格式通常是 `YYYYMMDD`。 |
+| `end_ds` | `20200101` | int | 回测结束日期。 |
+| `path` | `alpha_strategy.py` | path | 生成临时策略文件时使用的策略模板路径。 |
+
+`runCombo.py` 会用 `strategy.start_ds/end_ds/path` 构造 backtest strategy。
+
+---
+
+## 6. combo.paths
+
+XML：
+
+```xml
+<combo>
+  <paths
+    base_dir="../vendor/comb2"
+    model_path="model.py"
+    checkpoint_root="checkpoints-torch"
+  />
+</combo>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `base_dir` | `vendor/comb2` | path | comb2 基础目录。 |
+| `output_dir` | `vendor/comb2/output` | path | 输出目录；通常会被 `constants.output_root` 覆盖。 |
+| `model_path` | `vendor/comb2/lgbm_model.py` | path | 研究模型文件，必须定义 `ResearchModel`。 |
+| `checkpoint_root` | `None` | path / None | checkpoint 根目录；通常会被 `constants.checkpoint_root` 覆盖。 |
+
+注意：
+
+- `model_path` 是运行时加载模型类的关键参数。
+- 模型文件中必须有：
+
+```python
+class ResearchModel:
+    ...
+```
+
+---
+
+## 7. combo.output
+
+XML：
+
+```xml
+<combo>
+  <output
+    alpha_history_path="output/alpha_history.pt"
+    log_path="output/train.log"
+    enable_alpha_analysis="true"
+  />
+</combo>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `alpha_history_path` | `vendor/comb2/output/alpha_history.pt` | path | alpha 历史保存路径；通常由 `constants.output_root` 派生。 |
+| `log_path` | `vendor/comb2/output/train.log` | path | 日志路径；通常由 `constants.output_root` 派生。 |
+| `enable_alpha_analysis` | `True` | bool | 是否在回测结束后执行 alpha analysis。调参/快速测试时可设为 `false`。 |
+
+---
+
+## 8. combo.runtime
+
+XML：
+
+```xml
+<runtime
+  snaptime="example_torch"
+  livetrading="false"
+  trainDelay="0"
+  retDays="5"
+  tsDays="5"
+  load_chunk_days="128"
+  processed_feature_cache="false"
+  model_smooth_rate="0.7"
+  model_keep_num="0"
+  select_days="120"
+  max_train_days="2000"
+  verbose="false"
+/>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---:|---|---|
+| `snaptime` | `mlp_minimal` | str | 训练快照名；checkpoint 子目录名会使用它。 |
+| `livetrading` | `False` | bool | 是否按 live 模式运行。false 时走历史回测流程。 |
+| `trainDelay` | `1` | int | 训练目标日相对当前回测日的延迟。 |
+| `retDays` | `1` | int | label 聚合天数，也作为训练 label 的 return horizon。 |
+| `tsDays` | `8` | int | 每个样本的时间窗口长度。 |
+| `load_chunk_days` | `None` | int / None | 构造训练集时每次预取多少天。为 None 时使用 `tsDays`。 |
+| `processed_feature_cache` | `False` | bool | 是否缓存处理后的每日 feature。可提速重复访问，但会明显增加内存。 |
+| `model_smooth_rate` | `0.7` | float | 新旧模型预测平滑比例。`1.0` 表示只用新模型。 |
+| `model_keep_num` | `2` | int | 保留多少个 checkpoint。`0` 表示不保存。负数表示不清理。 |
+| `select_days` | `100` | int / None | 默认选择模块的选择窗口参数。当前默认模块只记录 metadata，不主动筛选。 |
+| `max_train_days` | `2000` | int | 每次训练最多加载多少个训练日。实装大内存参数。 |
+| `verbose` | `False` | bool | 是否打印加载进度。会传给 DataLoader。 |
+
+### 8.1 训练日数计算
+
+默认选择模块中：
+
+```python
+loading_days = target_didx - data_start_didx + 1
+raw_ndays = loading_days - (retDays + trainDelay)
+ndays = min(raw_ndays, max_train_days)
+```
+
+如果：
+
+```python
+ndays < tsDays
+```
+
+会报错：训练窗口不足。
+
+### 8.2 processed_feature_cache 内存影响
+
+开启后，`ComboTrainDataset` 会调用：
+
+```python
+loader.set_processed_feature_cache_max_days(max(loader._feature_cache_size, self.ndays))
+```
+
+即通常会缓存约 `ndays` 天的完整 processed feature。
+
+近似内存：
+
+```text
+ndays × 股票数 × feature数 × dtype_bytes
+```
+
+以实装测试为例：
+
+```text
+max_train_days=2000
+股票数=5642
+feature数=100
+dtype=float16
+```
+
+理论额外 feature cache 数据：
+
+```text
+2000 × 5642 × 100 × 2 ≈ 2.10 GiB
+```
+
+实测正常 15 epoch 训练，开启 cache 后 CPU RSS 峰值约 `6.6 GiB`，未超过 10GiB。
+
+---
+
+## 9. combo.model
+
+XML：
+
+```xml
+<model
+  device="cuda"
+  hiddenSize="512"
+  fcSize="256"
+  dropout="0.5"
+  lr="0.000002"
+  epochs="15"
+  batchSize="3"
+  weight_decay="0.000001"
+  scheduler_step_size="10"
+  scheduler_gamma="0.5"
+  grad_clip="10.0"
+  seed="42"
+/>
+```
+
+`combo.model` 是开放字段：允许任何额外属性。解析时会尽量把字符串转成 bool / int / float，否则保留字符串。
+
+`ComboBase._model_config()` 会额外注入：
+
+```python
+dtype = loader.dtype
+tsDays = runtime.tsDays
+num_features = loader.num_features
+```
+
+并做兼容别名：
+
+```python
+hiddenSize -> hidden_size
+fcSize     -> fc_size
+batchSize  -> batch_size
+```
+
+以 `eg-torch/model.py` 为例，常用字段：
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---:|---|---|
+| `device` | `cpu` | str | 训练设备，例如 `cpu` / `cuda`。 |
+| `hiddenSize` / `hidden_size` | `64` | int | RNN/模型隐藏层大小。 |
+| `fcSize` / `fc_size` | hidden size | int | 全连接层大小。 |
+| `dropout` | `0.5` | float | dropout 比例。 |
+| `lr` | `2e-6` | float | Adam 学习率。 |
+| `epochs` | `15` | int | 训练 epoch 数。 |
+| `batchSize` / `batch_size` | `3` | int | DataLoader batch size。 |
+| `weight_decay` | `1e-6` | float | Adam weight decay。 |
+| `scheduler_step_size` | `10` | int | StepLR step size。 |
+| `scheduler_gamma` | `0.5` | float | StepLR gamma。 |
+| `grad_clip` | `10.0` | float | 梯度裁剪上限。 |
+| `seed` | 无统一默认 | int | 如果模型实现读取，则用于随机种子。 |
+
+注意：不同 `model_path` 的 `ResearchModel` 可以定义自己的配置字段，所以 `combo.model` 不做严格白名单限制。
+
+---
+
+## 10. combo.loader
+
+XML：
+
+```xml
+<loader
+  dtype="float16"
+  compression="none"
+  data_start_ds="20160101"
+>
+  <factor_paths>
+    <path>cyz_20231130_01</path>
+    <path>/absolute/path/to/factor</path>
+  </factor_paths>
+</loader>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `factor_paths` | 默认若干因子名 | tuple[str] | 因子路径列表，通过 `<factor_paths><path>` 子节点配置。 |
+| `label_path` | 自动派生 | path | label memmap 路径；默认 `{cache}/1d_DailyLabel/DailyLabel.label1d`。 |
+| `ashare_data_path` | 自动派生 | path | AshareCache 路径；主要供兼容逻辑使用。 |
+| `dtype` | `float16` | torch.dtype | loader 输出 dtype。 |
+| `compression` | `none` | str | comb2 内部 X/buffer 压缩方式：`none` / `fp4` / `fp8`。 |
+| `data_start_ds` | `20160101` | int | 数据起始日期。日期对齐不会早于该日期。 |
+| `valid_path` | 自动派生 | path | 交易有效 mask，默认 `{cache}/Ashare`。 |
+| `filtered_path` | 自动派生 | path | 过滤后 mask，默认 `{cache}/AshareFiltered`。 |
+| `base_universe_path` | 自动派生 | path | base universe mask，默认 `{cache}/1d_StockMask2/StockMask2.BaseUnivMask`。 |
+| `apply_global_ops` | `true` | bool | 是否在所有 feature 拼接后继续执行默认全局 `cs_zscore -> truncate(-4,4) -> nan_to_num(0)`。 |
+
+### 10.1 factor_paths 写法
+
+```xml
+<factor_paths>
+  <path>factor_a</path>
+  <path>factor_b</path>
+</factor_paths>
+```
+
+如果 `<factor_paths>` 存在但没有任何非空 `<path>`，则回退到默认 factor list。
+
+### 10.1.1 features 写法
+
+`features` 是 `factor_paths` 的泛化形式，可以混合普通因子和已经 dump 的 alpha parquet：
+
+```xml
+<features>
+  <factor name="factor_a" path="factor_a">
+    <op name="truncate" min="-4" max="4" />
+    <op name="nan_to_num" value="0" />
+  </factor>
+  <alpha name="base_lgbm" dump_path="/exp/base_lgbm/output/alpha.parquet" mode="read_dump">
+    <op name="cs_zscore" />
+    <op name="truncate" min="-3" max="3" />
+    <op name="nan_to_num" value="0" />
+  </alpha>
+</features>
+```
+
+当前 MVP 支持：
+
+| 标签 | 说明 |
+|---|---|
+| `<factor>` | 读取 Memmaper2 因子；相对 `path` 会拼到 `constants.factor_root`。 |
+| `<alpha>` | 读取 `alpha.parquet`；`path` 和 `dump_path` 等价，当前仅支持 `mode="read_dump"`。 |
+
+支持的 `<op>`：
+
+| op | 参数 |
+|---|---|
+| `cs_zscore` / `zscore` | 无 |
+| `truncate` | `min` / `max` |
+| `nan_to_num` / `fillna` | `value` |
+| `winsorize_by_quantile` | `low` / `high` |
+| `normalize_by_max_abs` | 无 |
+
+如果不配置 `<features>`，仍使用旧的 `<factor_paths>`。
+
+默认仍会在所有 feature 拼接后执行全局预处理。若 alpha 条目已经通过 `<op>` 完成标准化，可在 `<loader>` 上设置：
+
+```xml
+<loader apply_global_ops="false">
+  ...
+</loader>
+```
+
+### 10.2 compression
+
+`compression` 通过：
+
+```python
+build_codec(config.compression, dtype)
+```
+
+构造 codec。
+
+支持：
+
+| 值 | 说明 |
+|---|---|
+| `none` / `passthrough` | 不压缩。行为最接近普通 tensor。 |
+| `fp4` | 4-bit 近似量化，降低 `ComboTrainDataset.X` 和 `ComboBuffer.buffer` 内存。 |
+| `fp8` | 使用 PyTorch float8 存储，需要当前 PyTorch 支持 CPU float8 cast。 |
+
+压缩只作用于 comb2 内部缓存/训练集：
+
+```text
+ComboTrainDataset.X
+ComboBuffer.buffer
+```
+
+不压缩：
+
+```text
+label / Y / W / mask / 原始因子文件 / 模型参数
+```
+
+### 10.3 DataLoader cache
+
+`ComboDataLoader` 内部有：
+
+```python
+feature_cache_size = 2500
+label_cache_size = 2500
+```
+
+其中：
+
+- feature cache 按日期缓存处理后的 feature。
+- label cache 按 `(date, ret_days)` 缓存 label 和 valid mask。
+- `processed_feature_cache=false` 会在 `ComboBase` 初始化时关闭 feature cache。
+- `processed_feature_cache=true` 会在构造训练集时把 feature cache 上限调到至少 `ndays`。
+
+---
+
+## 11. combo.defaults
+
+XML：
+
+```xml
+<defaults selection_module="" />
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `selection_module` | `None` | object / None | 训练样本选择模块。XML 里通常不直接配置对象。 |
+
+当前 `ComboBase` 中：
+
+```python
+self.selection = node.selection_module or DefaultSelectionModule(...)
+```
+
+普通 XML 使用默认即可。
+
+---
+
+## 12. backtest
+
+XML：
+
+```xml
+<backtest
+  output_path="output/backtest"
+  daily_metrics_file="daily_pnl.csv"
+  cash="10000000"
+  fee_rate="0.0015"
+  reserve_cash="0.95"
+  verbose="false"
+  universe="base"
+  execution_price="vwap30"
+  drawdown_stop="0.0"
+  cooldown_days="0"
+/>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---:|---|---|
+| `output_path` | `vendor/comb2/output/backtest` | path | 回测输出目录；通常由 `constants.output_root` 派生。 |
+| `daily_metrics_file` | `daily_pnl.csv` | str | 每日指标文件名。 |
+| `cash` | `10000000.0` | float | 初始资金。 |
+| `fee_rate` | `0.0015` | float | 交易费率。 |
+| `reserve_cash` | `0.95` | float | 资金使用/保留比例相关参数。 |
+| `verbose` | `False` | bool | backtest 是否输出更多日志。 |
+| `universe` | `base` | str | 回测 universe。 |
+| `execution_price` | `vwap30` | str | 执行价格字段。 |
+| `drawdown_stop` | `0.0` | float | 回撤止损参数。 |
+| `cooldown_days` | `0` | int | 冷却天数。 |
+
+---
+
+## 13. monitor
+
+XML：
+
+```xml
+<monitor
+  enabled="false"
+  output_path="output/perf_metrics.csv"
+  format="csv"
+  print_summary="true"
+  collect_gpu="true"
+  sync_cuda="false"
+  verbose="false"
+/>
+```
+
+| 参数 | 默认值 | 类型 | 说明 |
+|---|---|---|---|
+| `enabled` | `False` | bool | 是否启用性能监控。 |
+| `output_path` | `None` | path / None | 监控输出 CSV。启用 monitor 且未配置时，会默认放到 `constants.output_root/perf_metrics.csv`。 |
+| `format` | `csv` | str | 当前只支持 `csv`。 |
+| `print_summary` | `True` | bool | 结束时是否打印 summary。 |
+| `collect_gpu` | `True` | bool | 是否采集 GPU memory。 |
+| `sync_cuda` | `False` | bool | 计时时是否同步 CUDA。更准但会变慢。 |
+| `verbose` | `False` | bool | 是否在主循环打印 progress。 |
+
+当前支持的 monitor API 是：
+
+```python
+monitor.section(event, date=None)
+monitor.decorate(...)
+monitor.patch_method(...)
+```
+
+不要在 DataLoader 中使用不支持的：
+
+```text
+monitor.accumulator
+monitor.detail_enabled
+.tick
+.flush
+monitor.maybe_section
+```
+
+---
+
+## 14. 最小示例
+
+```xml
+<config>
+  <constants
+    cache_path="/root/ml-data1-pvc/factorsim_data/Cache"
+    factor_root="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool"
+    output_root="output-torch"
+    checkpoint_root="checkpoints-torch"
+  />
+
+  <strategy start_ds="20200101" end_ds="20240628" path="../alpha_strategy.py" />
+
+  <combo>
+    <output enable_alpha_analysis="false" />
+
+    <paths model_path="model.py" />
+
+    <runtime
+      snaptime="example_torch"
+      livetrading="false"
+      trainDelay="0"
+      retDays="5"
+      tsDays="5"
+      load_chunk_days="128"
+      processed_feature_cache="true"
+      model_smooth_rate="0.7"
+      model_keep_num="0"
+      select_days="120"
+      max_train_days="2000"
+      verbose="true"
+    />
+
+    <model
+      device="cuda"
+      hiddenSize="512"
+      fcSize="256"
+      dropout="0.5"
+      lr="0.000002"
+      epochs="15"
+      batchSize="3"
+      weight_decay="0.000001"
+      scheduler_step_size="10"
+      scheduler_gamma="0.5"
+      grad_clip="10.0"
+      seed="42"
+    />
+
+    <loader dtype="float16" compression="none" data_start_ds="20160101">
+      <factor_paths>
+        <path>cyz_20231130_01</path>
+        <path>cyz_20231130_02</path>
+      </factor_paths>
+    </loader>
+  </combo>
+
+  <backtest cash="10000000" fee_rate="0.0015" reserve_cash="0.95" />
+
+  <monitor enabled="true" sync_cuda="false" verbose="true" />
+</config>
+```
+
+---
+
+## 15. 常用调参建议
+
+| 目标 | 推荐参数 |
+|---|---|
+| 减少 CPU 内存 | 降低 `max_train_days`，关闭 `processed_feature_cache`，或尝试 `compression="fp4"`。 |
+| 提升 loader 重复访问速度 | 开启 `processed_feature_cache="true"`，但注意内存增加。 |
+| 减少训练时间 | 降低 `epochs`、`max_train_days`、`select_days`，或提高 `batchSize`。 |
+| 禁用 checkpoint | `model_keep_num="0"` 或 `checkpoint_root=""`。 |
+| 快速调试 | `enable_alpha_analysis="false"`，`monitor enabled="true" verbose="true"`，缩短 `strategy` 日期。 |
+| 避免 CUDA 计时扰动 | `monitor sync_cuda="false"`。 |
+| 更精确 CUDA 计时 | `monitor sync_cuda="true"`，但会降低速度。 |

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+import time
 from dataclasses import fields
 from pathlib import Path
 
@@ -12,6 +13,9 @@ import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
+organize_root_path = str(ORGANIZE_ROOT)
+if organize_root_path not in sys.path:
+    sys.path.insert(0, organize_root_path)
 for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"):
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
@@ -22,7 +26,8 @@ from src.DataLoader import ComboDataLoader, ComboTrainDataset
 from comb2_pcmaster import BacktestNode, DailyBacktest
 from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
-from vendor.perf_monitor import PerfMonitor
+from optuna_framework.config_entry import is_optuna_enabled, run_optuna_from_config
+from vendor.perf_monitor import PerfMonitor, print_progress
 
 organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
 organize_config_module = importlib.util.module_from_spec(organize_config_spec)
@@ -42,7 +47,9 @@ class Node:
 
         self.model_config = dict(config["model"])
         loader_fields = {field.name for field in fields(LoaderConfig)}
-        self.loader_config = LoaderConfig(**{key: value for key, value in config["loader"].items() if key in loader_fields})
+        loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
+        loader_config["verbose"] = bool(getattr(self, "verbose", False))
+        self.loader_config = LoaderConfig(**loader_config)
 
 
 def print_daily_metrics(metrics: dict):
@@ -92,8 +99,6 @@ def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFra
     if alpha.index.nlevels > 1:
         alpha = alpha.reset_index("times", drop=True).sort_index()
     date_idx = alpha.index.astype(int)
-    end_time = min(int(date_idx[-1]), 20240101)
-    date_idx = date_idx[date_idx < end_time]
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
@@ -165,6 +170,9 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         cache_path=organize_config["constants"]["cache_path"],
         verbose=bool(backtest_config["verbose"]),
         universe=backtest_config.get("universe", "base"),
+        execution_price=backtest_config.get("execution_price", "vwap30"),
+        drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
+        cooldown_days=int(backtest_config.get("cooldown_days", 0)),
     )
 
 
@@ -251,6 +259,10 @@ def install_research_model_decorators(monitor: PerfMonitor, research_model_cls: 
 def main():
     args = parse_args()
     config_path = args.config_flag or args.config
+    if is_optuna_enabled(config_path):
+        run_optuna_from_config(config_path)
+        return
+
     organize_config = organize_config_module.load_config(config_path)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:
@@ -259,12 +271,33 @@ def main():
         runner = ExperimentRunner(organize_config, monitor)
         runner.setup()
 
-        for date in runner.dates():
+        dates = runner.dates()
+        loop_start = time.perf_counter()
+        combine_time = 0.0
+        alpha_time = 0.0
+        backtest_time = 0.0
+        verbose = bool(monitor.config.verbose)
+        for update_idx, date in enumerate(dates, start=1):
             date_int = int(date)
+            section_start = time.perf_counter()
             runner.combo.Combine(date_int)
+            combine_time += time.perf_counter() - section_start
+            section_start = time.perf_counter()
             alpha = runner.alpha_convert(date_int)
+            alpha_time += time.perf_counter() - section_start
+            section_start = time.perf_counter()
             metrics = runner.backtest_step(date_int, alpha)
+            backtest_time += time.perf_counter() - section_start
             print_daily_metrics(metrics)
+            if verbose:
+                print_progress(
+                    "Stage:runCombo",
+                    update_idx,
+                    len(dates),
+                    loop_start,
+                    f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, backtest {backtest_time:.2f}",
+                    final=update_idx == len(dates),
+                )
 
         runner.backtest_finalize()
         runner.alpha_analysis()

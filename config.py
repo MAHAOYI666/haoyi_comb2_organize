@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 import xml.etree.ElementTree as ET
 
 import torch
@@ -41,10 +42,13 @@ DEFAULT_CONFIG = {
             "trainDelay": 1,
             "retDays": 1,
             "tsDays": 8,
+            "load_chunk_days": None,
+            "processed_feature_cache": False,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
             "select_days": 100,
             "max_train_days": 2000,
+            "verbose": False,
         },
         "model": {},
         "loader": {
@@ -58,8 +62,6 @@ DEFAULT_CONFIG = {
                 "alpha4_20251008_04",
                 "alpha5_20251008_05",
             ),
-            "style_factor_paths": (),
-            "alpha_factor_paths": (),
             "label_path": None,
             "ashare_data_path": None,
             "dtype": torch.float16,
@@ -68,6 +70,8 @@ DEFAULT_CONFIG = {
             "valid_path": None,
             "filtered_path": None,
             "base_universe_path": None,
+            "features": None,
+            "apply_global_ops": True,
         },
         "defaults": {
             "selection_module": None,
@@ -81,6 +85,9 @@ DEFAULT_CONFIG = {
         "reserve_cash": 0.95,
         "verbose": False,
         "universe": "base",
+        "execution_price": "vwap30",
+        "drawdown_stop": 0.0,
+        "cooldown_days": 0,
     },
     "monitor": {
         "enabled": False,
@@ -89,6 +96,7 @@ DEFAULT_CONFIG = {
         "print_summary": True,
         "collect_gpu": True,
         "sync_cuda": False,
+        "verbose": False,
     },
 }
 
@@ -119,6 +127,8 @@ PATH_FIELDS = {
     ("backtest", "output_path"),
     ("monitor", "output_path"),
 }
+
+FEATURE_PATH_FIELDS = {"path", "config_path"}
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -152,7 +162,7 @@ def _coerce_like(default_value, value: str):
         return None
     if default_value is None:
         stripped = value.strip()
-        return None if stripped == "" else stripped
+        return None if stripped == "" else _parse_scalar(stripped)
     if isinstance(default_value, bool):
         return _parse_bool(value)
     if isinstance(default_value, int) and not isinstance(default_value, bool):
@@ -195,14 +205,14 @@ def _parse_section_attributes(element: ET.Element | None, default_section: dict,
     return parsed
 
 
-def _parse_path_list(parent_element: ET.Element | None, tag: str, default_paths=()) -> tuple[str, ...] | None:
-    if parent_element is None:
+def _parse_factor_paths(loader_element: ET.Element | None, default_paths) -> tuple[str, ...] | None:
+    if loader_element is None:
         return None
-    path_list_element = parent_element.find(tag)
-    if path_list_element is None:
+    factor_paths_element = loader_element.find("factor_paths")
+    if factor_paths_element is None:
         return None
     paths = []
-    for path_element in path_list_element.findall("path"):
+    for path_element in factor_paths_element.findall("path"):
         path_value = (path_element.text or "").strip()
         if path_value:
             paths.append(path_value)
@@ -211,12 +221,56 @@ def _parse_path_list(parent_element: ET.Element | None, tag: str, default_paths=
     return tuple(paths)
 
 
-def _parse_factor_paths(loader_element: ET.Element | None, default_paths) -> tuple[str, ...] | None:
-    return _parse_path_list(loader_element, "factor_paths", default_paths)
+def _parse_feature_ops(feature_element: ET.Element) -> tuple[dict[str, Any], ...]:
+    ops = []
+    for op_element in feature_element.findall("op"):
+        name = op_element.attrib.get("name")
+        if not name:
+            raise ValueError(f"<op> under <{feature_element.tag}> requires name")
+        params = {key: _parse_scalar(value) for key, value in op_element.attrib.items() if key != "name"}
+        ops.append({"name": name, "params": params})
+    return tuple(ops)
 
 
-def _parse_style_factor_paths(loader_element: ET.Element | None) -> tuple[str, ...] | None:
-    return _parse_path_list(loader_element, "style_factor_paths", ())
+def _parse_features(loader_element: ET.Element | None) -> tuple[dict[str, Any], ...] | None:
+    if loader_element is None:
+        return None
+    features_element = loader_element.find("features")
+    if features_element is None:
+        return None
+    features = []
+    for feature_element in list(features_element):
+        if feature_element.tag not in {"factor", "alpha"}:
+            raise ValueError(f"unsupported feature tag <{feature_element.tag}>")
+        attrs = dict(feature_element.attrib)
+        name = attrs.pop("name", None)
+        path = attrs.pop("path", None)
+        dump_path = attrs.pop("dump_path", None)
+        if path is not None and dump_path is not None:
+            raise ValueError(f"<{feature_element.tag}> cannot define both path and dump_path")
+        if path is None:
+            path = dump_path
+        mode = attrs.pop("mode", "read_dump")
+        config_path = attrs.pop("config_path", None)
+        if attrs:
+            extra = ", ".join(sorted(attrs))
+            raise ValueError(f"unsupported attribute(s) on <{feature_element.tag}>: {extra}")
+        if not name:
+            if path:
+                name = Path(path).name
+            else:
+                raise ValueError(f"<{feature_element.tag}> requires name when path is omitted")
+        features.append(
+            {
+                "kind": feature_element.tag,
+                "name": name,
+                "path": path,
+                "mode": mode,
+                "config_path": config_path,
+                "ops": _parse_feature_ops(feature_element),
+            }
+        )
+    return tuple(features)
 
 
 def _resolve_path(value: str | None, base_dir: Path) -> str | None:
@@ -235,6 +289,17 @@ def _resolve_factor_path(factor_root: str, path: str) -> str:
     return str(factor_path.resolve())
 
 
+def _resolve_feature_path(config_path: str | None, *, kind: str, field: str, factor_root: str, base_dir: Path) -> str | None:
+    if config_path is None:
+        return None
+    path = Path(config_path).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    if kind == "factor" and field == "path":
+        return str((Path(factor_root) / path).resolve())
+    return str((base_dir / path).resolve())
+
+
 def _apply_constant_paths(config: dict) -> dict:
     updated = deepcopy(config)
     constants = updated["constants"]
@@ -245,7 +310,8 @@ def _apply_constant_paths(config: dict) -> dict:
     updated["combo"]["paths"]["checkpoint_root"] = constants["checkpoint_root"]
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
-    updated["combo"]["loader"]["label_path"] = str(cache_path / "1d_DailyLabel" / "DailyLabel.label1d")
+    if updated["combo"]["loader"].get("label_path") is None:
+        updated["combo"]["loader"]["label_path"] = str(cache_path / "1d_DailyLabel" / "DailyLabel.label1d")
     updated["combo"]["loader"]["ashare_data_path"] = str(cache_path)
     updated["combo"]["loader"]["valid_path"] = str(cache_path / "Ashare")
     updated["combo"]["loader"]["filtered_path"] = str(cache_path / "AshareFiltered")
@@ -264,20 +330,27 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
 
-    factor_root = resolved["constants"]["factor_root"]
-    alpha_paths = resolved["combo"]["loader"].get("factor_paths") or ()
-    style_paths = resolved["combo"]["loader"].get("style_factor_paths") or ()
-    resolved_alpha_paths = tuple(_resolve_factor_path(factor_root, path) for path in alpha_paths)
-    resolved_style_paths = tuple(_resolve_factor_path(factor_root, path) for path in style_paths)
-
-    resolved["combo"]["loader"]["alpha_factor_paths"] = resolved_alpha_paths
-    resolved["combo"]["loader"]["style_factor_paths"] = resolved_style_paths
-    resolved["combo"]["loader"]["factor_paths"] = resolved_alpha_paths + resolved_style_paths
-
-    resolved["combo"]["model"]["alpha_feature_count"] = len(resolved_alpha_paths)
-    resolved["combo"]["model"]["style_feature_count"] = len(resolved_style_paths)
-    resolved["combo"]["model"]["total_feature_count"] = len(resolved_alpha_paths) + len(resolved_style_paths)
-    resolved["combo"]["model"]["use_style_gate"] = len(resolved_style_paths) > 0
+    factor_paths = resolved["combo"]["loader"].get("factor_paths")
+    if factor_paths is not None:
+        factor_root = resolved["constants"]["factor_root"]
+        resolved["combo"]["loader"]["factor_paths"] = tuple(_resolve_factor_path(factor_root, path) for path in factor_paths)
+    features = resolved["combo"]["loader"].get("features")
+    if features is not None:
+        factor_root = resolved["constants"]["factor_root"]
+        resolved_features = []
+        for feature in features:
+            resolved_feature = dict(feature)
+            kind = str(resolved_feature["kind"])
+            for field in FEATURE_PATH_FIELDS:
+                resolved_feature[field] = _resolve_feature_path(
+                    resolved_feature.get(field),
+                    kind=kind,
+                    field=field,
+                    factor_root=factor_root,
+                    base_dir=base_dir,
+                )
+            resolved_features.append(resolved_feature)
+        resolved["combo"]["loader"]["features"] = tuple(resolved_features)
     return resolved
 
 
@@ -300,13 +373,12 @@ def _load_xml_config(path: str) -> dict:
             "loader": _parse_section_attributes(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]),
             "defaults": _parse_section_attributes(combo_element.find("defaults"), DEFAULT_CONFIG["combo"]["defaults"]),
         }
-        loader_element = combo_element.find("loader")
-        factor_paths = _parse_factor_paths(loader_element, DEFAULT_CONFIG["combo"]["loader"]["factor_paths"])
-        style_factor_paths = _parse_style_factor_paths(loader_element)
+        factor_paths = _parse_factor_paths(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]["factor_paths"])
         if factor_paths is not None:
             combo["loader"]["factor_paths"] = factor_paths
-        if style_factor_paths is not None:
-            combo["loader"]["style_factor_paths"] = style_factor_paths
+        features = _parse_features(combo_element.find("loader"))
+        if features is not None:
+            combo["loader"]["features"] = features
 
     backtest = _parse_section_attributes(root.find("backtest"), DEFAULT_CONFIG["backtest"])
     monitor = _parse_section_attributes(root.find("monitor"), DEFAULT_CONFIG["monitor"])
