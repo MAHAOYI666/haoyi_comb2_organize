@@ -1,53 +1,10 @@
 <config>
-  <constants
-    cache_path="/home/shared/data1/factorsim_data/Cache"
-    factor_root="/root/ml_data/ZsimPool"
-    output_root="output-torch-tcn-only"
-    checkpoint_root="checkpoints-torch-tcn-only"
-  />
-
-  <strategy start_ds="20200101" end_ds="20240631" path="../alpha_strategy.py" />
-
+  <constants cache_path="/home/shared/data1/factorsim_data/Cache" factor_root="/root/ml_data/ZsimPool" output_root="output-torch-TCN-hybrid-009-ret20" checkpoint_root="checkpoints-torch-TCN-hybrid-009-ret20" />
+  <strategy start_ds="20200101" end_ds="20240630" path="../alpha_strategy.py" />
   <combo>
-    <paths
-      model_path="model_tcn_only.py"
-    />
-
-    <runtime
-      snaptime="example_torch_tcn_only"
-      livetrading="false"
-      trainDelay="0"
-      retDays="5"
-      tsDays="5"
-      model_smooth_rate="0.7"
-      model_keep_num="0"
-      select_days="120"
-      max_train_days="2000"
-    />
-
-    <model
-      device="cuda"
-      hiddenSize="512"
-      fcSize="256"
-      dropout="0.5"
-      lr="0.000002"
-      epochs="20"
-      batchSize="3"
-      weight_decay="0.000001"
-      scheduler_step_size="10"
-      scheduler_gamma="0.5"
-      grad_clip="10.0"
-      seed="42"
-      modelType="tcn_only"
-      tcnChannels="384"
-      tcnLayers="3"
-      tcnKernelSize="3"
-      tcnDilationBase="2"
-      tcnDropout="0.45"
-      numHeads="4"
-      decorrLam="0.05"
-    />
-
+    <paths model_path="/root/autodl-tmp/haoyi_comb2_organize/eg-torch/model_hybrid_tcn.py" />
+    <runtime snaptime="TCN_hybrid_009_ret20" livetrading="false" trainDelay="0" retDays="20" tsDays="5" model_smooth_rate="0.7" model_keep_num="0" select_days="120" max_train_days="2000" />
+    <model device="cuda" hiddenSize="256" fcSize="256" dropout="0.52688888008" lr="5.9405257557e-07" epochs="15" batchSize="3" weight_decay="1.99489586519e-05" scheduler_step_size="10" scheduler_gamma="0.503417874629" grad_clip="10.0" seed="42" modelType="hybrid_tcn" useTcn="true" useHandcrafted="true" tcnChannels="256" tcnLayers="1" tcnKernelSize="5" tcnDropout="0.442571623864" tcnDilationBase="2" />
     <loader dtype="float16" data_start_ds="20160101">
       <factor_paths>
         <path>cyz_20231130_01</path>
@@ -153,13 +110,5 @@
       </factor_paths>
     </loader>
   </combo>
-
-  <backtest
-    daily_metrics_file="daily_pnl.csv"
-    cash="10000000"
-    fee_rate="0.00075"
-    reserve_cash="0.95"
-    verbose="false"
-    universe="base"
-  />
+  <backtest daily_metrics_file="daily_pnl.csv" cash="10000000" fee_rate="0.00075" reserve_cash="0.95" verbose="false" universe="base" />
 </config>
