@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 
+.pytest_cache/
+
 .venv/
 .pdm-build/
 .pdm-python
@@ -11,4 +13,7 @@ output**/
 checkpoints**/
 optuna_runs/
 AGENTS.md
+pos_corr/
+manual_logs/
 
+optuna_framework/
