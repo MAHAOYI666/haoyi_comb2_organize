@@ -45,7 +45,8 @@ if __package__ in (None, ""):
 from optuna_framework.config_renderer import render_config
 from optuna_framework.paths import build_named_run_paths, resolve_study_root
 from optuna_framework.runner import build_run_command, run_segment
-from optuna_framework.scripts._script_common import add_study_args, load_study_and_adapter, print_command
+from optuna_framework.scripts._script_common import adapter_for_name, print_command
+from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,7 +56,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="Print planned commands without running runCombo.py")
     parser.add_argument("--study-root", default=None, help="Override default study root")
     parser.add_argument("--seed", type=int, default=42, help="Seed to check")
-    add_study_args(parser)
     return parser.parse_args()
 
 
@@ -63,9 +63,9 @@ def main() -> None:
     """Run or print the same-seed sanity check."""
 
     args = parse_args()
-    study_spec, adapter, _plugin = load_study_and_adapter(args)
-    study_root = resolve_study_root(args.study_root, study_spec.name)
-    segment = study_spec.segment_by_name("seg01")
+    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
+    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
+    segment = STUDY_SPEC.segment_by_name("seg01")
     params = adapter.baseline_params()
     run_paths_list = []
     for repeat in (1, 2):
@@ -87,8 +87,8 @@ def main() -> None:
 
     metrics = []
     for run_paths in run_paths_list:
-        overrides = {**study_spec.fixed_overrides, **adapter.seeded_overrides(args.seed)}
-        render_config(study_spec.baseline_config_path, run_paths, adapter, params, overrides)
+        overrides = {**STUDY_SPEC.fixed_overrides, "combo.model.seed": args.seed}
+        render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, params, overrides)
         metrics.append(run_segment(run_paths))
     diff = abs(metrics[0].sharpe_idx - metrics[1].sharpe_idx)
     print(f"repeat_1_sharpe_idx={metrics[0].sharpe_idx:.8f}")
@@ -100,3 +100,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

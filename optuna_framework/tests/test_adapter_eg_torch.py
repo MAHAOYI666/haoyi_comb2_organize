@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from xml.etree import ElementTree as ET
 
+from optuna_framework.adapters.eg_torch_v1 import EgTorchV1Adapter
 from optuna_framework.paths import get_repo_root
-from optuna_framework.plugin_loader import load_plugin
 
 
 class FakeTrial:
@@ -36,7 +36,7 @@ class FakeTrial:
 
 
 def test_suggest_params_ranges() -> None:
-    adapter = load_plugin(model_dir="eg-torch").adapter
+    adapter = EgTorchV1Adapter()
     params = adapter.suggest_params(FakeTrial())
     assert params["lr"] == 1e-6
     assert params["weight_decay"] == 1e-5
@@ -48,7 +48,7 @@ def test_suggest_params_ranges() -> None:
 
 
 def test_baseline_materializes_to_original_model_fields() -> None:
-    adapter = load_plugin(model_dir="eg-torch").adapter
+    adapter = EgTorchV1Adapter()
     root = ET.parse(get_repo_root() / "eg-torch" / "config.xml").getroot()
     materialized = adapter.apply_params_to_xml(root, adapter.baseline_params())
     model = root.find("./combo/model")
@@ -65,7 +65,7 @@ def test_baseline_materializes_to_original_model_fields() -> None:
 
 
 def test_apply_params_to_xml_writes_model_attrs() -> None:
-    adapter = load_plugin(model_dir="eg-torch").adapter
+    adapter = EgTorchV1Adapter()
     root = ET.parse(get_repo_root() / "eg-torch" / "config.xml").getroot()
     params = {
         "lr": 1e-5,

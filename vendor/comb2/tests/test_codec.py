@@ -7,10 +7,20 @@ import pandas as pd
 import torch
 
 from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
-from src.DataLoader import AlphaParquetItemSource, FeatureSpec, OpSpec
+from src.DataLoader import ComboDataLoader, LoaderConfig
+from src.DataRegistry import AlphaParquetItemSource, DataItem, DataRegistry, FeatureSpec, OpSpec, Universe
+from src.op_utils import cs_zscore, nan_to_num, truncate
 
 
 FLOAT_DTYPES = (torch.float16, torch.float32, torch.float64, torch.bfloat16)
+
+
+def _finite_abs_max(x: torch.Tensor) -> torch.Tensor:
+    x = torch.abs(x)
+    finite = x[torch.isfinite(x)]
+    if finite.numel() == 0:
+        return torch.tensor(float("nan"), dtype=x.dtype)
+    return torch.max(finite)
 
 
 def _fp4_nearest(x: torch.Tensor) -> torch.Tensor:
@@ -349,10 +359,16 @@ def test_config_accepts_loader_features(tmp_path) -> None:
     assert features[0]["ops"][0]["params"] == {"min": -2, "max": 2}
     assert features[1]["kind"] == "alpha"
     assert features[1]["path"] == str(alpha_path.resolve())
-    assert loaded["combo"]["loader"]["apply_global_ops"] is True
+    assert loaded["combo"]["loader"]["ashare_data_path"].endswith("/AshareCache")
+    data_items = loaded["combo"]["loader"]["data_items"]
+    assert len(data_items) == 2
+    assert data_items[0]["role"] == "factor"
+    assert data_items[0]["module"] == "builtin.factor"
+    assert data_items[0]["ops"][0]["params"] == {"min": -2, "max": 2}
+    assert data_items[1]["module"] == "builtin.alpha_parquet"
 
 
-def test_config_accepts_apply_global_ops_flag(tmp_path) -> None:
+def test_config_rejects_apply_global_ops_flag(tmp_path) -> None:
     from config import load_config
 
     xml_path = tmp_path / "config.xml"
@@ -361,9 +377,264 @@ def test_config_accepts_apply_global_ops_flag(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    loaded = load_config(str(xml_path))
+    with pytest.raises(ValueError, match="apply_global_ops"):
+        load_config(str(xml_path))
 
-    assert loaded["combo"]["loader"]["apply_global_ops"] is False
+
+def test_config_accepts_research_loader_and_dataset_paths(tmp_path) -> None:
+    from config import load_config
+
+    loader_path = tmp_path / "loader.py"
+    dataset_path = tmp_path / "dataset.py"
+    loader_path.write_text("class ResearchLoader: pass\n", encoding="utf-8")
+    dataset_path.write_text("class ResearchDataset: pass\n", encoding="utf-8")
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <combo>
+            <paths model_path="model.py" research_loader_path="loader.py" research_dataset_path="dataset.py" />
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    paths = loaded["combo"]["paths"]
+
+    assert paths["research_loader_path"] == str(loader_path.resolve())
+    assert paths["research_dataset_path"] == str(dataset_path.resolve())
+
+
+def test_config_accepts_data_section_roles_and_ops(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <constants factor_root="factors" />
+          <combo>
+            <data dtype="float32" compression="fp4" data_start_ds="20200101">
+              <import preset="barra" />
+              <item name="alpha.turn20" module="builtin.factor" path="turn20" role="factor">
+                <op name="neut(barra.size, barra.btop)" />
+                <op name="cs_zscore" />
+              </item>
+              <item name="label.ret1" module="builtin.label" role="label" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    loader = loaded["combo"]["loader"]
+    items = loader["data_items"]
+
+    assert loader["dtype"] == torch.float32
+    assert loader["compression"] == "fp4"
+    assert loader["data_presets"] == ("barra",)
+    assert items[0]["name"] == "alpha.turn20"
+    assert items[0]["path"].endswith("/factors/turn20")
+    assert items[0]["role"] == "factor"
+    assert items[0]["ops"][0]["name"] == "neut(barra.size, barra.btop)"
+    assert items[1]["role"] == "label"
+
+
+def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch) -> None:
+    from src import DataLoader as data_loader_module
+
+    class FakeMask:
+        date = (20200101,)
+        code = tuple(f"{idx + 1:06d}" for idx in range(30))
+
+    class FakeCubeSource:
+        feature_dim = 1
+
+        def load_day(self, ds: int) -> torch.Tensor:
+            cube = torch.arange(30, dtype=torch.float32).unsqueeze(-1)
+            cube[1, 0] = torch.nan
+            return cube
+
+        def prefetch_days(self, days):
+            return None
+
+    monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
+    factor_values = torch.zeros((1, 30), dtype=torch.float32)
+    factor_values[0, 0] = torch.nan
+    factor_values[0, -1] = 100.0
+    loader = ComboDataLoader(
+        LoaderConfig(
+            dtype=torch.float32,
+            data_start_ds=20200101,
+            data_items=(
+                DataItem(
+                    name="alpha.raw",
+                    module="test.tensor",
+                    role="factor",
+                    params={"values": factor_values},
+                ),
+            ),
+        ),
+        cube_source=FakeCubeSource(),
+    )
+
+    def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        return item.params["values"]
+
+    loader.registry.modules["test.tensor"] = load_tensor
+    feature = loader._build_feature(20200101)
+
+    raw_feature = torch.cat([factor_values[0].unsqueeze(-1), FakeCubeSource().load_day(20200101)], dim=-1)
+    expected = cs_zscore(raw_feature.transpose(0, 1)).transpose(0, 1)
+    expected = nan_to_num(truncate(expected, -4.0, 4.0), 0.0)
+
+    assert torch.allclose(feature, expected, atol=1e-6)
+    assert feature[0, 0].item() == 0.0
+    assert feature[1, 1].item() == 0.0
+    assert feature[-1, 0].item() == 4.0
+
+
+def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypatch) -> None:
+    from src import DataLoader as data_loader_module
+
+    class FakeMask:
+        date = (20200101,)
+        code = ("000001", "000002", "000003")
+
+    class RankLoader(ComboDataLoader):
+        def preprocess_feature(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
+            finite = torch.isfinite(feature)
+            filled = torch.nan_to_num(feature, nan=-float("inf"))
+            rank = torch.argsort(torch.argsort(filled, dim=0), dim=0).to(torch.float32)
+            return torch.where(finite, rank, torch.zeros_like(rank)).to(self.dtype)
+
+    monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
+    factor_values = torch.tensor([[3.0, 1.0, 2.0]], dtype=torch.float32)
+    loader = RankLoader(
+        LoaderConfig(
+            dtype=torch.float32,
+            data_start_ds=20200101,
+            data_items=(
+                DataItem(
+                    name="alpha.raw",
+                    module="test.tensor",
+                    role="factor",
+                    params={"values": factor_values},
+                ),
+            ),
+        )
+    )
+
+    def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        return item.params["values"]
+
+    loader.registry.modules["test.tensor"] = load_tensor
+
+    assert torch.equal(loader.gen_feature(20200101), torch.tensor([[2.0], [0.0], [1.0]]))
+
+
+def test_combo_data_loader_preprocess_label_hook_can_replace_default(monkeypatch) -> None:
+    from src import DataLoader as data_loader_module
+
+    class FakeMask:
+        date = (20200101,)
+        code = ("000001", "000002", "000003")
+
+    class RawLabelLoader(ComboDataLoader):
+        def preprocess_label(self, label_values: torch.Tensor, valid_mask: torch.Tensor, ds: int, ret_days: int = 1):
+            return torch.where(valid_mask, label_values, torch.zeros_like(label_values)).to(self.dtype), valid_mask
+
+    monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
+    label_values = torch.tensor([[0.1, float("nan"), -0.2]], dtype=torch.float32)
+    loader = RawLabelLoader(
+        LoaderConfig(
+            dtype=torch.float32,
+            data_start_ds=20200101,
+            data_items=(
+                DataItem(
+                    name="alpha.raw",
+                    module="test.tensor",
+                    role="factor",
+                    params={"values": torch.ones((1, 3), dtype=torch.float32)},
+                ),
+                DataItem(
+                    name="label.raw",
+                    module="test.tensor",
+                    role="label",
+                    params={"values": label_values},
+                ),
+            ),
+        )
+    )
+
+    def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        return item.params["values"]
+
+    loader.registry.modules["test.tensor"] = load_tensor
+    y, w = loader.gen_label(20200101)
+
+    assert torch.equal(y, torch.tensor([0.1, 0.0, -0.2], dtype=torch.float32))
+    assert torch.equal(w, torch.tensor([True, True, True]))
+
+
+def test_barra_preset_registers_all_cne5_styles() -> None:
+    registry, _ = _fake_registry([], presets=("barra",))
+    expected = {
+        "barra.beta",
+        "barra.btop",
+        "barra.earnyild",
+        "barra.growth",
+        "barra.industry",
+        "barra.leverage",
+        "barra.liquidty",
+        "barra.momentum",
+        "barra.resvol",
+        "barra.size",
+        "barra.sizenl",
+    }
+
+    assert expected.issubset(set(registry.items))
+    assert registry._resolve_name("size") == "barra.size"
+    assert registry._resolve_name("sizenl") == "barra.sizenl"
+
+
+def test_config_imports_data_pack(tmp_path) -> None:
+    from config import load_config
+
+    pack_path = tmp_path / "pack.xml"
+    pack_path.write_text(
+        """
+        <data-pack>
+          <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor" />
+        </data-pack>
+        """,
+        encoding="utf-8",
+    )
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        f"""
+        <config>
+          <constants factor_root="factors" />
+          <combo>
+            <data>
+              <import path="{pack_path.name}" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    items = loaded["combo"]["loader"]["data_items"]
+
+    assert len(items) == 1
+    assert items[0]["name"] == "factor.pack_a"
+    assert items[0]["path"].endswith("/factors/pack_a")
 
 
 def test_alpha_parquet_item_source_loads_date_and_reindexes_codes(tmp_path) -> None:
@@ -388,3 +659,160 @@ def test_alpha_parquet_item_source_loads_date_and_reindexes_codes(tmp_path) -> N
 
     assert loaded.dtype == torch.float32
     assert torch.equal(loaded, torch.tensor([3.0, 4.0, 0.0]))
+
+
+def test_alpha_parquet_item_source_supports_barra_neut_op(tmp_path) -> None:
+    alpha_path = tmp_path / "alpha.parquet"
+    pd.DataFrame(
+        [[4.0, 7.0, 10.0]],
+        index=[20200102],
+        columns=["000001", "000002", "000003"],
+    ).to_parquet(alpha_path)
+
+    class _FakeBarraSource:
+        def load_day(self, style_name: str, ds: int) -> torch.Tensor:
+            assert ds == 20200102
+            if style_name == "size":
+                return torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+            if style_name == "btop":
+                return torch.tensor([2.0, 3.0, 4.0], dtype=torch.float32)
+            raise AssertionError(f"unexpected style_name={style_name}")
+
+    source = AlphaParquetItemSource(
+        FeatureSpec(
+            kind="alpha",
+            name="base",
+            path=str(alpha_path),
+            ops=(OpSpec("neut(size, btop)", {}),),
+        ),
+        dtype=torch.float32,
+        codes=["000001", "000002", "000003"],
+        barra_source=_FakeBarraSource(),
+    )
+
+    loaded = source.load_day(20200102)
+
+    assert loaded.dtype == torch.float32
+    assert _finite_abs_max(loaded) < 1e-4
+
+
+def _fake_registry(
+    items: list[DataItem],
+    presets: tuple[str, ...] = (),
+) -> tuple[DataRegistry, list[tuple[str, int, int]]]:
+    universe = Universe(
+        dates=(20200101, 20200102, 20200103, 20200106),
+        codes=("000001", "000002", "000003"),
+        dtype=torch.float32,
+    )
+    calls: list[tuple[str, int, int]] = []
+    registry = DataRegistry(
+        items,
+        universe=universe,
+        data_start_ds=20200101,
+        ashare_data_path=None,
+        factor_root=None,
+        config_path=None,
+        presets=presets,
+    )
+
+    def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        calls.append((item.name, start_ds, end_ds))
+        values = torch.as_tensor(item.params["values"], dtype=registry.universe.dtype)
+        lo = registry.universe.date2idx(start_ds)
+        hi = registry.universe.date2idx(end_ds)
+        return values[lo : hi + 1]
+
+    registry.modules["test.tensor"] = load_tensor
+    return registry, calls
+
+
+def test_data_registry_get_data_returns_processed_fixed_matrix() -> None:
+    values = torch.tensor(
+        [
+            [1.0, 2.0, 3.0],
+            [2.0, 4.0, 6.0],
+            [3.0, 6.0, 9.0],
+            [4.0, 8.0, 12.0],
+        ]
+    )
+    registry, calls = _fake_registry(
+        [
+            DataItem(
+                name="alpha.raw",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("delay(1)", {}),),
+                params={"values": values},
+            )
+        ]
+    )
+
+    registry._ensure_range(("alpha.raw",), 20200102, 20200106)
+    data = registry.get_data("alpha.raw")
+    registry._ensure_range(("alpha.raw",), 20200102, 20200106)
+
+    assert data.shape == (4, 3)
+    assert torch.isnan(data[0]).all()
+    assert torch.equal(data[1], values[0])
+    assert torch.equal(data[2], values[1])
+    assert torch.equal(data[3], values[2])
+    assert calls == [("alpha.raw", 20200101, 20200106)]
+
+
+def test_data_registry_ts_mean_uses_history_window() -> None:
+    values = torch.tensor(
+        [
+            [1.0, 2.0, 3.0],
+            [3.0, 6.0, 9.0],
+            [5.0, 10.0, 15.0],
+            [7.0, 14.0, 21.0],
+        ]
+    )
+    registry, _ = _fake_registry(
+        [
+            DataItem(
+                name="alpha.mean",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("ts_mean(2)", {}),),
+                params={"values": values},
+            )
+        ]
+    )
+
+    registry._ensure_range(("alpha.mean",), 20200102, 20200106)
+    data = registry.get_data("alpha.mean")
+
+    assert torch.isnan(data[0]).all()
+    assert torch.equal(data[1], torch.tensor([2.0, 4.0, 6.0]))
+    assert torch.equal(data[2], torch.tensor([4.0, 8.0, 12.0]))
+    assert torch.equal(data[3], torch.tensor([6.0, 12.0, 18.0]))
+
+
+def test_data_registry_neut_resolves_data_dependencies_and_aliases() -> None:
+    y = torch.tensor([[2.0, 4.0, 6.0], [3.0, 6.0, 9.0], [4.0, 8.0, 12.0], [5.0, 10.0, 15.0]])
+    size = torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)
+    registry, calls = _fake_registry(
+        [
+            DataItem(
+                name="alpha.neut",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("neut(size)", {}),),
+                params={"values": y},
+            ),
+            DataItem(
+                name="barra.size",
+                module="test.tensor",
+                role="aux",
+                params={"values": size},
+            ),
+        ]
+    )
+
+    registry._ensure_range(("alpha.neut",), 20200101, 20200101)
+    data = registry.get_data("alpha.neut")
+
+    assert _finite_abs_max(data[0]) < 1e-4
+    assert calls == [("barra.size", 20200101, 20200101), ("alpha.neut", 20200101, 20200101)]

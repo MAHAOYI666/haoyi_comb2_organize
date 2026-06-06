@@ -1,360 +1,0 @@
-OpenSSH_8.9p1 Ubuntu-3ubuntu0.14, OpenSSL 3.0.2 15 Mar 2022
-debug1: Reading configuration data /etc/ssh/ssh_config
-debug1: /etc/ssh/ssh_config line 19: include /etc/ssh/ssh_config.d/*.conf matched no files
-debug1: /etc/ssh/ssh_config line 21: Applying options for *
-debug2: resolve_canonicalize: hostname 10.60.133.181 is address
-debug3: expanded UserKnownHostsFile '~/.ssh/known_hosts' -> '/root/.ssh/known_hosts'
-debug3: expanded UserKnownHostsFile '~/.ssh/known_hosts2' -> '/root/.ssh/known_hosts2'
-debug3: ssh_connect_direct: entering
-debug1: Connecting to 10.60.133.181 [10.60.133.181] port 9305.
-debug3: set_sock_tos: set socket 3 IP_TOS 0x10
-debug1: Connection established.
-debug1: identity file /root/.ssh/id_rsa type -1
-debug1: identity file /root/.ssh/id_rsa-cert type -1
-debug1: identity file /root/.ssh/id_ecdsa type -1
-debug1: identity file /root/.ssh/id_ecdsa-cert type -1
-debug1: identity file /root/.ssh/id_ecdsa_sk type -1
-debug1: identity file /root/.ssh/id_ecdsa_sk-cert type -1
-debug1: identity file /root/.ssh/id_ed25519 type -1
-debug1: identity file /root/.ssh/id_ed25519-cert type -1
-debug1: identity file /root/.ssh/id_ed25519_sk type -1
-debug1: identity file /root/.ssh/id_ed25519_sk-cert type -1
-debug1: identity file /root/.ssh/id_xmss type -1
-debug1: identity file /root/.ssh/id_xmss-cert type -1
-debug1: identity file /root/.ssh/id_dsa type -1
-debug1: identity file /root/.ssh/id_dsa-cert type -1
-debug1: Local version string SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.14
-debug1: Remote protocol version 2.0, remote software version OpenSSH_8.9p1 Ubuntu-3ubuntu0.10
-debug1: compat_banner: match: OpenSSH_8.9p1 Ubuntu-3ubuntu0.10 pat OpenSSH* compat 0x04000000
-debug2: fd 3 setting O_NONBLOCK
-debug1: Authenticating to 10.60.133.181:9305 as 'root'
-debug3: put_host_port: [10.60.133.181]:9305
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts2: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts2: No such file or directory
-debug3: order_hostkeyalgs: no algorithms matched; accept original
-debug3: send packet: type 20
-debug1: SSH2_MSG_KEXINIT sent
-debug3: receive packet: type 20
-debug1: SSH2_MSG_KEXINIT received
-debug2: local client KEXINIT proposal
-debug2: KEX algorithms: curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,sntrup761x25519-sha512@openssh.com,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256,ext-info-c,kex-strict-c-v00@openssh.com
-debug2: host key algorithms: ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256
-debug2: ciphers ctos: chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
-debug2: ciphers stoc: chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
-debug2: MACs ctos: umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1
-debug2: MACs stoc: umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1
-debug2: compression ctos: none,zlib@openssh.com,zlib
-debug2: compression stoc: none,zlib@openssh.com,zlib
-debug2: languages ctos: 
-debug2: languages stoc: 
-debug2: first_kex_follows 0 
-debug2: reserved 0 
-debug2: peer server KEXINIT proposal
-debug2: KEX algorithms: curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,sntrup761x25519-sha512@openssh.com,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256,kex-strict-s-v00@openssh.com
-debug2: host key algorithms: rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ssh-ed25519
-debug2: ciphers ctos: chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
-debug2: ciphers stoc: chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com
-debug2: MACs ctos: umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1
-debug2: MACs stoc: umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1
-debug2: compression ctos: none,zlib@openssh.com
-debug2: compression stoc: none,zlib@openssh.com
-debug2: languages ctos: 
-debug2: languages stoc: 
-debug2: first_kex_follows 0 
-debug2: reserved 0 
-debug3: kex_choose_conf: will use strict KEX ordering
-debug1: kex: algorithm: curve25519-sha256
-debug1: kex: host key algorithm: ssh-ed25519
-debug1: kex: server->client cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
-debug1: kex: client->server cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
-debug3: send packet: type 30
-debug1: expecting SSH2_MSG_KEX_ECDH_REPLY
-debug3: receive packet: type 31
-debug1: SSH2_MSG_KEX_ECDH_REPLY received
-debug1: Server host key: ssh-ed25519 SHA256:FWZAXX0mtJuyZFFu4iOssC/8IV+ViXJEIbY5/sJKUuo
-debug3: put_host_port: [10.60.133.181]:9305
-debug3: put_host_port: [10.60.133.181]:9305
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts2: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts2: No such file or directory
-debug1: checking without port identifier
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /root/.ssh/known_hosts2: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts: No such file or directory
-debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts2: No such file or directory
-debug3: hostkeys_find_by_key_hostfile: trying user hostfile "/root/.ssh/known_hosts"
-debug1: hostkeys_find_by_key_hostfile: hostkeys file /root/.ssh/known_hosts does not exist
-debug3: hostkeys_find_by_key_hostfile: trying user hostfile "/root/.ssh/known_hosts2"
-debug1: hostkeys_find_by_key_hostfile: hostkeys file /root/.ssh/known_hosts2 does not exist
-debug3: hostkeys_find_by_key_hostfile: trying system hostfile "/etc/ssh/ssh_known_hosts"
-debug1: hostkeys_find_by_key_hostfile: hostkeys file /etc/ssh/ssh_known_hosts does not exist
-debug3: hostkeys_find_by_key_hostfile: trying system hostfile "/etc/ssh/ssh_known_hosts2"
-debug1: hostkeys_find_by_key_hostfile: hostkeys file /etc/ssh/ssh_known_hosts2 does not exist
-Warning: Permanently added '[10.60.133.181]:9305' (ED25519) to the list of known hosts.
-debug3: send packet: type 21
-debug1: ssh_packet_send2_wrapped: resetting send seqnr 3
-debug2: ssh_set_newkeys: mode 1
-debug1: rekey out after 134217728 blocks
-debug1: SSH2_MSG_NEWKEYS sent
-debug1: expecting SSH2_MSG_NEWKEYS
-debug3: receive packet: type 21
-debug1: ssh_packet_read_poll2: resetting read seqnr 3
-debug1: SSH2_MSG_NEWKEYS received
-debug2: ssh_set_newkeys: mode 0
-debug1: rekey in after 134217728 blocks
-debug1: Will attempt key: /root/.ssh/id_rsa 
-debug1: Will attempt key: /root/.ssh/id_ecdsa 
-debug1: Will attempt key: /root/.ssh/id_ecdsa_sk 
-debug1: Will attempt key: /root/.ssh/id_ed25519 
-debug1: Will attempt key: /root/.ssh/id_ed25519_sk 
-debug1: Will attempt key: /root/.ssh/id_xmss 
-debug1: Will attempt key: /root/.ssh/id_dsa 
-debug2: pubkey_prepare: done
-debug3: send packet: type 5
-debug3: receive packet: type 7
-debug1: SSH2_MSG_EXT_INFO received
-debug1: kex_input_ext_info: server-sig-algs=<ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com,webauthn-sk-ecdsa-sha2-nistp256@openssh.com>
-debug1: kex_input_ext_info: publickey-hostbound@openssh.com=<0>
-debug3: receive packet: type 6
-debug2: service_accept: ssh-userauth
-debug1: SSH2_MSG_SERVICE_ACCEPT received
-debug3: send packet: type 50
-debug3: receive packet: type 51
-debug1: Authentications that can continue: publickey,password
-debug3: start over, passed a different list publickey,password
-debug3: preferred gssapi-with-mic,publickey,keyboard-interactive,password
-debug3: authmethod_lookup publickey
-debug3: remaining preferred: keyboard-interactive,password
-debug3: authmethod_is_enabled publickey
-debug1: Next authentication method: publickey
-debug1: Trying private key: /root/.ssh/id_rsa
-debug3: no such identity: /root/.ssh/id_rsa: No such file or directory
-debug1: Trying private key: /root/.ssh/id_ecdsa
-debug3: no such identity: /root/.ssh/id_ecdsa: No such file or directory
-debug1: Trying private key: /root/.ssh/id_ecdsa_sk
-debug3: no such identity: /root/.ssh/id_ecdsa_sk: No such file or directory
-debug1: Trying private key: /root/.ssh/id_ed25519
-debug3: no such identity: /root/.ssh/id_ed25519: No such file or directory
-debug1: Trying private key: /root/.ssh/id_ed25519_sk
-debug3: no such identity: /root/.ssh/id_ed25519_sk: No such file or directory
-debug1: Trying private key: /root/.ssh/id_xmss
-debug3: no such identity: /root/.ssh/id_xmss: No such file or directory
-debug1: Trying private key: /root/.ssh/id_dsa
-debug3: no such identity: /root/.ssh/id_dsa: No such file or directory
-debug2: we did not send a packet, disable method
-debug3: authmethod_lookup password
-debug3: remaining preferred: ,password
-debug3: authmethod_is_enabled password
-debug1: Next authentication method: password
-debug3: send packet: type 50
-debug2: we sent a password packet, wait for reply
-debug3: receive packet: type 52
-Authenticated to 10.60.133.181 ([10.60.133.181]:9305) using "password".
-debug1: channel 0: new [client-session]
-debug3: ssh_session2_open: channel_new: 0
-debug2: channel 0: send open
-debug3: send packet: type 90
-debug1: Requesting no-more-sessions@openssh.com
-debug3: send packet: type 80
-debug1: Entering interactive session.
-debug1: pledge: filesystem
-debug3: receive packet: type 80
-debug1: client_input_global_request: rtype hostkeys-00@openssh.com want_reply 0
-debug3: client_input_hostkeys: received RSA key SHA256:uqbdspug/syLv7AH/Vy92fBdJs56byXwrq0xmpmlIjI
-debug3: client_input_hostkeys: received ECDSA key SHA256:0S4/maYfB4gTqxXk1/i/b2lZsAA2ulost/4hcdYxitA
-debug3: client_input_hostkeys: received ED25519 key SHA256:FWZAXX0mtJuyZFFu4iOssC/8IV+ViXJEIbY5/sJKUuo
-debug3: put_host_port: [10.60.133.181]:9305
-debug1: client_input_hostkeys: searching /root/.ssh/known_hosts for [10.60.133.181]:9305 / (none)
-debug3: hostkeys_foreach: reading file "/root/.ssh/known_hosts"
-debug3: hostkeys_find: found ssh-ed25519 key at /root/.ssh/known_hosts:1
-debug1: client_input_hostkeys: searching /root/.ssh/known_hosts2 for [10.60.133.181]:9305 / (none)
-debug1: client_input_hostkeys: hostkeys file /root/.ssh/known_hosts2 does not exist
-debug3: client_input_hostkeys: 3 server keys: 2 new, 18446744073709551615 retained, 2 incomplete match. 0 to remove
-debug3: client_input_hostkeys: asking server to prove ownership for 2 keys
-debug3: send packet: type 80
-debug3: receive packet: type 91
-debug2: channel_input_open_confirmation: channel 0: callback start
-debug2: fd 3 setting TCP_NODELAY
-debug3: set_sock_tos: set socket 3 IP_TOS 0x10
-debug2: client_session2_setup: id 0
-debug2: channel 0: request pty-req confirm 1
-debug3: send packet: type 98
-debug1: Sending environment.
-debug3: Ignored env SHELL
-debug3: Ignored env COLORTERM
-debug3: Ignored env TERM_PROGRAM_VERSION
-debug3: Ignored env CONDA_EXE
-debug3: Ignored env _CE_M
-debug3: Ignored env PWD
-debug3: Ignored env LOGNAME
-debug3: Ignored env CONDA_PREFIX
-debug3: Ignored env VSCODE_GIT_ASKPASS_NODE
-debug3: Ignored env MOTD_SHOWN
-debug3: Ignored env HOME
-debug1: channel 0: setting env LANG = "en_US.UTF-8"
-debug2: channel 0: request env confirm 0
-debug3: send packet: type 98
-debug3: Ignored env LS_COLORS
-debug3: Ignored env CONDA_PROMPT_MODIFIER
-debug3: Ignored env GIT_ASKPASS
-debug3: Ignored env SSH_CONNECTION
-debug3: Ignored env VSCODE_GIT_ASKPASS_EXTRA_ARGS
-debug3: Ignored env VSCODE_PYTHON_AUTOACTIVATE_GUARD
-debug3: Ignored env CLAUDE_CODE_SSE_PORT
-debug3: Ignored env TERM
-debug3: Ignored env _CE_CONDA
-debug3: Ignored env USER
-debug3: Ignored env VSCODE_GIT_IPC_HANDLE
-debug3: Ignored env CONDA_SHLVL
-debug3: Ignored env SHLVL
-debug3: Ignored env CONDA_PYTHON_EXE
-debug3: Ignored env SSH_CLIENT
-debug3: Ignored env CONDA_DEFAULT_ENV
-debug3: Ignored env VSCODE_GIT_ASKPASS_MAIN
-debug3: Ignored env BROWSER
-debug3: Ignored env PATH
-debug3: Ignored env CONDA_PREFIX_1
-debug3: Ignored env OLDPWD
-debug3: Ignored env TERM_PROGRAM
-debug3: Ignored env VSCODE_IPC_HOOK_CLI
-debug3: Ignored env _
-debug2: channel 0: request shell confirm 1
-debug3: send packet: type 98
-debug2: channel_input_open_confirmation: channel 0: callback done
-debug2: channel 0: open confirm rwindow 0 rmax 32768
-debug3: receive packet: type 81
-debug3: client_global_hostkeys_private_confirm: verify RSA key 0 using sigalg rsa-sha2-512
-debug3: client_global_hostkeys_private_confirm: verify ECDSA key 1 using sigalg ecdsa-sha2-nistp256
-Learned new hostkey: RSA SHA256:uqbdspug/syLv7AH/Vy92fBdJs56byXwrq0xmpmlIjI
-Learned new hostkey: ECDSA SHA256:0S4/maYfB4gTqxXk1/i/b2lZsAA2ulost/4hcdYxitA
-debug3: hostkeys_foreach: reading file "/root/.ssh/known_hosts"
-debug3: host_delete: ED25519 key already at /root/.ssh/known_hosts:1
-Adding new key for [10.60.133.181]:9305 to /root/.ssh/known_hosts: ssh-rsa SHA256:uqbdspug/syLv7AH/Vy92fBdJs56byXwrq0xmpmlIjI
-Adding new key for [10.60.133.181]:9305 to /root/.ssh/known_hosts: ecdsa-sha2-nistp256 SHA256:0S4/maYfB4gTqxXk1/i/b2lZsAA2ulost/4hcdYxitA
-debug1: update_known_hosts: known hosts file /root/.ssh/known_hosts2 does not exist
-debug3: receive packet: type 99
-debug2: channel_input_status_confirm: type 99 id 0
-debug2: PTY allocation request accepted on channel 0
-debug2: channel 0: rcvd adjust 2097152
-debug3: receive packet: type 99
-debug2: channel_input_status_confirm: type 99 id 0
-debug2: shell request accepted on channel 0
-Welcome to Ubuntu 22.04.5 LTS (GNU/Linux 6.8.0-84-generic x86_64)
-
- * Documentation:  https://help.ubuntu.com
- * Management:     https://landscape.canonical.com
- * Support:        https://ubuntu.com/pro
-
-This system has been minimized by removing packages and content that are
-not required on a system that users do not log into.
-
-To restore this content, you can run the 'unminimize' command.
-Last login: Fri Apr 24 15:23:09 2026 from 127.0.0.1
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# ls 
-[?2004l[0m[01;34mCacheData[0m   [01;34mML_log[0m      [01;34mbin[0m       disable-fs-watch.js  [01;34mevaluator[0m   fs-watch-disable.js  [01;34mml_data[0m  [01;32mnode[0m          [01;34mout[0m      output.txt         package.json   product.json  [01;34mtf-logs[0m
-[01;34mCombo_Data[0m  [01;34mautodl-tmp[0m  [01;34mcomb_pkg[0m  disable-inotify.js   [01;34mextensions[0m  [01;34mlogs[0m                 [01;34mmosek[0m    [01;34mnode_modules[0m  out.log  package-lock.json  [01;34mpersonal_data[0m  [01;34mteam_pub[0m
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# ls 
-[?2004l[0m[01;34mCacheData[0m   [01;34mML_log[0m      [01;34mbin[0m       disable-fs-watch.js  [01;34mevaluator[0m   fs-watch-disable.js  [01;34mml_data[0m  [01;32mnode[0m          [01;34mout[0m      output.txt         package.json   product.json  [01;34mtf-logs[0m
-[01;34mCombo_Data[0m  [01;34mautodl-tmp[0m  [01;34mcomb_pkg[0m  disable-inotify.js   [01;34mextensions[0m  [01;34mlogs[0m                 [01;34mmosek[0m    [01;34mnode_modules[0m  out.log  package-lock.json  [01;34mpersonal_data[0m  [01;34mteam_pub[0m
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# ls 
-[?2004l[0m[01;34mCacheData[0m   [01;34mML_log[0m      [01;34mbin[0m       disable-fs-watch.js  [01;34mevaluator[0m   fs-watch-disable.js  [01;34mml_data[0m  [01;32mnode[0m          [01;34mout[0m      output.txt         package.json   product.json  [01;34mtf-logs[0m
-[01;34mCombo_Data[0m  [01;34mautodl-tmp[0m  [01;34mcomb_pkg[0m  disable-inotify.js   [01;34mextensions[0m  [01;34mlogs[0m                 [01;34mmosek[0m    [01;34mnode_modules[0m  out.log  package-lock.json  [01;34mpersonal_data[0m  [01;34mteam_pub[0m
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# ls 
-[?2004l[0m[01;34mCacheData[0m   [01;34mML_log[0m      [01;34mbin[0m       disable-fs-watch.js  [01;34mevaluator[0m   fs-watch-disable.js  [01;34mml_data[0m  [01;32mnode[0m          [01;34mout[0m      output.txt         package.json   product.json  [01;34mtf-logs[0m
-[01;34mCombo_Data[0m  [01;34mautodl-tmp[0m  [01;34mcomb_pkg[0m  disable-inotify.js   [01;34mextensions[0m  [01;34mlogs[0m                 [01;34mmosek[0m    [01;34mnode_modules[0m  out.log  package-lock.json  [01;34mpersonal_data[0m  [01;34mteam_pub[0m
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /tmp/
-Display all 19750 possibilities? (y or n)
-.tensorboard-info/                                    pymp-54zh49e6/                                        pymp-l9oi2148/
-SB3-2025-12-03-06-17-36-147503/                       pymp-553h4ma0/                                        pymp-l9pupe7e/
-SB3-2025-12-03-06-18-36-545315/                       pymp-558jq7vj/                                        pymp-l9q_m0jq/
-SB3-2025-12-03-06-19-15-583369/                       pymp-55hdfymm/                                        pymp-l9x0jgw_/
-SB3-2025-12-03-06-20-02-197569/                       pymp-55o4q2on/                                        pymp-l9x_qmw0/
-SB3-2025-12-03-06-20-43-880318/                       pymp-55w3nc0y/                                        pymp-l9xve33u/
-SB3-2025-12-03-06-21-41-559667/                       pymp-55y8x9p_/                                        pymp-l_0gd_dj/
-SB3-2025-12-03-06-22-00-174485/                       pymp-55ynpfd3/                                        pymp-l_12p2sd/
-SB3-2025-12-03-06-22-09-896725/                       pymp-562zj8bg/                                        pymp-l_5ynoxd/
-SB3-2025-12-03-06-22-44-127447/                       pymp-5631dke6/                                        pymp-l_7lvr_8/
-SB3-2025-12-03-06-23-27-426768/                       pymp-565m427f/                                        pymp-l_8_q6e_/
-SB3-2025-12-03-06-28-06-010986/                       pymp-568tnpti/                                        pymp-l_lejquh/
-SB3-2025-12-03-06-32-26-984659/                       pymp-56fwab4u/                                        pymp-l_m07w9b/
-SB3-2025-12-03-07-32-24-815693/                       pymp-56gg62q6/                                        pymp-l_m3_wtf/
-SB3-2025-12-03-07-32-52-544944/                       pymp-56jci3vy/                                        pymp-l_oxchvp/
-SB3-2025-12-03-07-33-11-349978/                       pymp-56lm26nk/                                        pymp-l_q6g1s2/
-SB3-2025-12-03-15-24-36-324446/                       pymp-56nq650t/                                        pymp-l_rsvgsk/
-SB3-2025-12-03-15-42-54-196476/                       pymp-56rjtniy/                                        pymp-l_t1mqwg/
-SB3-2025-12-03-15-45-51-160381/                       pymp-56smh8_g/                                        pymp-l_vaty9j/
-SB3-2025-12-03-16-09-14-847132/                       pymp-5705l3tq/                                        pymp-la15iskc/
-SB3-2025-12-03-16-24-32-683280/                       pymp-573uiu41/                                        pymp-la22_xxp/
---More--[KSB3-2025-12-03-16-25-43-537897/                       pymp-578wn0hd/                                        pymp-la3w0bmj/
---More--[KSB3-2025-12-03-16-25-51-808991/                       pymp-579a09yp/                                        pymp-la8ehabv/
---More--[KSB3-2025-12-03-16-26-00-566741/                       pymp-57bzbt88/                                        pymp-lab06n4q/
---More--[KSB3-2025-12-03-16-26-07-587981/                       pymp-57h0s4m8/                                        pymp-lavj9rx6/
---More--[KSB3-2025-12-03-16-26-17-368336/                       pymp-57hk7pd4/                                        pymp-law0zfs4/
---More--[KSB3-2025-12-03-16-26-26-162149/                       pymp-57hwp5e8/                                        pymp-lb7382lu/
---More--[KSB3-2025-12-03-16-26-36-374665/                       pymp-57j018yx/                                        pymp-lb9asm45/
---More--[KSB3-2025-12-03-16-26-43-556007/                       pymp-57mzg284/                                        pymp-lbay8xqz/
---More--[KSB3-2025-12-03-16-26-53-062908/                       pymp-57pd278a/                                        pymp-lbgxtaee/
---More--[KSB3-2025-12-04-05-20-45-987849/                       pymp-57rjswtv/                                        pymp-lbir6fr9/
---More--[KSB3-2025-12-04-05-22-49-730340/                       pymp-57u5upjq/                                        pymp-lbllw2sa/
---More--[KSB3-2025-12-04-05-23-49-997467/                       pymp-584fygmo/                                        pymp-lboo6i52/
---More--[KSB3-2025-12-04-07-58-53-392550/                       pymp-58cifyhv/                                        pymp-lbsm00yf/
---More--[KSB3-2025-12-05-04-52-11-397322/                       pymp-58glteft/                                        pymp-lbu_nik5/
---More--[KSB3-2025-12-05-04-57-33-363635/                       pymp-58kw54pj/                                        pymp-lbwfbqsk/
---More--[KSB3-2025-12-05-16-46-37-211115/                       pymp-58o8jtr_/                                        pymp-lbxk0401/
---More--[KSB3-2025-12-05-16-47-38-047866/                       pymp-58rsx2ho/                                        pymp-lbxtcowh/
---More--[KSB3-2025-12-05-16-48-10-682224/                       pymp-58vack0r/                                        pymp-lby2mmq_/
---More--[KSB3-2025-12-08-04-16-36-166144/                       pymp-58y2q06g/                                        pymp-lbz_rvrk/
---More--[KSB3-2025-12-08-04-56-24-194190/                       pymp-58yzych5/                                        pymp-lbzi1vfw/
---More--[KSB3-2025-12-08-05-01-43-821235/                       pymp-591k2_yu/                                        pymp-lc45o2w6/
---More--[KSB3-2025-12-08-05-56-47-465595/                       pymp-5936xrus/                                        pymp-lc52cs12/
---More--[KSB3-2025-12-08-06-41-52-914657/                       pymp-59b9c8bi/                                        pymp-lc7gkx9l/
---More--[KSB3-2025-12-08-07-02-40-845413/                       pymp-59b9cko9/                                        pymp-lcbnh4jf/
---More--[KSB3-2025-12-08-07-13-11-038187/                       pymp-59man4f0/                                        pymp-lclg_t15/
---More--[KSB3-2025-12-08-07-14-32-205900/                       pymp-59rly7oh/                                        pymp-lcu_lojz/
---More--[KSB3-2025-12-08-07-14-38-286797/                       pymp-59rv1rpb/                                        pymp-ld2wzlum/
---More--[KSB3-2025-12-08-07-15-20-438917/                       pymp-59u_2ll9/                                        pymp-ld3g3ip1/
---More--[KSB3-2025-12-08-07-16-05-593036/                       pymp-59ufts5i/                                        pymp-ld3u4wi9/
---More--[KSB3-2025-12-08-07-16-12-579076/                       pymp-59zrgc33/                                        pymp-ld8g7rye/
---More--[KSB3-2025-12-08-07-17-34-636636/                       pymp-5_4mlolt/                                        pymp-ld_zyifr/
---More--[KSB3-2025-12-08-07-20-33-232906/                       pymp-5_513sdj/                                        pymp-ldlp2s1e/
---More--[KSB3-2025-12-08-07-26-56-835625/                       pymp-5_69x851/                                        pymp-ldsyzafq/
---More--[KSB3-2025-12-08-07-28-40-814441/                       pymp-5_8zjhyk/                                        pymp-ldt7ot3o/
---More--[KSB3-2025-12-08-07-28-53-230190/                       pymp-5_e0qbk4/                                        pymp-ldtav2f7/
---More--[KSB3-2025-12-08-07-29-24-304388/                       pymp-5_h2gvet/                                        pymp-ldyp7p89/
---More--[KSB3-2025-12-08-07-29-35-861850/                       pymp-5_i8rx5t/                                        pymp-ldyxdwqe/
---More--[KSB3-2025-12-08-07-29-45-517951/                       pymp-5_j70fpi/                                        pymp-ldzg9lpq/
---More--[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C^C[?2004l[?2004h[?2004l
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /dat/tmp[K[Kemp/
-ares_real_factor_daily_sample_20260508/ dailypnl/                               
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /dat/temp/
-ares_real_factor_daily_sample_20260508/ dailypnl/                               
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /dat/temp/ares_real_factor_daily_sample_20260508/out/alpha[K[K[K[K[K[K[K[K[Kd/dat/temp/ares_real_factor_daily_sample_20260508/[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cu/dat/temp/ares_real_factor_daily_sample_20260508/[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C /dat/temp/ares_real_factor_daily_sample_20260508/-/dat/temp/ares_real_factor_daily_sample_20260508/h/dat/temp/ares_real_factor_daily_sample_20260508/ /dat/temp/ares_real_factor_daily_sample_20260508/
-[?2004l92K	/dat/temp/ares_real_factor_daily_sample_20260508/out/alpha12_20251012_02
-92K	/dat/temp/ares_real_factor_daily_sample_20260508/out/alpha18_20251011_03
-92K	/dat/temp/ares_real_factor_daily_sample_20260508/out/alpha44_20251027_08
-92K	/dat/temp/ares_real_factor_daily_sample_20260508/out/alpha24_20251014_01
-92K	/dat/temp/ares_real_factor_daily_sample_20260508/out/alpha14_20251012_04
-464K	/dat/temp/ares_real_factor_daily_sample_20260508/out
-560K	/dat/temp/ares_real_factor_daily_sample_20260508/
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# du -h /dat/temp/ares_real_factor_daily_sample_20260508/[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Kdu -h /dat/temp/ares_real_factor_daily_sample_20260508/[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K[K[K/home/shared/data1/[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[Kroot/
-.ai_completion/     .config/            .ipython/           .nv/                .trae-cn/           Combo_Data/         evaluator/          node                tf-logs/            
-.cache/             .copilot/           .jupyter/           .nvm/               .trae-cn-server/    ML_log/             extensions/         node_modules/       
-.cc-switch/         .cursor-server/     .launchpadlib/      .pki/               .vscode-server/     autodl-tmp/         logs/               out/                
-.claude/            .dotnet/            .local/             .ssh/               .windsurf-server/   bin/                ml_data/            personal_data/      
-.codeium/           .ipynb_checkpoints/ .npm/               .trae-aicc/         CacheData/          comb_pkg/           mosek/              team_pub/           
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /root/
-.ai_completion/     .config/            .ipython/           .nv/                .trae-cn/           Combo_Data/         evaluator/          node                tf-logs/            
-.cache/             .copilot/           .jupyter/           .nvm/               .trae-cn-server/    ML_log/             extensions/         node_modules/       
-.cc-switch/         .cursor-server/     .launchpadlib/      .pki/               .vscode-server/     autodl-tmp/         logs/               out/                
-.claude/            .dotnet/            .local/             .ssh/               .windsurf-server/   bin/                ml_data/            personal_data/      
-.codeium/           .ipynb_checkpoints/ .npm/               .trae-aicc/         CacheData/          comb_pkg/           mosek/              team_pub/           
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /root/f[Kteam_pub/l/root/team_pub/s/root/team_pub/ /root/team_pub/
-[?2004lfactorsim-26.1.22-py3-none-any.whl
-[?2004h]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# ls /root/team_pub/factorsim-26.1.22-py3-none-any.whl [K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K/home/shared/data1/factorsim_data/[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K/ro[K[K[K/tmp/[K[K[K[Kdat/tmp[K[K[Ktemp/
-ares_real_factor_daily_sample_20260508/ dailypnl/                               
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /dat/temp/
-ares_real_factor_daily_sample_20260508/ dailypnl/                               
-]0;root@autodl-container-e0654c9811-2bc15a64: ~root@autodl-container-e0654c9811-2bc15a64:~# /dat/temp/ares_real_factor_daily_sample_20260508/

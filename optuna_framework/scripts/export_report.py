@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     bootstrap_repo_imports()
 
 from optuna_framework.paths import resolve_study_root
-from optuna_framework.scripts._script_common import add_study_args, load_study_and_adapter
+from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +23,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export Optuna workflow REPORT.md.")
     parser.add_argument("--dry-run", action="store_true", help="Print report path without writing")
     parser.add_argument("--study-root", default=None, help="Override default study root")
-    add_study_args(parser)
     return parser.parse_args()
 
 
@@ -31,35 +30,34 @@ def main() -> None:
     """Export or print the report target."""
 
     args = parse_args()
-    study_spec, _adapter, _plugin = load_study_and_adapter(args)
-    study_root = resolve_study_root(args.study_root, study_spec.name)
+    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
     report_path = study_root / "REPORT.md"
     if args.dry_run:
         print(f"[DRY-RUN] report_path={report_path}")
         return
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(_build_report(study_root, study_spec), encoding="utf-8")
+    report_path.write_text(_build_report(study_root), encoding="utf-8")
     print(f"report={report_path}")
 
 
-def _build_report(study_root: Path, study_spec) -> str:
+def _build_report(study_root: Path) -> str:
     baseline = _read_json(study_root / "baseline" / "baseline_thresholds.json")
     phase_b = _read_json(study_root / "phase_b" / "results.json")
     phase_c = _read_json(study_root / "phase_c" / "results.json")
     top10 = _read_csv(study_root / "reports" / "top10.csv")
     trials = _read_csv(study_root / "reports" / "trials.csv")
-    title = f"Optuna {study_spec.adapter_name or study_spec.name} report"
+    title = "Optuna eg_torch_v1 report"
     if phase_c is not None and not any(item.get("accepted") for item in phase_c):
         title = "no improvement found"
     lines = [f"# {title}", ""]
     lines.append("## Experiment")
-    lines.append(f"- study: {study_spec.name}")
-    lines.append(f"- adapter: {study_spec.adapter_name}")
-    lines.append(f"- baseline config: {study_spec.baseline_config_path}")
-    lines.append(f"- fixed_overrides: `{study_spec.fixed_overrides}`")
+    lines.append(f"- study: {STUDY_SPEC.name}")
+    lines.append(f"- adapter: {STUDY_SPEC.adapter_name}")
+    lines.append(f"- baseline config: {STUDY_SPEC.baseline_config_path}")
+    lines.append(f"- fixed_overrides: `{STUDY_SPEC.fixed_overrides}`")
     lines.append("")
     lines.append("## Segments")
-    for segment in study_spec.baseline_segments():
+    for segment in STUDY_SPEC.baseline_segments():
         lines.append(f"- {segment.name}: {segment.role} {segment.start_ds}-{segment.end_ds}")
     lines.append("")
     lines.append("## Baseline")

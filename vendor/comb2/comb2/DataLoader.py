@@ -1,3 +1,8 @@
-from src.DataLoader import FeatureSpec, LoaderConfig, OpSpec
+from src.DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig
 
-__all__ = ["FeatureSpec", "LoaderConfig", "OpSpec"]
+__all__ = [
+    "ComboBuffer",
+    "ComboDataLoader",
+    "ComboTrainDataset",
+    "LoaderConfig",
+]

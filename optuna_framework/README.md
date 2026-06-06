@@ -1,6 +1,8 @@
 # Optuna Framework
 
-This directory contains a generic Optuna hyperparameter-search scaffold. Model-specific search spaces live in model-owned plugins such as `eg-torch/optuna_plugin.py`; the framework renders isolated XML configs from the plugin's baseline config and does not modify that baseline config.
+This directory contains an Optuna hyperparameter-search scaffold for the
+`eg-torch` research model. It renders isolated XML configs from
+`eg-torch/config.xml`; it does not modify the baseline config.
 
 ## Dependencies
 
@@ -23,12 +25,12 @@ cd /root/autodl-tmp/haoyi_comb2_organize
 python3 -m pip install -r optuna_framework/requirements-optuna.txt
 export STUDY_ROOT=/root/autodl-tmp/haoyi_comb2_organize/optuna_runs/study_eg_torch_v1
 python3 optuna_framework/scripts/dry_run_render.py
-python3 optuna_framework/scripts/run_baseline.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-jobs 2 --gpus 0,1
-python3 optuna_framework/scripts/run_smoke.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-trials 3
-python3 optuna_framework/scripts/run_study.py --model-dir eg-torch --study-root "$STUDY_ROOT" --n-trials 60
-python3 optuna_framework/scripts/run_phase_b.py --model-dir eg-torch --study-root "$STUDY_ROOT"
-python3 optuna_framework/scripts/run_phase_c.py --model-dir eg-torch --study-root "$STUDY_ROOT"
-python3 optuna_framework/scripts/export_report.py --model-dir eg-torch --study-root "$STUDY_ROOT"
+python3 optuna_framework/scripts/run_baseline.py --study-root "$STUDY_ROOT"
+python3 optuna_framework/scripts/run_smoke.py --study-root "$STUDY_ROOT" --n-trials 3
+python3 optuna_framework/scripts/run_study.py --study-root "$STUDY_ROOT" --n-trials 60
+python3 optuna_framework/scripts/run_phase_b.py --study-root "$STUDY_ROOT"
+python3 optuna_framework/scripts/run_phase_c.py --study-root "$STUDY_ROOT"
+python3 optuna_framework/scripts/export_report.py --study-root "$STUDY_ROOT"
 ```
 
 If a segment fails, inspect the rendered config and subprocess logs under the
@@ -46,44 +48,14 @@ last log lines in `SegmentRunError` to make remote debugging easier. The
 framework reads backtest summaries from `output/backtest/pnl_summary.csv` inside
 each segment directory; `output/pnl_summary.csv` is not the expected location.
 
-Optuna-rendered configs resolve `combo.paths.model_path` and `strategy.path` to
-absolute paths before copying configs into isolated run directories. They also
-disable the optional `alpha_analysis` step via
+Optuna-rendered configs resolve `combo.paths.model_path` to an absolute path
+before copying configs into isolated run directories. The default strategy path
+is supplied by `config.py`. They also disable the optional `alpha_analysis` step via
 `combo.output.enable_alpha_analysis=false`. The objective only needs backtest
 `pnl_summary.csv`, and skipping this IC dump avoids failures when a holdout
 window has no valid label/mask coverage for IC analysis.
 
-## Model-owned plugins
-
-By default the scripts load `eg-torch/optuna_plugin.py`, but the canonical multi-model usage is to pass `--model-dir` or `--plugin`. To run another model, put an `optuna_plugin.py` next to that model's `config.xml` and `model.py`, then pass either:
-
-```bash
-python3 optuna_framework/scripts/run_study.py --model-dir eg-torch --dry-run
-python3 optuna_framework/scripts/run_study.py --model-dir eg-lgbm --dry-run
-python3 optuna_framework/scripts/run_study.py --plugin /root/autodl/0530.tcn/optuna_plugin.py --dry-run
-python3 optuna_framework/scripts/run_study.py --plugin my-model/optuna_plugin.py --dry-run
-```
-
-A plugin must define `STUDY_SPEC` and either `create_adapter()` or `ADAPTER`. The adapter implements the generic `ModelAdapter` interface: `baseline_params()`, `suggest_params()`, `materialize_params()`, and `apply_params_to_xml()`. Phase B/C can optionally customize seed behavior by overriding `phase_seeds()`, `write_seeded_model()`, and `seeded_overrides()`. The `eg-torch` example overrides these hooks because torch training needs a seeded wrapper; `eg-lgbm` shows the simpler path where the default `combo.model.seed` override is enough; `/root/autodl/0530.tcn/optuna_plugin.py` is an external-plugin torch example that also needs the seeded-wrapper pattern.
-
-Example layouts:
-
-```text
-my-model/
-  config.xml
-  model.py
-  optuna_plugin.py
-```
-
-External flat repository example:
-
-```text
-/root/autodl/0530.tcn/
-  config.xml
-  Model.py
-  optuna_plugin.py
-```
-
+## Reading results and selecting parameters
 
 Primary artifacts are written below `STUDY_ROOT`:
 
@@ -139,78 +111,73 @@ diff config.combo.runtime.@snaptime: 'example_torch' -> 'baseline_seg01'
 diff config.constants.@checkpoint_root: 'checkpoints-torch' -> '...\\checkpoints'
 diff config.constants.@output_root: 'output-torch' -> '...\\output'
 diff config.strategy.@end_ds: 20240631 -> 20211231
-diff config.strategy.@path: '../alpha_strategy.py' -> '.../alpha_strategy.py'
 diff config.strategy.@start_ds: 20200101 -> 20210104
 ```
 
 2. Baseline evaluation, manual long run:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_baseline.py --model-dir eg-torch
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_baseline.py
 ```
 
 3. Smoke study, manual long run:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_smoke.py --model-dir eg-torch
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_smoke.py
 ```
 
 4. Phase A formal study:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_study.py --model-dir eg-torch --n-trials 60
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_study.py --n-trials 60
 ```
 
 5. Apply the seed patch documented at the top of
 `scripts/seed_sanity_check.py`, then run:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/seed_sanity_check.py --model-dir eg-torch
+.\.venv\Scripts\python.exe optuna_framework/scripts/seed_sanity_check.py
 ```
 
 6. Phase B and Phase C:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_b.py --model-dir eg-torch
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_c.py --model-dir eg-torch
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_b.py
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_c.py
 ```
 
 7. Export report:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/export_report.py --model-dir eg-torch
+.\.venv\Scripts\python.exe optuna_framework/scripts/export_report.py
 ```
 
 ## Dry-Run
 
 Long-task scripts support `--dry-run`. Dry-run prints planned config paths and
-`runCombo.py` commands without launching subprocesses. All scripts also support
-`--model-dir` and `--plugin` for selecting a model-owned Optuna plugin:
+`runCombo.py` commands without launching subprocesses:
 
 ```bash
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_baseline.py --model-dir eg-torch --dry-run
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_smoke.py --model-dir eg-torch --dry-run
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_study.py --model-dir eg-torch --dry-run
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_b.py --model-dir eg-torch --dry-run
-.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_c.py --model-dir eg-torch --dry-run
-.\.venv\Scripts\python.exe optuna_framework/scripts/export_report.py --model-dir eg-torch --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_baseline.py --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_smoke.py --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_study.py --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_b.py --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/run_phase_c.py --dry-run
+.\.venv\Scripts\python.exe optuna_framework/scripts/export_report.py --dry-run
 ```
 
 Use `--study-root` to override the default
 `optuna_runs/study_eg_torch_v1` location. Each trial and segment receives a
 separate config, output root, checkpoint root, log files, and snaptime.
-Baseline and Phase A study runs support `--n-jobs` plus `--gpus`, for example
-`--n-jobs 2 --gpus 0,1`, to run independent segments/trials on multiple GPUs.
 
 ## Design Notes
 
 - Repo root discovery is centralized in `paths.get_repo_root()`.
-- Model-specific Optuna definitions live in model-owned `optuna_plugin.py` files; `optuna_framework/plugin_loader.py` loads the selected plugin.
 - XML rendering uses `xml.etree.ElementTree`; no string template or `xmldiff`
   dependency is required.
 - `optuna`, `psutil`, and Plotly visualization imports are delayed until the
   script function that needs them.
 - `baseline_thresholds.json` is generated only by manual baseline runs. Phase B
   and Phase C dry-runs fall back to test fixtures when the real file is absent.
-- External torch plugins such as `/root/autodl/0530.tcn/optuna_plugin.py` may need a seeded wrapper for deterministic Phase B/C behavior if their base `Model.py` does not actually consume `seed` yet.
-- When an external model's `load()` rebuilds structure from the current config and strict-loads weights, old manual checkpoints may be incompatible with new Optuna trial configs; prefer fresh study roots and isolated per-run checkpoint directories.
+- `ensure_factor_audit_template(study_root)` creates the audit template only
+  when baseline is run for real.

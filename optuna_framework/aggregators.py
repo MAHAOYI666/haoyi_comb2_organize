@@ -1,4 +1,4 @@
-"""Objective scoring, hard filters, and baseline threshold helpers."""
+"""Objective scoring, hard filters, and audit helpers."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ from optuna_framework.metrics_parser import SegmentMetrics
 HARD_FILTER_MISSING_MESSAGE = (
     "baseline_thresholds.json not found. 请先人工运行 run_baseline.py 生成 baseline_thresholds.json"
 )
+
+FACTOR_AUDIT_TEMPLATE = (
+    "# Factor Audit\n\n"
+    "因子时间合规性已由用户确认：2024/2025 命名仅为版本代号，不代表使用了未来信息。\n"
+)
+
 
 def running_score(seg_sharpes: list[float]) -> float:
     """Compute the intermediate Optuna score after one or more segments."""
@@ -84,4 +90,14 @@ def build_baseline_thresholds(
             for name, metric in tuning.items()
         },
     }
+
+
+def ensure_factor_audit_template(study_root: Path) -> Path:
+    """Create the factor audit template under ``study_root`` if it is absent."""
+
+    path = Path(study_root) / "audit" / "factor_audit.md"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(FACTOR_AUDIT_TEMPLATE, encoding="utf-8")
+    return path
 

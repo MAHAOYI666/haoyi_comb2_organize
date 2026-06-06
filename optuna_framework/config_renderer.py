@@ -17,7 +17,6 @@ from optuna_framework.specs import RunPaths
 PATH_PATCH_KEYS = {
     "config.strategy.@start_ds",
     "config.strategy.@end_ds",
-    "config.strategy.@path",
     "config.constants.@output_root",
     "config.constants.@checkpoint_root",
     "config.combo.paths.@model_path",
@@ -26,12 +25,21 @@ PATH_PATCH_KEYS = {
 
 _RELATIVE_PATH_SPECS = (
     ("./combo/paths", "model_path"),
-    ("./strategy", "path"),
 )
 
 OPTUNA_RUNTIME_PATCH_KEYS = PATH_PATCH_KEYS | {
     "config.combo.output.@enable_alpha_analysis",
-    "config.optuna.@enabled",
+}
+
+MODEL_PATCH_KEYS = {
+    "config.combo.model.@lr",
+    "config.combo.model.@weight_decay",
+    "config.combo.model.@dropout",
+    "config.combo.model.@hiddenSize",
+    "config.combo.model.@fcSize",
+    "config.combo.model.@epochs",
+    "config.combo.model.@scheduler_step_size",
+    "config.combo.model.@scheduler_gamma",
 }
 
 
@@ -68,7 +76,6 @@ def render_config(
     for dotted_path, value in (fixed_overrides or {}).items():
         apply_fixed_override(root, dotted_path, value)
 
-    _disable_nested_optuna(root)
     _resolve_relative_paths(root, baseline_config_path.parent)
 
     run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
@@ -106,14 +113,6 @@ def _resolve_relative_paths(root: ET.Element, base_dir: Path) -> None:
         value = element.get(attr)
         if value and not Path(value).expanduser().is_absolute():
             element.set(attr, str((base_dir / value).resolve()))
-
-
-def _disable_nested_optuna(root: ET.Element) -> None:
-    """Prevent rendered segment configs from recursively launching Optuna."""
-
-    optuna_element = root.find("./optuna")
-    if optuna_element is not None:
-        optuna_element.set("enabled", "false")
 
 
 def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None:

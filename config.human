@@ -115,7 +115,6 @@ constants.cache_path
 constants.factor_root
 constants.output_root
 constants.checkpoint_root
-strategy.path
 combo.paths.base_dir
 combo.paths.output_dir
 combo.paths.model_path
@@ -218,7 +217,6 @@ XML：
 <strategy
   start_ds="20200101"
   end_ds="20240628"
-  path="../alpha_strategy.py"
 />
 ```
 
@@ -226,9 +224,8 @@ XML：
 |---|---:|---|---|
 | `start_ds` | `20160111` | int | 回测开始日期，格式通常是 `YYYYMMDD`。 |
 | `end_ds` | `20200101` | int | 回测结束日期。 |
-| `path` | `alpha_strategy.py` | path | 生成临时策略文件时使用的策略模板路径。 |
 
-`runCombo.py` 会用 `strategy.start_ds/end_ds/path` 构造 backtest strategy。
+默认 config 使用内置 `AlphaStrategy`：只持有正 alpha，按正 alpha 权重归一化生成 long-only 仓位。
 
 ---
 
@@ -251,6 +248,8 @@ XML：
 | `base_dir` | `vendor/comb2` | path | comb2 基础目录。 |
 | `output_dir` | `vendor/comb2/output` | path | 输出目录；通常会被 `constants.output_root` 覆盖。 |
 | `model_path` | `vendor/comb2/lgbm_model.py` | path | 研究模型文件，必须定义 `ResearchModel`。 |
+| `research_loader_path` | `None` | path / None | 可选研究 loader 文件，必须定义继承 `ComboDataLoader` 的 `ResearchLoader`。 |
+| `research_dataset_path` | `None` | path / None | 可选研究 dataset 文件，必须定义继承 `ComboTrainDataset` 的 `ResearchDataset`。 |
 | `checkpoint_root` | `None` | path / None | checkpoint 根目录；通常会被 `constants.checkpoint_root` 覆盖。 |
 
 注意：
@@ -262,6 +261,10 @@ XML：
 class ResearchModel:
     ...
 ```
+
+- 默认数据扩展由 `ComboDataLoader` / `ComboTrainDataset` 提供。
+- 指定 `research_loader_path` 后，可通过 `ResearchLoader` 覆盖 `preprocess_feature()`、`preprocess_label()`、`gen_feature()`、`gen_label()`、`process_feature_window()`、`_feature_available_mask()`。
+- 指定 `research_dataset_path` 后，可通过 `ResearchDataset` 覆盖 `_build_validinsts()`、`__getitem__()`。详细职责见本文 `combo.data` 章节。
 
 ---
 
@@ -436,91 +439,178 @@ batchSize  -> batch_size
 
 ---
 
-## 10. combo.loader
+## 10. combo.data
 
 XML：
 
 ```xml
-<loader
+<data
   dtype="float16"
   compression="none"
   data_start_ds="20160101"
 >
-  <factor_paths>
-    <path>cyz_20231130_01</path>
-    <path>/absolute/path/to/factor</path>
-  </factor_paths>
-</loader>
+  <import preset="barra" />
+
+  <item name="alpha.turn20" module="builtin.factor" path="turn20" role="factor">
+    <op name="neut(barra.size, barra.btop)" />
+    <op name="cs_zscore" />
+  </item>
+
+  <item name="label.ret1" module="builtin.label" path="label1d" role="label" />
+</data>
 ```
 
 | 参数 | 默认值 | 类型 | 说明 |
 |---|---|---|---|
-| `factor_paths` | 默认若干因子名 | tuple[str] | 因子路径列表，通过 `<factor_paths><path>` 子节点配置。 |
-| `label_path` | 自动派生 | path | label memmap 路径；默认 `{cache}/1d_DailyLabel/DailyLabel.label1d`。 |
-| `ashare_data_path` | 自动派生 | path | AshareCache 路径；主要供兼容逻辑使用。 |
 | `dtype` | `float16` | torch.dtype | loader 输出 dtype。 |
 | `compression` | `none` | str | comb2 内部 X/buffer 压缩方式：`none` / `fp4` / `fp8`。 |
-| `data_start_ds` | `20160101` | int | 数据起始日期。日期对齐不会早于该日期。 |
-| `valid_path` | 自动派生 | path | 交易有效 mask，默认 `{cache}/Ashare`。 |
-| `filtered_path` | 自动派生 | path | 过滤后 mask，默认 `{cache}/AshareFiltered`。 |
-| `base_universe_path` | 自动派生 | path | base universe mask，默认 `{cache}/1d_StockMask2/StockMask2.BaseUnivMask`。 |
-| `apply_global_ops` | `true` | bool | 是否在所有 feature 拼接后继续执行默认全局 `cs_zscore -> truncate(-4,4) -> nan_to_num(0)`。 |
+| `data_start_ds` | `20160101` | int | 数据业务起点；不改变 Universe 的固定 tensor shape。 |
 
-### 10.1 factor_paths 写法
+### 10.0 研究员需要知道的行为
+
+数据配置的基本规则：
+
+- `<item role="factor">` 会自动进入模型 feature。
+- `<item role="label">` 会自动作为训练 label，当前只支持一个 label。
+- `<item role="aux">` 不会直接进模型，主要供 op 或自定义 loader 使用。
+- `<item><op ... /></item>` 是 data item 级预处理，发生在进入 `ComboDataLoader` 之前。
+- 默认 `ComboDataLoader.gen_feature(ds)` 还会对最终 feature 执行全局 `cs_zscore -> truncate(-4, 4) -> nan_to_num(0)`。
+- 默认 `ComboDataLoader.gen_label(ds, ret_days)` 会先聚合 label，再做 winsorize、标准化、truncate、normalize 和 invalid 填 0。
+
+如果只想改 item 级预处理，直接在 XML 里写 `<op>`：
 
 ```xml
-<factor_paths>
-  <path>factor_a</path>
-  <path>factor_b</path>
-</factor_paths>
+<item name="alpha.turn20" module="builtin.factor" path="turn20" role="factor">
+  <op name="neut(barra.size, barra.btop)" />
+  <op name="cs_zscore" />
+  <op name="truncate" min="-4" max="4" />
+  <op name="nan_to_num" value="0" />
+</item>
 ```
 
-如果 `<factor_paths>` 存在但没有任何非空 `<path>`，则回退到默认 factor list。
+如果想改默认 feature/label 预处理，通过 `research_loader_path` 指定 `ResearchLoader`。最常用的规则是：
 
-### 10.1.1 features 写法
+| 目标 | 推荐覆盖 |
+|---|---|
+| 只改 feature 预处理，例如 zscore 换 rank、改 truncate、改 fillna | `ResearchLoader.preprocess_feature(feature, ds)` |
+| 只改 label 预处理，例如 label 标准化、截断、sample weight | `ResearchLoader.preprocess_label(label_values, valid_mask, ds, ret_days)` |
+| 改完整 feature 生成流程，例如不用默认 factor stack、手动选择 data、多输入结构 | `ResearchLoader.gen_feature(ds)` |
+| 改完整 label 生成流程，例如不同 ret 聚合、不同 label 数据源、不同 valid mask | `ResearchLoader.gen_label(ds, ret_days)` |
+| 改预测/live 的窗口处理或股票可预测 mask | `ResearchLoader.process_feature_window(feature_window)` 或 `_feature_available_mask(feature_window)` |
+| 改训练股票池 | `ResearchDataset._build_validinsts()` |
+| 改训练样本返回结构 | `ResearchDataset.__getitem__(idx)` |
 
-`features` 是 `factor_paths` 的泛化形式，可以混合普通因子和已经 dump 的 alpha parquet：
+这些 hook 是分层的：
 
-```xml
-<features>
-  <factor name="factor_a" path="factor_a">
-    <op name="truncate" min="-4" max="4" />
-    <op name="nan_to_num" value="0" />
-  </factor>
-  <alpha name="base_lgbm" dump_path="/exp/base_lgbm/output/alpha.parquet" mode="read_dump">
-    <op name="cs_zscore" />
-    <op name="truncate" min="-3" max="3" />
-    <op name="nan_to_num" value="0" />
-  </alpha>
-</features>
+```text
+gen_feature(ds)
+  -> build_raw_feature(ds)
+  -> preprocess_feature(feature, ds)
+
+gen_label(ds, ret_days)
+  -> 聚合 label
+  -> preprocess_label(label_values, valid_mask, ds, ret_days)
 ```
 
-当前 MVP 支持：
+覆盖上层组织函数会绕过其内部默认子 hook。例如覆盖 `gen_feature()` 后，默认 `build_raw_feature()` 和 `preprocess_feature()` 不会自动发生，除非你在新实现里显式调用它们。
 
-| 标签 | 说明 |
+`ResearchLoader` 返回值约定：
+
+| 接口 | 必须返回 |
 |---|---|
-| `<factor>` | 读取 Memmaper2 因子；相对 `path` 会拼到 `constants.factor_root`。 |
-| `<alpha>` | 读取 `alpha.parquet`；`path` 和 `dump_path` 等价，当前仅支持 `mode="read_dump"`。 |
+| `gen_feature(ds)` | `[N, F]` tensor，`N=len(universe.codes)`。 |
+| `preprocess_feature(feature, ds)` | `[N, F]` tensor，shape 不变。 |
+| `gen_label(ds, ret_days)` | `(y, w)`，二者 shape 都是 `[N]`。 |
+| `preprocess_label(label_values, valid_mask, ds, ret_days)` | `(y, w)`，二者 shape 都是 `[N]`。 |
+| `load_feature_window(end_ds, ts_days)` | `(x, available_mask)`，`x=[T, M, F]`，`available_mask=[N]`。 |
+| `process_feature_window(feature_window)` | `(x, available_mask)`。 |
 
-支持的 `<op>`：
+`ResearchDataset` 返回值约定：
 
-| op | 参数 |
+| 接口 | 必须返回 |
 |---|---|
-| `cs_zscore` / `zscore` | 无 |
-| `truncate` | `min` / `max` |
-| `nan_to_num` / `fillna` | `value` |
-| `winsorize_by_quantile` | `low` / `high` |
-| `normalize_by_max_abs` | 无 |
+| `_build_validinsts()` | `[M]` long tensor，元素是全市场股票下标。 |
+| `__len__()` | 可训练 sample 数。 |
+| `__getitem__(idx)` | 默认是 `(idx, x, y, w)`，其中 `x=[ts_days, M, F]`，`y=[M]`，`w=[M]`。如果返回结构改变，`ResearchModel.fit()` 也要同步适配。 |
 
-如果不配置 `<features>`，仍使用旧的 `<factor_paths>`。
+内部组件、完整调用链和职责边界见 `vendor/comb2/docs/ARCHITECTURE.md`。
 
-默认仍会在所有 feature 拼接后执行全局预处理。若 alpha 条目已经通过 `<op>` 完成标准化，可在 `<loader>` 上设置：
+### 10.1 item
 
 ```xml
-<loader apply_global_ops="false">
-  ...
+<item name="alpha.turn20" module="builtin.factor" path="turn20" role="factor" />
+<item name="label.ret1" module="builtin.label" path="label1d" role="label" />
+<item name="risk.custom" module="my_pkg.my_loader:load_data" path="risk.parquet" role="aux" />
+```
+
+| 属性 | 说明 |
+|---|---|
+| `name` | DataRegistry 里的唯一数据名。 |
+| `module` | 读取接口；内置值包括 `builtin.factor` / `builtin.label` / `builtin.alpha_parquet` / `builtin.barra_style`。 |
+| `path` | 数据路径或内置 module 参数。`builtin.factor` 的相对路径会拼到 `constants.factor_root`。 |
+| `role` | `factor` 自动作为 feature，`label` 自动作为训练 label，`aux` 只供 op 引用。 |
+
+### 10.1.1 import
+
+内置 Barra：
+
+```xml
+<import preset="barra" />
+```
+
+会注册 `barra.beta`、`barra.btop`、`barra.earnyild`、`barra.growth`、`barra.industry`、`barra.leverage`、`barra.liquidty`、`barra.momentum`、`barra.resvol`、`barra.size`、`barra.sizenl`。
+
+外部 data-pack：
+
+```xml
+<import path="packs/my_factors.xml" />
+```
+
+data-pack 文件：
+
+```xml
+<data-pack>
+  <item name="factor.turn20" module="builtin.factor" path="turn20" role="factor" />
+</data-pack>
+```
+
+### 10.1.2 外部 data module
+
+如果内置 `module` 不够用，可以写自己的读取函数：
+
+```python
+def load_data(item, registry, start_ds: int, end_ds: int):
+    ...
+```
+
+必须满足：
+
+| 要求 | 说明 |
+|---|---|
+| 返回 shape | `[R, N]`，`R` 是 `start_ds` 到 `end_ds` 的交易日数，`N=len(registry.universe.codes)`。 |
+| 缺失值 | 用 `NaN` 表示。 |
+| 日期和股票 | 必须对齐 `registry.universe.dates` / `registry.universe.codes`。 |
+| 预处理 | 不在 module 里做 delay、rolling、neutralize 等处理，这些写在 `<op>` 或 `ResearchLoader` hook 中。 |
+| 共享路径 | 可使用 `registry.ashare_data_path`、`registry.factor_root`、`registry.config_path`。 |
+
+内部 DataRegistry 缓存、依赖解析、op 执行细节见 `vendor/comb2/docs/ARCHITECTURE.md`。
+
+### 10.1.3 旧 loader 兼容
+
+旧写法仍可用，解析后会转换成 `data_items`：
+
+```xml
+<loader dtype="float16" compression="none" data_start_ds="20160101">
+  <factor_paths>
+    <path>factor_a</path>
+    <path>factor_b</path>
+  </factor_paths>
 </loader>
 ```
+
+`<loader><features>...</features></loader>` 也仍兼容，但新配置推荐使用 `<data><item ... /></data>`。
+
+兼容表示旧 XML 会被转换成当前 `DataItem`，并继续使用默认 `ComboDataLoader.gen_feature(ds)` 的全局 `cs_zscore -> truncate -> nan_to_num` 预处理。
 
 ### 10.2 compression
 
@@ -684,7 +774,7 @@ monitor.maybe_section
     checkpoint_root="checkpoints-torch"
   />
 
-  <strategy start_ds="20200101" end_ds="20240628" path="../alpha_strategy.py" />
+  <strategy start_ds="20200101" end_ds="20240628" />
 
   <combo>
     <output enable_alpha_analysis="false" />

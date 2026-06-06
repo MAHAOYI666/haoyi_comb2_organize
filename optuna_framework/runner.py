@@ -9,7 +9,6 @@ from pathlib import Path
 from optuna_framework.metrics_parser import parse_segment_metrics
 from optuna_framework.paths import get_repo_root
 from optuna_framework.specs import RunPaths
-from optuna_framework.status import log_status
 from optuna_framework.trial_meta import update_segment
 
 
@@ -39,12 +38,6 @@ def run_segment(run_paths: RunPaths) -> object:
 
     cmd = build_run_command(run_paths.config_path)
     run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
-    log_status(
-        f"{_run_label(run_paths)} launch",
-        f"cmd={command_to_string(cmd)}",
-        f"stdout={run_paths.stdout_path}",
-        f"stderr={run_paths.stderr_path}",
-    )
     with run_paths.stdout_path.open("w", encoding="utf-8") as stdout_file, run_paths.stderr_path.open("w", encoding="utf-8") as stderr_file:
         proc = subprocess.run(
             cmd,
@@ -67,16 +60,9 @@ def run_segment(run_paths: RunPaths) -> object:
         )
     except Exception as exc:
         _mark_failed(run_paths)
-        log_status(f"{_run_label(run_paths)} failed", str(exc).splitlines()[0])
         if isinstance(exc, SegmentRunError):
             raise
         raise SegmentRunError(f"invalid metrics for {run_paths.segment.name}: {exc}") from exc
-    log_status(
-        f"{_run_label(run_paths)} done",
-        f"sharpe={metrics.sharpe_idx:.6g}",
-        f"dd={metrics.dd_li:.6g}",
-        f"days={metrics.days}",
-    )
     return metrics
 
 
@@ -119,9 +105,3 @@ def _mark_failed(run_paths: RunPaths) -> None:
     meta_path = trial_dir / "trial_meta.json"
     if meta_path.exists():
         update_segment(trial_dir, run_paths.segment.name, "failed")
-
-
-def _run_label(run_paths: RunPaths) -> str:
-    if run_paths.trial_number is None:
-        return f"{run_paths.kind}/{run_paths.segment.name}"
-    return f"trial={run_paths.trial_number:05d} segment={run_paths.segment.name}"

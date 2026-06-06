@@ -29,6 +29,8 @@ class ComboBase:
     def __init__(self, node: Any):
         self.node = node
         self.model_path = node.model_path
+        self.research_loader_path = getattr(node, "research_loader_path", None)
+        self.research_dataset_path = getattr(node, "research_dataset_path", None)
         self.snaptime = node.snaptime
         self.livetrading = node.livetrading
         self.trainDelay = node.trainDelay
@@ -45,7 +47,20 @@ class ComboBase:
         if self.modelDir:
             os.makedirs(self.modelDir, exist_ok=True)
 
-        self.loader = ComboDataLoader(node.loader_config)
+        self.research_loader_cls = self._load_optional_research_class(
+            self.research_loader_path,
+            class_name="ResearchLoader",
+            base_cls=ComboDataLoader,
+            default_cls=ComboDataLoader,
+        )
+        self.research_dataset_cls = self._load_optional_research_class(
+            self.research_dataset_path,
+            class_name="ResearchDataset",
+            base_cls=ComboTrainDataset,
+            default_cls=ComboTrainDataset,
+        )
+
+        self.loader = self.research_loader_cls(node.loader_config)
         self.loader.set_processed_feature_cache_enabled(self.processed_feature_cache)
         self.loader.monitor = getattr(node, "monitor", None)
         self.buffer = ComboBuffer(
@@ -100,6 +115,23 @@ class ComboBase:
         if not hasattr(module, "ResearchModel"):
             raise AttributeError(f"{model_path} must define ResearchModel")
         return module.ResearchModel
+
+    def _load_optional_research_class(self, path: str | None, *, class_name: str, base_cls: type, default_cls: type):
+        if not path:
+            return default_cls
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{class_name} file not found: {path}")
+        module_name = f"comb2_{class_name}_{Path(path).stem}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        if not hasattr(module, class_name):
+            raise AttributeError(f"{path} must define {class_name}")
+        cls = getattr(module, class_name)
+        if not isinstance(cls, type) or not issubclass(cls, base_cls):
+            raise TypeError(f"{class_name} in {path} must inherit from {base_cls.__name__}")
+        return cls
 
     def Combine(self, di, ti=None):
         if self.livetrading:
@@ -273,7 +305,7 @@ class ComboBase:
         )
         train_start = time.perf_counter()
         dataset_start = time.perf_counter()
-        dataset = ComboTrainDataset(
+        dataset = self.research_dataset_cls(
             self.loader,
             end_ds=plan.target_ds,
             ndays=plan.ndays,

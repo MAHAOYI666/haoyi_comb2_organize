@@ -5,12 +5,15 @@ __all__ = [
     "ComboBuffer",
     "ComboDataLoader",
     "ComboTrainDataset",
+    "DataItem",
+    "DataRegistry",
     "DefaultSelectionModule",
     "FeatureSpec",
     "LoaderConfig",
     "OpSpec",
     "SelectionModule",
     "SelectionPlan",
+    "Universe",
 ]
 
 
@@ -19,16 +22,24 @@ def __getattr__(name: str):
         from .ComboBase import ComboBase
 
         return ComboBase
-    if name in {"ComboBuffer", "ComboDataLoader", "ComboTrainDataset", "FeatureSpec", "LoaderConfig", "OpSpec"}:
-        from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, FeatureSpec, LoaderConfig, OpSpec
+    if name in {"ComboBuffer", "ComboDataLoader", "ComboTrainDataset", "LoaderConfig"}:
+        from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig
 
         return {
             "ComboBuffer": ComboBuffer,
             "ComboDataLoader": ComboDataLoader,
             "ComboTrainDataset": ComboTrainDataset,
-            "FeatureSpec": FeatureSpec,
             "LoaderConfig": LoaderConfig,
+        }[name]
+    if name in {"DataItem", "DataRegistry", "FeatureSpec", "OpSpec", "Universe"}:
+        from .DataRegistry import DataItem, DataRegistry, FeatureSpec, OpSpec, Universe
+
+        return {
+            "DataItem": DataItem,
+            "DataRegistry": DataRegistry,
+            "FeatureSpec": FeatureSpec,
             "OpSpec": OpSpec,
+            "Universe": Universe,
         }[name]
     if name in {"DefaultSelectionModule", "SelectionModule", "SelectionPlan"}:
         from .selection import DefaultSelectionModule, SelectionModule, SelectionPlan

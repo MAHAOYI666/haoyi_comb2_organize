@@ -49,7 +49,6 @@ def create_study(
     study_name: str,
     storage: str,
     smoke: bool = False,
-    n_startup_trials: int | None = None,
 ) -> Any:
     """Create or load an Optuna study with formal or smoke sampler settings."""
 
@@ -61,11 +60,11 @@ def create_study(
         raise RuntimeError(missing_dependency_message("optuna")) from exc
 
     if smoke:
-        startup_trials = 2 if n_startup_trials is None else int(n_startup_trials)
+        sampler = TPESampler(n_startup_trials=2, multivariate=True, group=True, seed=42)
+        pruner = MedianPruner(n_startup_trials=2, n_warmup_steps=2, interval_steps=1)
     else:
-        startup_trials = 8 if n_startup_trials is None else int(n_startup_trials)
-    sampler = TPESampler(n_startup_trials=startup_trials, multivariate=True, group=True, seed=42)
-    pruner = MedianPruner(n_startup_trials=startup_trials, n_warmup_steps=2, interval_steps=1)
+        sampler = TPESampler(n_startup_trials=24, multivariate=True, group=True, seed=42)
+        pruner = MedianPruner(n_startup_trials=24, n_warmup_steps=2, interval_steps=1)
     return optuna.create_study(
         direction="maximize",
         sampler=sampler,
@@ -76,17 +75,11 @@ def create_study(
     )
 
 
-def optimize_study(
-    study: Any,
-    objective: Any,
-    n_trials: int,
-    callbacks: list[Any] | None = None,
-    n_jobs: int = 1,
-) -> None:
+def optimize_study(study: Any, objective: Any, n_trials: int, callbacks: list[Any] | None = None) -> None:
     """Run Optuna optimization while catching segment failures."""
 
     try:
-        study.optimize(objective, n_trials=n_trials, n_jobs=int(n_jobs), catch=(SegmentRunError,), callbacks=callbacks)
+        study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(SegmentRunError,), callbacks=callbacks)
     except KeyboardInterrupt:
         raise
 

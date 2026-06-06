@@ -31,8 +31,8 @@ $env:PYTHONPATH = "vendor/comb2"
 .\.venv\Scripts\python.exe -m pytest vendor/comb2/tests/test_codec.py
 ```
 
-See `docs/CODEC.md` for the data contract, precision notes, troubleshooting, and
-`setup.py` packaging caveats.
+See `docs/ARCHITECTURE.md` for internal components and `../../config.human` for
+researcher-facing configuration.
 
 本文档面向研究员，说明如何在 `comb2` 框架中接入自己的模型并完成训练、预测与回测。
 
