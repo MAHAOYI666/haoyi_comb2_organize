@@ -103,7 +103,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 实际使用时，只需要在 XML 的 `<combo><data ...>` 节点里增加 `compression` 属性即可：
 
 ```xml
-<data dtype="float16" compression="fp4" data_start_ds="20160101" />
+<data dtype="float16" compression="fp4" data_start_ds="20160101" data_offset="1024" />
 ```
 
 可选值：

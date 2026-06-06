@@ -155,6 +155,7 @@ DEFAULT_CONFIG = {
             "dtype": torch.float16,
             "compression": "none",
             "data_start_ds": 20160101,
+            "data_offset": 1024,
             "valid_path": None,
             "filtered_path": None,
             "base_universe_path": None,
@@ -228,6 +229,7 @@ DATA_ATTR_DEFAULTS = {
         "dtype",
         "compression",
         "data_start_ds",
+        "data_offset",
         "valid_path",
         "filtered_path",
         "base_universe_path",
@@ -421,14 +423,8 @@ def _resolve_data_item_path(value: str | None, *, module: str, field: str, facto
 
 def _load_data_pack(path: Path) -> dict[str, Any]:
     root = ET.parse(path).getroot()
-    if root.tag == "config":
-        combo_element = root.find("combo")
-        parsed = {"imports": (), "items": ()}
-        if combo_element is not None:
-            parsed = _parse_data_section(combo_element.find("data")) or parsed
-        return parsed
     if root.tag not in {"data-pack", "data"}:
-        raise ValueError(f"data pack root tag must be <data-pack> or <data>: {path}")
+        raise ValueError(f"data import root tag must be <data-pack> or <data>: {path}")
     parsed = _parse_data_section(root)
     return parsed or {"imports": (), "items": ()}
 
