@@ -2,11 +2,11 @@
 
 ## Data Compression Options
 
-`comb2` supports optional feature storage compression through the loader XML attribute
+`comb2` supports optional feature storage compression through the data XML attribute
 `compression`.
 
 ```xml
-<loader dtype="float16" compression="fp4" />
+<data dtype="float16" compression="fp4" />
 ```
 
 Supported values are `none` (default passthrough), `fp8`, and `fp4`. Compression is
@@ -329,18 +329,16 @@ class ResearchModel:
       seed="42"
     />
 
-    <loader
-      label_path="/path/to/label"
+    <data
       dtype="float16"
       data_start_ds="20160101"
       valid_path="/path/to/valid"
       filtered_path="/path/to/filtered"
     >
-      <factor_paths>
-        <path>/path/to/factor_1</path>
-        <path>/path/to/factor_2</path>
-      </factor_paths>
-    </loader>
+      <item name="alpha.factor_1" module="builtin.factor" path="/path/to/factor_1" role="factor" />
+      <item name="alpha.factor_2" module="builtin.factor" path="/path/to/factor_2" role="factor" />
+      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+    </data>
   </combo>
 
   <backtest
@@ -359,7 +357,8 @@ class ResearchModel:
 - XML 中未填写的字段会回退到框架默认值
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`
-- 多个因子路径写在 `<factor_paths><path>...</path></factor_paths>` 里
+- 多个因子通过多个 `<data><item role="factor" ... /></data>` 声明
+- 引用完整 config 里的因子集时可写 `<import path="../task/config.xml" role="factor" />`
 
 ---
 

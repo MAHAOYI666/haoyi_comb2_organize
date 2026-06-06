@@ -8,7 +8,7 @@ import torch
 
 from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
 from src.DataLoader import ComboDataLoader, LoaderConfig
-from src.DataRegistry import AlphaParquetItemSource, DataItem, DataRegistry, FeatureSpec, OpSpec, Universe
+from src.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
 from src.op_utils import cs_zscore, nan_to_num, truncate
 
 
@@ -308,12 +308,12 @@ def test_build_codec_rejects_float64_for_compressed_codecs() -> None:
         build_codec("fp8", torch.float64)
 
 
-def test_config_accepts_loader_compression_attribute(tmp_path) -> None:
+def test_config_accepts_data_compression_attribute(tmp_path) -> None:
     from config import load_config
 
     xml_path = tmp_path / "config.xml"
     xml_path.write_text(
-        '<config><combo><loader compression="fp4" dtype="float16" /></combo></config>',
+        '<config><combo><data compression="fp4" dtype="float16" /></combo></config>',
         encoding="utf-8",
     )
 
@@ -323,7 +323,7 @@ def test_config_accepts_loader_compression_attribute(tmp_path) -> None:
     assert loaded["combo"]["loader"]["compression"] == "fp4"
 
 
-def test_config_accepts_loader_features(tmp_path) -> None:
+def test_config_accepts_data_items_and_rejects_loader_node(tmp_path) -> None:
     from config import load_config
 
     xml_path = tmp_path / "config.xml"
@@ -333,16 +333,14 @@ def test_config_accepts_loader_features(tmp_path) -> None:
         <config>
           <constants factor_root="factors" />
           <combo>
-            <loader dtype="float16">
-              <features>
-                <factor name="factor_a" path="factor_a">
-                  <op name="truncate" min="-2" max="2" />
-                </factor>
-                <alpha name="base_lgbm" dump_path="{alpha_path}" mode="read_dump">
-                  <op name="nan_to_num" value="0" />
-                </alpha>
-              </features>
-            </loader>
+            <data dtype="float16">
+              <item name="factor_a" module="builtin.factor" path="factor_a" role="factor">
+                <op name="truncate" min="-2" max="2" />
+              </item>
+              <item name="base_lgbm" module="builtin.alpha_parquet" path="{alpha_path}" role="factor" mode="read_dump">
+                <op name="nan_to_num" value="0" />
+              </item>
+            </data>
           </combo>
         </config>
         """,
@@ -350,35 +348,78 @@ def test_config_accepts_loader_features(tmp_path) -> None:
     )
 
     loaded = load_config(str(xml_path))
-    features = loaded["combo"]["loader"]["features"]
-
-    assert len(features) == 2
-    assert features[0]["kind"] == "factor"
-    assert features[0]["name"] == "factor_a"
-    assert features[0]["path"].endswith("/factors/factor_a")
-    assert features[0]["ops"][0]["params"] == {"min": -2, "max": 2}
-    assert features[1]["kind"] == "alpha"
-    assert features[1]["path"] == str(alpha_path.resolve())
-    assert loaded["combo"]["loader"]["ashare_data_path"].endswith("/AshareCache")
     data_items = loaded["combo"]["loader"]["data_items"]
+
     assert len(data_items) == 2
     assert data_items[0]["role"] == "factor"
     assert data_items[0]["module"] == "builtin.factor"
+    assert data_items[0]["path"].endswith("/factors/factor_a")
     assert data_items[0]["ops"][0]["params"] == {"min": -2, "max": 2}
     assert data_items[1]["module"] == "builtin.alpha_parquet"
+    assert data_items[1]["path"] == str(alpha_path.resolve())
+
+    legacy_xml_path = tmp_path / "legacy.xml"
+    legacy_xml_path.write_text(
+        """
+        <config>
+          <combo>
+            <loader>
+              <factor_paths>
+                <path>factor_a</path>
+              </factor_paths>
+            </loader>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="<combo><loader> is no longer supported"):
+        load_config(str(legacy_xml_path))
 
 
-def test_config_rejects_apply_global_ops_flag(tmp_path) -> None:
+def test_config_rejects_loader_node(tmp_path) -> None:
     from config import load_config
 
     xml_path = tmp_path / "config.xml"
     xml_path.write_text(
-        '<config><combo><loader apply_global_ops="false" /></combo></config>',
+        '<config><combo><loader dtype="float16" /></combo></config>',
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="apply_global_ops"):
+    with pytest.raises(ValueError, match="<combo><loader> is no longer supported"):
         load_config(str(xml_path))
+
+
+def test_config_rejects_legacy_data_item_aliases(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <combo>
+            <data>
+              <item name="alpha.bad" source="builtin.factor" path="factor_a" role="factor" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported legacy attribute"):
+        load_config(str(xml_path))
+
+    with pytest.raises(ValueError, match="unsupported legacy key"):
+        DataRegistry(
+            [{"name": "alpha.bad", "source": "builtin.factor", "path": "factor_a", "role": "factor"}],
+            universe=Universe(dates=(20200101,), codes=("000001",), dtype=torch.float32),
+            data_start_ds=20200101,
+            ashare_data_path=None,
+            factor_root=None,
+            config_path=None,
+        )
 
 
 def test_config_accepts_research_loader_and_dataset_paths(tmp_path) -> None:
@@ -637,60 +678,111 @@ def test_config_imports_data_pack(tmp_path) -> None:
     assert items[0]["path"].endswith("/factors/pack_a")
 
 
-def test_alpha_parquet_item_source_loads_date_and_reindexes_codes(tmp_path) -> None:
+def test_config_import_can_filter_roles_from_full_config(tmp_path) -> None:
+    from config import load_config
+
+    pack_path = tmp_path / "source_config.xml"
+    pack_path.write_text(
+        """
+        <config>
+          <constants factor_root="factors" />
+          <combo>
+            <data>
+              <import preset="barra" />
+              <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor">
+                <op name="neut(size)" />
+              </item>
+              <item name="label.ret1" module="builtin.label" path="label1d" role="label" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        f"""
+        <config>
+          <constants factor_root="factors" />
+          <combo>
+            <data>
+              <import path="{pack_path.name}" role="factor" />
+              <item name="label.local" module="builtin.label" path="label1d" role="label" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    loader = loaded["combo"]["loader"]
+    items = loader["data_items"]
+
+    assert loader["data_presets"] == ("barra",)
+    assert [item["name"] for item in items] == ["factor.pack_a", "label.local"]
+    assert items[0]["ops"][0]["name"] == "neut(size)"
+
+
+def test_data_registry_builtin_alpha_parquet_loads_date_and_reindexes_codes(tmp_path) -> None:
     alpha_path = tmp_path / "alpha.parquet"
     pd.DataFrame(
         [[1.0, 2.0], [3.0, 4.0]],
         index=[20200101, 20200102],
         columns=["1", "000002"],
     ).to_parquet(alpha_path)
-    source = AlphaParquetItemSource(
-        FeatureSpec(
-            kind="alpha",
-            name="base",
-            path=str(alpha_path),
-            ops=(OpSpec("nan_to_num", {"value": 0.0}),),
-        ),
-        dtype=torch.float32,
-        codes=["000001", "000002", "000003"],
+    registry, _ = _fake_registry(
+        [
+            DataItem(
+                name="alpha.base",
+                module="builtin.alpha_parquet",
+                path=str(alpha_path),
+                role="factor",
+                ops=(OpSpec("nan_to_num", {"value": 0.0}),),
+            )
+        ]
     )
 
-    loaded = source.load_day(20200102)
+    registry._ensure_range(("alpha.base",), 20200102, 20200102)
+    loaded = registry.get_data("alpha.base")[registry.universe.date2idx(20200102)]
 
     assert loaded.dtype == torch.float32
     assert torch.equal(loaded, torch.tensor([3.0, 4.0, 0.0]))
 
 
-def test_alpha_parquet_item_source_supports_barra_neut_op(tmp_path) -> None:
+def test_data_registry_builtin_alpha_parquet_supports_neut_op(tmp_path) -> None:
     alpha_path = tmp_path / "alpha.parquet"
     pd.DataFrame(
         [[4.0, 7.0, 10.0]],
         index=[20200102],
         columns=["000001", "000002", "000003"],
     ).to_parquet(alpha_path)
-
-    class _FakeBarraSource:
-        def load_day(self, style_name: str, ds: int) -> torch.Tensor:
-            assert ds == 20200102
-            if style_name == "size":
-                return torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-            if style_name == "btop":
-                return torch.tensor([2.0, 3.0, 4.0], dtype=torch.float32)
-            raise AssertionError(f"unexpected style_name={style_name}")
-
-    source = AlphaParquetItemSource(
-        FeatureSpec(
-            kind="alpha",
-            name="base",
-            path=str(alpha_path),
-            ops=(OpSpec("neut(size, btop)", {}),),
-        ),
-        dtype=torch.float32,
-        codes=["000001", "000002", "000003"],
-        barra_source=_FakeBarraSource(),
+    registry, _ = _fake_registry(
+        [
+            DataItem(
+                name="alpha.base",
+                module="builtin.alpha_parquet",
+                path=str(alpha_path),
+                role="factor",
+                ops=(OpSpec("neut(size, btop)", {}),),
+            ),
+            DataItem(
+                name="barra.size",
+                module="test.tensor",
+                role="aux",
+                params={"values": torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)},
+            ),
+            DataItem(
+                name="barra.btop",
+                module="test.tensor",
+                role="aux",
+                params={"values": torch.tensor([[2.0, 3.0, 4.0]]).repeat(4, 1)},
+            ),
+        ]
     )
 
-    loaded = source.load_day(20200102)
+    registry._ensure_range(("alpha.base",), 20200102, 20200102)
+    loaded = registry.get_data("alpha.base")[registry.universe.date2idx(20200102)]
 
     assert loaded.dtype == torch.float32
     assert _finite_abs_max(loaded) < 1e-4

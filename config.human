@@ -15,11 +15,10 @@
     <output ... />
     <runtime ... />
     <model ... />
-    <loader ...>
-      <factor_paths>
-        <path>factor_name_or_path</path>
-      </factor_paths>
-    </loader>
+    <data ...>
+      <item name="alpha.example" module="builtin.factor" path="factor_name_or_path" role="factor" />
+      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+    </data>
     <defaults ... />
   </combo>
   <backtest ... />
@@ -40,7 +39,8 @@ load_config(path)
 - `<combo><model ... />` 允许额外属性，供研究模型自定义读取。
 - XML 中缺失的配置会从 `DEFAULT_CONFIG` 补齐。
 - XML 属性值会根据默认值类型自动转换：bool / int / float / torch dtype / string。
-- `factor_paths` 必须通过 `<factor_paths><path>...</path></factor_paths>` 子节点配置，不能直接写成 loader 属性。
+- 数据只能通过 `<combo><data><item ... /></data></combo>` 声明。
+- `<combo><loader ... />` 不再是 XML 配置入口；loader 运行时属性写在 `<combo><data ...>` 上。
 
 ---
 
@@ -88,7 +88,7 @@ bfloat16
 例如：
 
 ```xml
-<loader dtype="float16" />
+<data dtype="float16" />
 ```
 
 会得到：
@@ -121,11 +121,10 @@ combo.paths.model_path
 combo.paths.checkpoint_root
 combo.output.alpha_history_path
 combo.output.log_path
-combo.loader.label_path
-combo.loader.ashare_data_path
-combo.loader.valid_path
-combo.loader.filtered_path
-combo.loader.base_universe_path
+combo.data.ashare_data_path
+combo.data.valid_path
+combo.data.filtered_path
+combo.data.base_universe_path
 backtest.output_path
 monitor.output_path
 ```
@@ -134,9 +133,8 @@ monitor.output_path
 
 - 绝对路径保持绝对路径。
 - 相对路径会相对配置文件所在目录解析。
-- `factor_paths` 里的每个 `<path>`：
-  - 如果是绝对路径，保持原样。
-  - 如果是相对路径或因子名，会拼到 `constants.factor_root` 下。
+- `<item module="builtin.factor" path="...">` 的相对 path 会拼到 `constants.factor_root` 下。
+- `<item module="builtin.label" path="label1d">` 会使用 `{constants.cache_path}/AshareCache/1d_DailyLabel/DailyLabel.label1d`。
 
 例如配置文件在 `eg-torch/config.xml`：
 
@@ -146,11 +144,10 @@ monitor.output_path
   factor_root="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool"
 />
 
-<loader dtype="float16">
-  <factor_paths>
-    <path>cyz_20231130_01</path>
-  </factor_paths>
-</loader>
+<data dtype="float16">
+  <item name="alpha.cyz_20231130_01" module="builtin.factor" path="cyz_20231130_01" role="factor" />
+  <item name="label.default" module="builtin.label" path="label1d" role="label" />
+</data>
 ```
 
 最终 factor 路径类似：
@@ -177,7 +174,7 @@ XML：
 | 参数 | 默认值 | 类型 | 说明 |
 |---|---|---|---|
 | `cache_path` | `data/Cache` | path | 数据缓存根目录。代码会在其下拼 `AshareCache`。 |
-| `factor_root` | `data/Factor/FactorData` | path | 因子根目录。`factor_paths` 中的相对 path 会拼到这里。 |
+| `factor_root` | `data/Factor/FactorData` | path | 因子根目录。`builtin.factor` 的相对 path 会拼到这里。 |
 | `output_root` | `vendor/comb2/output` | path | 输出根目录，会派生 backtest、alpha_history、log 等路径。 |
 | `checkpoint_root` | `None` | path / None | checkpoint 根目录。为 `None` 或空时不保存 checkpoint。 |
 
@@ -192,20 +189,16 @@ combo.output.log_path = constants.output_root / "train.log"
 backtest.output_path = constants.output_root / "backtest"
 ```
 
-如果 `combo.loader.label_path` 没有显式配置，还会自动派生：
-
-```text
-{cache_path}/1d_DailyLabel/DailyLabel.label1d
-```
-
 同时自动派生：
 
 ```text
-combo.loader.ashare_data_path      = {cache_path}
-combo.loader.valid_path            = {cache_path}/Ashare
-combo.loader.filtered_path         = {cache_path}/AshareFiltered
-combo.loader.base_universe_path    = {cache_path}/1d_StockMask2/StockMask2.BaseUnivMask
+combo.data.ashare_data_path      = {cache_path}
+combo.data.valid_path            = {cache_path}/Ashare
+combo.data.filtered_path         = {cache_path}/AshareFiltered
+combo.data.base_universe_path    = {cache_path}/1d_StockMask2/StockMask2.BaseUnivMask
 ```
+
+解析后这些值会进入内部 `combo["loader"]` 字典，用于构造 `LoaderConfig`。
 
 ---
 
@@ -465,6 +458,10 @@ XML：
 | `dtype` | `float16` | torch.dtype | loader 输出 dtype。 |
 | `compression` | `none` | str | comb2 内部 X/buffer 压缩方式：`none` / `fp4` / `fp8`。 |
 | `data_start_ds` | `20160101` | int | 数据业务起点；不改变 Universe 的固定 tensor shape。 |
+| `ashare_data_path` | `{cache_path}/AshareCache` | path | AshareCache 根目录，供 label、Barra、mask 等内置读取使用。 |
+| `valid_path` | `{ashare_data_path}/Ashare` | path | valid mask 数据路径。 |
+| `filtered_path` | `{ashare_data_path}/AshareFiltered` | path | filtered mask 数据路径。 |
+| `base_universe_path` | `{ashare_data_path}/1d_StockMask2/StockMask2.BaseUnivMask` | path | base universe mask 数据路径。 |
 
 ### 10.0 研究员需要知道的行为
 
@@ -566,6 +563,12 @@ gen_label(ds, ret_days)
 <import path="packs/my_factors.xml" />
 ```
 
+如果引用的是一份完整任务 config，但只想导入其中的 feature 因子，可以加 role 过滤：
+
+```xml
+<import path="../0603.tcn.update/config.xml" role="factor" />
+```
+
 data-pack 文件：
 
 ```xml
@@ -594,23 +597,6 @@ def load_data(item, registry, start_ds: int, end_ds: int):
 | 共享路径 | 可使用 `registry.ashare_data_path`、`registry.factor_root`、`registry.config_path`。 |
 
 内部 DataRegistry 缓存、依赖解析、op 执行细节见 `vendor/comb2/docs/ARCHITECTURE.md`。
-
-### 10.1.3 旧 loader 兼容
-
-旧写法仍可用，解析后会转换成 `data_items`：
-
-```xml
-<loader dtype="float16" compression="none" data_start_ds="20160101">
-  <factor_paths>
-    <path>factor_a</path>
-    <path>factor_b</path>
-  </factor_paths>
-</loader>
-```
-
-`<loader><features>...</features></loader>` 也仍兼容，但新配置推荐使用 `<data><item ... /></data>`。
-
-兼容表示旧 XML 会被转换成当前 `DataItem`，并继续使用默认 `ComboDataLoader.gen_feature(ds)` 的全局 `cs_zscore -> truncate -> nan_to_num` 预处理。
 
 ### 10.2 compression
 
@@ -811,12 +797,11 @@ monitor.maybe_section
       seed="42"
     />
 
-    <loader dtype="float16" compression="none" data_start_ds="20160101">
-      <factor_paths>
-        <path>cyz_20231130_01</path>
-        <path>cyz_20231130_02</path>
-      </factor_paths>
-    </loader>
+    <data dtype="float16" compression="none" data_start_ds="20160101">
+      <item name="alpha.cyz_20231130_01" module="builtin.factor" path="cyz_20231130_01" role="factor" />
+      <item name="alpha.cyz_20231130_02" module="builtin.factor" path="cyz_20231130_02" role="factor" />
+      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+    </data>
   </combo>
 
   <backtest cash="10000000" fee_rate="0.0015" reserve_cash="0.95" />

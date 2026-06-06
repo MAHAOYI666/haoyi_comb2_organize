@@ -61,47 +61,21 @@
       dtype="float16"
       compression="none"
       data_start_ds="20160101"
-      label_path=""
       ashare_data_path=""
       valid_path=""
       filtered_path=""
       base_universe_path=""
     >
-      <!--
-      Optional data declaration examples:
-
-      <import preset="barra" />
-
-      <item name="alpha.example" module="builtin.factor" path="alpha1_20251008_01" role="factor">
-        <op name="neut(size, btop)" />
-        <op name="cs_zscore" />
-      </item>
-
+      <item name="alpha.yz_20250219_02" module="builtin.factor" path="yz_20250219_02" role="factor" display_name="yz_20250219_02" />
+      <item name="alpha.wjx_20240829_02" module="builtin.factor" path="wjx_20240829_02" role="factor" display_name="wjx_20240829_02" />
+      <item name="alpha.guanxl_05" module="builtin.factor" path="guanxl_05" role="factor" display_name="guanxl_05" />
+      <item name="alpha.alpha1_20251008_01" module="builtin.factor" path="alpha1_20251008_01" role="factor" display_name="alpha1_20251008_01" />
+      <item name="alpha.alpha2_20251008_02" module="builtin.factor" path="alpha2_20251008_02" role="factor" display_name="alpha2_20251008_02" />
+      <item name="alpha.alpha3_20251008_03" module="builtin.factor" path="alpha3_20251008_03" role="factor" display_name="alpha3_20251008_03" />
+      <item name="alpha.alpha4_20251008_04" module="builtin.factor" path="alpha4_20251008_04" role="factor" display_name="alpha4_20251008_04" />
+      <item name="alpha.alpha5_20251008_05" module="builtin.factor" path="alpha5_20251008_05" role="factor" display_name="alpha5_20251008_05" />
       <item name="label.default" module="builtin.label" path="label1d" role="label" />
-      -->
     </data>
-
-    <loader
-      dtype="float16"
-      compression="none"
-      data_start_ds="20160101"
-      label_path=""
-      ashare_data_path=""
-      valid_path=""
-      filtered_path=""
-      base_universe_path=""
-    >
-      <factor_paths>
-        <path>yz_20250219_02</path>
-        <path>wjx_20240829_02</path>
-        <path>guanxl_05</path>
-        <path>alpha1_20251008_01</path>
-        <path>alpha2_20251008_02</path>
-        <path>alpha3_20251008_03</path>
-        <path>alpha4_20251008_04</path>
-        <path>alpha5_20251008_05</path>
-      </factor_paths>
-    </loader>
 
     <defaults
       selection_module=""

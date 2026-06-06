@@ -1,9 +1,8 @@
-from src.DataRegistry import DataItem, DataRegistry, FeatureSpec, OpSpec, Universe
+from src.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
 
 __all__ = [
     "DataItem",
     "DataRegistry",
-    "FeatureSpec",
     "OpSpec",
     "Universe",
 ]

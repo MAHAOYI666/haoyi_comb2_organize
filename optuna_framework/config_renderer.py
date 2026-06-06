@@ -15,16 +15,24 @@ from optuna_framework.specs import RunPaths
 
 
 PATH_PATCH_KEYS = {
+    "config.constants.@cache_path",
+    "config.constants.@factor_root",
     "config.strategy.@start_ds",
     "config.strategy.@end_ds",
     "config.constants.@output_root",
     "config.constants.@checkpoint_root",
     "config.combo.paths.@model_path",
+    "config.combo.paths.@research_loader_path",
+    "config.combo.paths.@research_dataset_path",
     "config.combo.runtime.@snaptime",
 }
 
 _RELATIVE_PATH_SPECS = (
+    ("./constants", "cache_path"),
+    ("./constants", "factor_root"),
     ("./combo/paths", "model_path"),
+    ("./combo/paths", "research_loader_path"),
+    ("./combo/paths", "research_dataset_path"),
 )
 
 OPTUNA_RUNTIME_PATCH_KEYS = PATH_PATCH_KEYS | {
@@ -113,6 +121,15 @@ def _resolve_relative_paths(root: ET.Element, base_dir: Path) -> None:
         value = element.get(attr)
         if value and not Path(value).expanduser().is_absolute():
             element.set(attr, str((base_dir / value).resolve()))
+    for item in root.findall("./combo/data/item"):
+        module = (item.get("module") or "").strip().lower()
+        for attr in ("path", "config_path"):
+            value = item.get(attr)
+            if not value or Path(value).expanduser().is_absolute():
+                continue
+            if attr == "path" and module in {"factor", "builtin.factor", "label", "builtin.label", "barra_style", "builtin.barra_style"}:
+                continue
+            item.set(attr, str((base_dir / value).resolve()))
 
 
 def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None:

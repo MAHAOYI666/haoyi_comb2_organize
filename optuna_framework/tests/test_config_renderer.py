@@ -23,6 +23,8 @@ def test_render_baseline_params_only_changes_path_whitelist(tmp_path) -> None:
     assert root.find("./strategy").get("end_ds") == "20211231"
     assert root.find("./combo/runtime").get("snaptime") == "trial_00007_seg01"
     assert root.find("./combo/paths").get("model_path") == str((get_repo_root() / "eg-torch" / "model.py").resolve())
+    assert root.find("./combo/paths").get("research_loader_path") == str((get_repo_root() / "eg-torch" / "loader.py").resolve())
+    assert root.find("./combo/paths").get("research_dataset_path") == str((get_repo_root() / "eg-torch" / "dataset.py").resolve())
     assert root.find("./strategy").get("path") is None
     assert root.find("./constants").get("output_root") == str(run_paths.output_root)
     assert root.find("./constants").get("checkpoint_root") == str(run_paths.checkpoint_root)

@@ -13,7 +13,6 @@ Main types:
 | `Universe` | Shared axis metadata: `dates`, `codes`, `dtype`, `date2idx()`, `idx2date()`, `code2idx()`. |
 | `DataItem` | One declared data source from config: `name`, `module`, `path`, `role`, `ops`, `params`. |
 | `OpSpec` | One data item op declaration. |
-| `FeatureSpec` | Legacy feature declaration compatibility. |
 | `DataRegistry` | Maintains all data tensors, module cache, raw/processed load state, and `get_data(name)`. |
 
 Data cache model:
@@ -51,7 +50,6 @@ Supported built-in modules:
 | `builtin.label` | Read DailyLabel data. |
 | `builtin.alpha_parquet` | Read alpha parquet and align columns to `Universe.codes`. |
 | `builtin.barra_style` | Read Barra CNE5 style exposure data. |
-| `builtin.ref` | Compatibility reference to another data item. |
 
 Supported item ops:
 
@@ -198,6 +196,7 @@ Research dataset override points:
 
 ```text
 config XML
+  -> <combo><data> declarations and attrs
   -> LoaderConfig
   -> ResearchLoader or ComboDataLoader
   -> ResearchDataset or ComboTrainDataset

@@ -42,7 +42,6 @@ BARRA_PRESET_STYLES = (
     "size",
     "sizenl",
 )
-NEUT_OP_PATTERN = re.compile(r"^neut\(([^()]+)\)$", re.IGNORECASE)
 
 
 def _require_index_mask_cls():
@@ -85,47 +84,10 @@ class OpSpec:
     params: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class FeatureSpec:
-    kind: str
-    name: str
-    path: str | None = None
-    mode: str = "read_dump"
-    config_path: str | None = None
-    ops: tuple[OpSpec, ...] = ()
-
-
 def _coerce_op_spec(value: OpSpec | dict[str, Any]) -> OpSpec:
     if isinstance(value, OpSpec):
         return value
     return OpSpec(name=str(value["name"]), params=dict(value.get("params", {})))
-
-
-def _coerce_feature_spec(value: FeatureSpec | dict[str, Any]) -> FeatureSpec:
-    if isinstance(value, FeatureSpec):
-        return value
-    ops = tuple(_coerce_op_spec(op) for op in value.get("ops", ()))
-    return FeatureSpec(
-        kind=str(value["kind"]),
-        name=str(value["name"]),
-        path=value.get("path"),
-        mode=str(value.get("mode", "read_dump")),
-        config_path=value.get("config_path"),
-        ops=ops,
-    )
-
-
-def _parse_barra_neut_name(name: str) -> tuple[str, ...] | None:
-    match = NEUT_OP_PATTERN.match(name.strip())
-    if match is None:
-        return None
-    raw_styles = match.group(1).strip()
-    if not raw_styles:
-        raise ValueError(f"invalid neutralization op: {name}")
-    style_names = tuple(part.strip() for part in raw_styles.split(",") if part.strip())
-    if not style_names:
-        raise ValueError(f"invalid neutralization op: {name}")
-    return style_names
 
 
 def _normalize_barra_style_name(style_name: str) -> str:
@@ -197,7 +159,10 @@ class OpRequirements:
 def _coerce_data_item(value: DataItem | dict[str, Any]) -> DataItem:
     if isinstance(value, DataItem):
         return value
-    module = value.get("module", value.get("source", value.get("loader")))
+    for legacy_key in ("dump_path", "source", "loader"):
+        if legacy_key in value:
+            raise ValueError(f"data item {value.get('name')!r} uses unsupported legacy key {legacy_key!r}; use path/module")
+    module = value.get("module")
     if not module:
         raise ValueError(f"data item {value.get('name')!r} requires module")
     ops = tuple(_coerce_op_spec(op) for op in value.get("ops", ()))
@@ -374,8 +339,6 @@ class DataRegistry:
             "builtin.alpha_parquet": _load_alpha_parquet,
             "barra_style": _load_barra_style,
             "builtin.barra_style": _load_barra_style,
-            "ref": _load_ref_data,
-            "builtin.ref": _load_ref_data,
         }
 
     def _preset_items(self, presets: Sequence[str]) -> list[DataItem]:
@@ -592,232 +555,3 @@ def _load_alpha_parquet(item: DataItem, registry: DataRegistry, start_ds: int, e
     dates = [registry.universe.idx2date(idx) for idx in range(registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1)]
     aligned = frame.reindex(index=dates, columns=registry.universe.codes)
     return torch.as_tensor(aligned.to_numpy(dtype=np.float32), dtype=registry.universe.dtype)
-
-
-def _load_ref_data(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
-    ref_name = item.params.get("data") or item.params.get("ref") or item.path
-    if not ref_name:
-        raise ValueError(f"ref data {item.name!r} requires params.data")
-    registry._ensure_processed_range(str(ref_name), start_ds, end_ds)
-    lo = registry.universe.date2idx(start_ds)
-    hi = registry.universe.date2idx(end_ds)
-    return registry.get_data(str(ref_name))[lo : hi + 1]
-
-
-class BarraStyleSource:
-    def __init__(self, ashare_data_path: str, dtype: torch.dtype):
-        self.ashare_data_path = ashare_data_path
-        self.dtype = dtype
-        self.root = Path(ashare_data_path) / BARRA_STYLE_DIRNAME
-        self._path_by_style = self._discover_paths()
-        self._mmap_by_style: dict[str, Memmaper2] = {}
-        self._day_cache: dict[tuple[str, int], torch.Tensor] = {}
-
-    def _discover_paths(self) -> dict[str, Path]:
-        if not self.root.exists():
-            raise FileNotFoundError(f"Barra style directory not found: {self.root}")
-        path_by_style: dict[str, Path] = {}
-        for path in sorted(self.root.iterdir(), key=lambda item: item.name):
-            if not path.name.startswith(BARRA_STYLE_PREFIX):
-                continue
-            style_name = path.name.removeprefix(BARRA_STYLE_PREFIX).strip()
-            if style_name:
-                path_by_style[style_name.lower()] = path
-        if not path_by_style:
-            raise FileNotFoundError(f"No Barra style files found under: {self.root}")
-        return path_by_style
-
-    def _normalize_style_name(self, style_name: str) -> str:
-        normalized = _normalize_barra_style_name(style_name)
-        if normalized not in self._path_by_style:
-            supported = ", ".join(sorted(self._path_by_style))
-            raise KeyError(f"unsupported Barra style factor: {style_name}. Available: {supported}")
-        return normalized
-
-    def _get_mmap(self, style_name: str) -> Memmaper2:
-        normalized = self._normalize_style_name(style_name)
-        mmap = self._mmap_by_style.get(normalized)
-        if mmap is None:
-            mmap = _require_memmaper2_cls()(str(self._path_by_style[normalized]))
-            self._mmap_by_style[normalized] = mmap
-        return mmap
-
-    def load_day(self, style_name: str, ds: int) -> torch.Tensor:
-        normalized = self._normalize_style_name(style_name)
-        cache_key = (normalized, int(ds))
-        cached = self._day_cache.pop(cache_key, None)
-        if cached is not None:
-            self._day_cache[cache_key] = cached
-            return cached
-        data = self._get_mmap(normalized).load(start_ds=int(ds), end_ds=int(ds))[:]
-        exposure = torch.as_tensor(np.asarray(data)[0], dtype=self.dtype)
-        self._day_cache[cache_key] = exposure
-        return exposure
-
-
-def _apply_feature_ops(
-    x: torch.Tensor,
-    ops: Sequence[OpSpec],
-    *,
-    ds: int | None = None,
-    barra_source: BarraStyleSource | None = None,
-) -> torch.Tensor:
-    if not ops:
-        return x
-    out = x.to(torch.float32)
-    for op in ops:
-        raw_name = op.name.strip()
-        name = raw_name.lower()
-        params = op.params
-        if name in {"cs_zscore", "zscore"}:
-            out = cs_zscore(out.unsqueeze(0)).squeeze(0)
-        elif name == "truncate":
-            out = truncate(out, float(params.get("min", -4.0)), float(params.get("max", 4.0)))
-        elif name in {"nan_to_num", "fillna"}:
-            out = nan_to_num(out, float(params.get("value", 0.0)))
-        elif name == "winsorize_by_quantile":
-            out = winsorize_by_quantile(out, float(params.get("low", 0.01)), float(params.get("high", 0.99)))
-        elif name == "normalize_by_max_abs":
-            out = normalize_by_max_abs(out)
-        elif (style_names := _parse_barra_neut_name(raw_name)) is not None:
-            if ds is None:
-                raise ValueError(f"{op.name} requires ds context")
-            if barra_source is None:
-                raise ValueError(f"{op.name} requires loader.ashare_data_path / BarraCNE5 support")
-            out = neut(out, [barra_source.load_day(style_name, ds).to(torch.float32) for style_name in style_names])
-        else:
-            raise ValueError(f"unsupported feature op: {op.name}")
-    return out
-
-
-class FeatureItemSource:
-    feature_dim = 1
-
-    def __init__(self, spec: FeatureSpec, dtype: torch.dtype, barra_source: BarraStyleSource | None = None):
-        self.spec = spec
-        self.name = spec.name
-        self.dtype = dtype
-        self.barra_source = barra_source
-
-    def _load_raw_day(self, ds: int) -> torch.Tensor:
-        raise NotImplementedError
-
-    def load_day(self, ds: int) -> torch.Tensor:
-        x = self._load_raw_day(int(ds))
-        x = _apply_feature_ops(x, self.spec.ops, ds=int(ds), barra_source=self.barra_source)
-        x[torch.isinf(x)] = torch.nan
-        return x.to(self.dtype)
-
-    def prefetch_days(self, days: Sequence[int]):
-        return None
-
-
-class MemmapFactorItemSource(FeatureItemSource):
-    def __init__(self, spec: FeatureSpec, dtype: torch.dtype, barra_source: BarraStyleSource | None = None):
-        super().__init__(spec, dtype, barra_source=barra_source)
-        if not spec.path:
-            raise ValueError(f"factor feature {spec.name!r} requires path")
-        self.path = spec.path
-        self._mmap: Memmaper2 | None = None
-        self._day_cache: dict[int, torch.Tensor] = {}
-
-    def _get_mmap(self) -> Memmaper2:
-        if self._mmap is None:
-            self._mmap = _require_memmaper2_cls()(self.path)
-        return self._mmap
-
-    def _load_raw_day(self, ds: int) -> torch.Tensor:
-        cached = self._day_cache.pop(int(ds), None)
-        if cached is not None:
-            return cached
-        monitor = getattr(self, "monitor", None)
-        with _maybe_section(monitor, "feature.factor_item_load", ds, level="full"):
-            data = self._get_mmap().load(start_ds=ds, end_ds=ds)[:]
-        return torch.as_tensor(np.asarray(data)[0], dtype=self.dtype)
-
-    def prefetch_days(self, days: Sequence[int]):
-        days = list(dict.fromkeys(int(ds) for ds in days))
-        needed_days = [ds for ds in days if ds not in self._day_cache]
-        if not needed_days:
-            return
-        start_ds = min(needed_days)
-        end_ds = max(needed_days)
-        day_set = set(needed_days)
-        trading_days = [int(ds) for ds in MASK.date if start_ds <= int(ds) <= end_ds]
-        data = self._get_mmap().load(start_ds=start_ds, end_ds=end_ds)[:]
-        arr = np.asarray(data)
-        for offset, ds in enumerate(trading_days[: len(arr)]):
-            if ds in day_set:
-                self._day_cache[ds] = torch.as_tensor(arr[offset], dtype=self.dtype)
-
-
-class AlphaParquetItemSource(FeatureItemSource):
-    def __init__(self, spec: FeatureSpec, dtype: torch.dtype, codes: Sequence[int | str], barra_source: BarraStyleSource | None = None):
-        super().__init__(spec, dtype, barra_source=barra_source)
-        if spec.mode != "read_dump":
-            raise NotImplementedError(f"alpha mode {spec.mode!r} is not implemented in the MVP")
-        if not spec.path:
-            raise ValueError(f"alpha feature {spec.name!r} requires path")
-        self.path = spec.path
-        self.codes = [str(code).zfill(6) for code in codes]
-        self._frame: pd.DataFrame | None = None
-
-    def _load_frame(self) -> pd.DataFrame:
-        if self._frame is None:
-            frame = pd.read_parquet(self.path)
-            frame.index = frame.index.astype(int)
-            frame.columns = frame.columns.astype(str).str.zfill(6)
-            self._frame = frame.sort_index().reindex(columns=self.codes)
-        return self._frame
-
-    def _load_raw_day(self, ds: int) -> torch.Tensor:
-        monitor = getattr(self, "monitor", None)
-        with _maybe_section(monitor, "feature.alpha_parquet_load", ds, level="full"):
-            frame = self._load_frame()
-            if int(ds) not in frame.index:
-                raise KeyError(f"alpha feature {self.name!r} missing date {ds} in {self.path}")
-            row = frame.loc[int(ds)]
-        return torch.as_tensor(row.to_numpy(dtype=np.float32), dtype=self.dtype)
-
-
-class CompositeFeatureSource:
-    def __init__(self, specs: Sequence[FeatureSpec], dtype: torch.dtype, codes: Sequence[int | str], ashare_data_path: str | None = None):
-        if not specs:
-            raise ValueError("at least one feature is required")
-        self.specs = tuple(specs)
-        self.dtype = dtype
-        self.barra_source = self._build_barra_source(ashare_data_path)
-        self.sources = [self._build_source(spec, dtype, codes) for spec in self.specs]
-        self.feature_dim = sum(source.feature_dim for source in self.sources)
-        self.feature_names = tuple(source.name for source in self.sources)
-
-    def _build_barra_source(self, ashare_data_path: str | None) -> BarraStyleSource | None:
-        needs_barra = any(_parse_barra_neut_name(op.name) is not None for spec in self.specs for op in spec.ops)
-        if not needs_barra:
-            return None
-        if not ashare_data_path:
-            raise ValueError("Barra neutralization requires loader.ashare_data_path")
-        return BarraStyleSource(ashare_data_path, dtype=self.dtype)
-
-    def _build_source(self, spec: FeatureSpec, dtype: torch.dtype, codes: Sequence[int | str]) -> FeatureItemSource:
-        kind = spec.kind.strip().lower()
-        if kind == "factor":
-            return MemmapFactorItemSource(spec, dtype, barra_source=self.barra_source)
-        if kind == "alpha":
-            return AlphaParquetItemSource(spec, dtype, codes, barra_source=self.barra_source)
-        raise ValueError(f"unsupported feature kind: {spec.kind}")
-
-    def _sync_monitor_refs(self):
-        monitor = getattr(self, "monitor", None)
-        for source in self.sources:
-            source.monitor = monitor
-
-    def load_day(self, ds: int) -> torch.Tensor:
-        self._sync_monitor_refs()
-        parts = [source.load_day(ds) for source in self.sources]
-        return torch.stack(parts, dim=-1)
-
-    def prefetch_days(self, days: Sequence[int]):
-        self._sync_monitor_refs()
-        for source in self.sources:
-            source.prefetch_days(days)

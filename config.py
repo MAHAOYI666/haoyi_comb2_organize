@@ -55,22 +55,102 @@ DEFAULT_CONFIG = {
         "model": {},
         "data": {
             "imports": (),
-            "items": (),
+            "items": (
+                {
+                    "name": "alpha.yz_20250219_02",
+                    "module": "builtin.factor",
+                    "path": "yz_20250219_02",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "yz_20250219_02"},
+                },
+                {
+                    "name": "alpha.wjx_20240829_02",
+                    "module": "builtin.factor",
+                    "path": "wjx_20240829_02",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "wjx_20240829_02"},
+                },
+                {
+                    "name": "alpha.guanxl_05",
+                    "module": "builtin.factor",
+                    "path": "guanxl_05",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "guanxl_05"},
+                },
+                {
+                    "name": "alpha.alpha1_20251008_01",
+                    "module": "builtin.factor",
+                    "path": "alpha1_20251008_01",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "alpha1_20251008_01"},
+                },
+                {
+                    "name": "alpha.alpha2_20251008_02",
+                    "module": "builtin.factor",
+                    "path": "alpha2_20251008_02",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "alpha2_20251008_02"},
+                },
+                {
+                    "name": "alpha.alpha3_20251008_03",
+                    "module": "builtin.factor",
+                    "path": "alpha3_20251008_03",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "alpha3_20251008_03"},
+                },
+                {
+                    "name": "alpha.alpha4_20251008_04",
+                    "module": "builtin.factor",
+                    "path": "alpha4_20251008_04",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "alpha4_20251008_04"},
+                },
+                {
+                    "name": "alpha.alpha5_20251008_05",
+                    "module": "builtin.factor",
+                    "path": "alpha5_20251008_05",
+                    "role": "factor",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {"display_name": "alpha5_20251008_05"},
+                },
+                {
+                    "name": "label.default",
+                    "module": "builtin.label",
+                    "path": "label1d",
+                    "role": "label",
+                    "mode": "read_dump",
+                    "config_path": None,
+                    "ops": (),
+                    "params": {},
+                },
+            ),
             "presets": (),
             "attrs": {},
         },
         "loader": {
-            "factor_paths": (
-                "yz_20250219_02",
-                "wjx_20240829_02",
-                "guanxl_05",
-                "alpha1_20251008_01",
-                "alpha2_20251008_02",
-                "alpha3_20251008_03",
-                "alpha4_20251008_04",
-                "alpha5_20251008_05",
-            ),
-            "label_path": None,
             "ashare_data_path": None,
             "dtype": torch.float16,
             "compression": "none",
@@ -78,7 +158,6 @@ DEFAULT_CONFIG = {
             "valid_path": None,
             "filtered_path": None,
             "base_universe_path": None,
-            "features": None,
             "data_items": (),
             "data_presets": (),
             "factor_root": None,
@@ -132,7 +211,6 @@ PATH_FIELDS = {
     ("combo", "paths", "checkpoint_root"),
     ("combo", "output", "alpha_history_path"),
     ("combo", "output", "log_path"),
-    ("combo", "loader", "label_path"),
     ("combo", "loader", "ashare_data_path"),
     ("combo", "loader", "valid_path"),
     ("combo", "loader", "filtered_path"),
@@ -141,9 +219,20 @@ PATH_FIELDS = {
     ("monitor", "output_path"),
 }
 
-FEATURE_PATH_FIELDS = {"path", "config_path"}
 DATA_PATH_FIELDS = {"path", "config_path"}
 BUILTIN_DATA_PRESETS = {"barra"}
+DATA_ATTR_DEFAULTS = {
+    key: DEFAULT_CONFIG["combo"]["loader"][key]
+    for key in (
+        "ashare_data_path",
+        "dtype",
+        "compression",
+        "data_start_ds",
+        "valid_path",
+        "filtered_path",
+        "base_universe_path",
+    )
+}
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -220,22 +309,6 @@ def _parse_section_attributes(element: ET.Element | None, default_section: dict,
     return parsed
 
 
-def _parse_factor_paths(loader_element: ET.Element | None, default_paths) -> tuple[str, ...] | None:
-    if loader_element is None:
-        return None
-    factor_paths_element = loader_element.find("factor_paths")
-    if factor_paths_element is None:
-        return None
-    paths = []
-    for path_element in factor_paths_element.findall("path"):
-        path_value = (path_element.text or "").strip()
-        if path_value:
-            paths.append(path_value)
-    if not paths:
-        return tuple(default_paths)
-    return tuple(paths)
-
-
 def _parse_feature_ops(feature_element: ET.Element) -> tuple[dict[str, Any], ...]:
     ops = []
     for op_element in feature_element.findall("op"):
@@ -251,20 +324,14 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     attrs = dict(item_element.attrib)
     name = attrs.pop("name", None)
     path = attrs.pop("path", None)
-    dump_path = attrs.pop("dump_path", None)
-    if path is not None and dump_path is not None:
-        raise ValueError("<item> cannot define both path and dump_path")
-    if path is None:
-        path = dump_path
     config_path = attrs.pop("config_path", None)
     mode = attrs.pop("mode", "read_dump")
     role = attrs.pop("role", "aux")
-    source = attrs.pop("source", None)
-    loader = attrs.pop("loader", None)
     module = attrs.pop("module", None)
-    if source is not None and (loader is not None or module is not None):
-        raise ValueError("<item> should use only source=...; loader/module are compatibility aliases")
-    module = source or loader or module
+    legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
+    if legacy_keys:
+        extra = ", ".join(sorted(legacy_keys))
+        raise ValueError(f"<item> uses unsupported legacy attribute(s): {extra}; use path/module")
     if not name:
         raise ValueError("<item> requires name")
     if not module:
@@ -286,18 +353,28 @@ def _parse_data_import(import_element: ET.Element) -> dict[str, Any]:
     attrs = dict(import_element.attrib)
     path = attrs.pop("path", None)
     preset = attrs.pop("preset", None)
+    role = attrs.pop("role", None)
+    roles = attrs.pop("roles", None)
     if bool(path) == bool(preset):
         raise ValueError("<import> requires exactly one of path=... or preset=...")
+    if role and roles:
+        raise ValueError("<import> supports only one of role=... or roles=...")
     if attrs:
         extra = ", ".join(sorted(attrs))
         raise ValueError(f"unsupported attribute(s) on <import>: {extra}")
-    return {"path": path, "preset": preset}
+    role_filter = role or roles
+    parsed_roles = None
+    if role_filter:
+        parsed_roles = tuple(part.strip().lower() for part in role_filter.split(",") if part.strip())
+        if not parsed_roles:
+            raise ValueError("<import> role filter cannot be empty")
+    return {"path": path, "preset": preset, "roles": parsed_roles}
 
 
 def _parse_data_section(data_element: ET.Element | None) -> dict[str, Any] | None:
     if data_element is None:
         return None
-    attrs = _parse_section_attributes(data_element, DEFAULT_CONFIG["combo"]["loader"])
+    attrs = _parse_section_attributes(data_element, DATA_ATTR_DEFAULTS)
     imports = []
     items = []
     for child in list(data_element):
@@ -308,70 +385,11 @@ def _parse_data_section(data_element: ET.Element | None) -> dict[str, Any] | Non
             items.append(_parse_data_item(child))
             continue
         raise ValueError(f"unsupported tag <{child.tag}> under <{data_element.tag}>")
-    return {
-        "attrs": attrs,
-        "imports": tuple(imports),
-        "items": tuple(items),
-    }
-
-
-def _parse_features(loader_element: ET.Element | None) -> tuple[dict[str, Any], ...] | None:
-    if loader_element is None:
-        return None
-    features_element = loader_element.find("features")
-    if features_element is None:
-        return None
-    features = []
-    for feature_element in list(features_element):
-        if feature_element.tag == "ref":
-            attrs = dict(feature_element.attrib)
-            data_name = attrs.pop("data", None)
-            name = attrs.pop("name", None) or data_name
-            if not data_name:
-                raise ValueError("<ref> requires data")
-            if attrs:
-                extra = ", ".join(sorted(attrs))
-                raise ValueError(f"unsupported attribute(s) on <ref>: {extra}")
-            features.append(
-                {
-                    "kind": "ref",
-                    "name": str(name),
-                    "data": str(data_name),
-                    "ops": _parse_feature_ops(feature_element),
-                }
-            )
-            continue
-        if feature_element.tag not in {"factor", "alpha"}:
-            raise ValueError(f"unsupported feature tag <{feature_element.tag}>")
-        attrs = dict(feature_element.attrib)
-        name = attrs.pop("name", None)
-        path = attrs.pop("path", None)
-        dump_path = attrs.pop("dump_path", None)
-        if path is not None and dump_path is not None:
-            raise ValueError(f"<{feature_element.tag}> cannot define both path and dump_path")
-        if path is None:
-            path = dump_path
-        mode = attrs.pop("mode", "read_dump")
-        config_path = attrs.pop("config_path", None)
-        if attrs:
-            extra = ", ".join(sorted(attrs))
-            raise ValueError(f"unsupported attribute(s) on <{feature_element.tag}>: {extra}")
-        if not name:
-            if path:
-                name = Path(path).name
-            else:
-                raise ValueError(f"<{feature_element.tag}> requires name when path is omitted")
-        features.append(
-            {
-                "kind": feature_element.tag,
-                "name": name,
-                "path": path,
-                "mode": mode,
-                "config_path": config_path,
-                "ops": _parse_feature_ops(feature_element),
-            }
-        )
-    return tuple(features)
+    parsed: dict[str, Any] = {"attrs": attrs}
+    if imports or items:
+        parsed["imports"] = tuple(imports)
+        parsed["items"] = tuple(items)
+    return parsed
 
 
 def _resolve_path(value: str | None, base_dir: Path) -> str | None:
@@ -383,38 +401,20 @@ def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     return str(path.resolve())
 
 
-def _resolve_factor_path(factor_root: str, path: str) -> str:
-    factor_path = Path(path).expanduser()
-    if not factor_path.is_absolute():
-        factor_path = Path(factor_root) / factor_path
-    return str(factor_path.resolve())
-
-
-def _resolve_feature_path(config_path: str | None, *, kind: str, field: str, factor_root: str, base_dir: Path) -> str | None:
-    if config_path is None:
-        return None
-    path = Path(config_path).expanduser()
-    if path.is_absolute():
-        return str(path.resolve())
-    if kind == "factor" and field == "path":
-        return str((Path(factor_root) / path).resolve())
-    return str((base_dir / path).resolve())
-
-
-def _resolve_data_item_path(value: str | None, *, source: str, field: str, factor_root: str, base_dir: Path) -> str | None:
+def _resolve_data_item_path(value: str | None, *, module: str, field: str, factor_root: str, base_dir: Path) -> str | None:
     if value is None:
         return None
     path = Path(value).expanduser()
-    normalized_source = source.strip().lower()
-    if normalized_source.startswith("builtin."):
-        normalized_source = normalized_source.removeprefix("builtin.")
+    normalized_module = module.strip().lower()
+    if normalized_module.startswith("builtin."):
+        normalized_module = normalized_module.removeprefix("builtin.")
     if path.is_absolute():
         return str(path.resolve())
-    if field == "path" and normalized_source == "factor":
+    if field == "path" and normalized_module == "factor":
         return str((Path(factor_root) / path).resolve())
-    if field == "path" and normalized_source == "barra_style":
+    if field == "path" and normalized_module == "barra_style":
         return value
-    if field == "path" and normalized_source == "label" and value == "label1d":
+    if field == "path" and normalized_module == "label" and value == "label1d":
         return value
     return str((base_dir / path).resolve())
 
@@ -426,12 +426,6 @@ def _load_data_pack(path: Path) -> dict[str, Any]:
         parsed = {"imports": (), "items": ()}
         if combo_element is not None:
             parsed = _parse_data_section(combo_element.find("data")) or parsed
-            factor_paths = _parse_factor_paths(combo_element.find("loader"), ())
-            if factor_paths:
-                return {
-                    "imports": tuple(parsed.get("imports", ())),
-                    "items": tuple(parsed.get("items", ())) + tuple(_factor_paths_to_data_items(factor_paths)),
-                }
         return parsed
     if root.tag not in {"data-pack", "data"}:
         raise ValueError(f"data pack root tag must be <data-pack> or <data>: {path}")
@@ -444,13 +438,16 @@ def _resolve_data_pack(
     *,
     base_dir: Path,
     factor_root: str,
-    seen_paths: set[str],
+    seen_paths: set[tuple[str, tuple[str, ...] | None]],
     presets: list[str],
 ) -> list[dict[str, Any]]:
     resolved_items: list[dict[str, Any]] = []
     for import_spec in parsed.get("imports", ()):
+        role_filter = import_spec.get("roles")
         preset = import_spec.get("preset")
         if preset is not None:
+            if role_filter is not None and "aux" not in role_filter:
+                continue
             preset_name = str(preset).strip().lower()
             if preset_name not in BUILTIN_DATA_PRESETS:
                 raise ValueError(f"unsupported built-in data preset: {preset}")
@@ -459,85 +456,39 @@ def _resolve_data_pack(
             continue
         import_path = _resolve_path(import_spec.get("path"), base_dir)
         assert import_path is not None
-        if import_path in seen_paths:
+        seen_key = (import_path, role_filter)
+        if seen_key in seen_paths:
             continue
-        seen_paths.add(import_path)
+        seen_paths.add(seen_key)
         nested_path = Path(import_path)
         nested = _load_data_pack(nested_path)
-        resolved_items.extend(
-            _resolve_data_pack(
-                nested,
-                base_dir=nested_path.parent,
-                factor_root=factor_root,
-                seen_paths=seen_paths,
-                presets=presets,
-            )
+        nested_presets: list[str] = []
+        nested_items = _resolve_data_pack(
+            nested,
+            base_dir=nested_path.parent,
+            factor_root=factor_root,
+            seen_paths=seen_paths,
+            presets=nested_presets,
         )
+        if role_filter is not None:
+            nested_items = [item for item in nested_items if str(item.get("role", "aux")).lower() in role_filter]
+        resolved_items.extend(nested_items)
+        for nested_preset in nested_presets:
+            if nested_preset not in presets:
+                presets.append(nested_preset)
     for item in parsed.get("items", ()):
         resolved_item = dict(item)
         module = str(resolved_item["module"])
         for field in DATA_PATH_FIELDS:
             resolved_item[field] = _resolve_data_item_path(
                 resolved_item.get(field),
-                source=module,
+                module=module,
                 field=field,
                 factor_root=factor_root,
                 base_dir=base_dir,
             )
         resolved_items.append(resolved_item)
     return resolved_items
-
-
-def _legacy_feature_to_data_item(feature: dict[str, Any], index: int) -> dict[str, Any]:
-    kind = str(feature["kind"]).lower()
-    if kind == "ref":
-        display_name = str(feature["name"])
-        return {
-            "name": f"__feature_ref__.{index:04d}.{display_name}",
-            "module": "builtin.ref",
-            "path": feature["data"],
-            "role": "factor",
-            "mode": "read_dump",
-            "config_path": None,
-            "ops": feature.get("ops", ()),
-            "params": {
-                "data": feature["data"],
-                "display_name": display_name,
-            },
-        }
-    module = "builtin.factor" if kind == "factor" else "builtin.alpha_parquet"
-    data_name = f"__feature__.{index:04d}.{feature['name']}"
-    return {
-        "name": data_name,
-        "module": module,
-        "path": feature.get("path"),
-        "role": "factor",
-        "mode": feature.get("mode", "read_dump"),
-        "config_path": feature.get("config_path"),
-        "ops": feature.get("ops", ()),
-        "params": {"display_name": feature["name"]},
-    }
-
-
-def _factor_paths_to_data_items(factor_paths: tuple[str, ...]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for index, path in enumerate(factor_paths):
-        display_name = Path(path).name
-        data_name = f"__factor_path__.{index:04d}.{display_name}"
-        items.append(
-            {
-                "name": data_name,
-                "module": "builtin.factor",
-                "path": path,
-                "role": "factor",
-                "mode": "read_dump",
-                "config_path": None,
-                "ops": (),
-                "params": {},
-            }
-        )
-        items[-1]["params"]["display_name"] = display_name
-    return items
 
 
 def _apply_constant_paths(config: dict) -> dict:
@@ -550,12 +501,15 @@ def _apply_constant_paths(config: dict) -> dict:
     updated["combo"]["paths"]["checkpoint_root"] = constants["checkpoint_root"]
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
-    if updated["combo"]["loader"].get("label_path") is None:
-        updated["combo"]["loader"]["label_path"] = str(cache_path / "1d_DailyLabel" / "DailyLabel.label1d")
-    updated["combo"]["loader"]["ashare_data_path"] = str(cache_path)
-    updated["combo"]["loader"]["valid_path"] = str(cache_path / "Ashare")
-    updated["combo"]["loader"]["filtered_path"] = str(cache_path / "AshareFiltered")
-    updated["combo"]["loader"]["base_universe_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")
+    loader_config = updated["combo"]["loader"]
+    if loader_config.get("ashare_data_path") is None:
+        loader_config["ashare_data_path"] = str(cache_path)
+    if loader_config.get("valid_path") is None:
+        loader_config["valid_path"] = str(cache_path / "Ashare")
+    if loader_config.get("filtered_path") is None:
+        loader_config["filtered_path"] = str(cache_path / "AshareFiltered")
+    if loader_config.get("base_universe_path") is None:
+        loader_config["base_universe_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")
     updated["backtest"]["output_path"] = str(output_root / "backtest")
     return updated
 
@@ -575,10 +529,6 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
 
-    factor_paths = resolved["combo"]["loader"].get("factor_paths")
-    if factor_paths is not None:
-        factor_root = resolved["constants"]["factor_root"]
-        resolved["combo"]["loader"]["factor_paths"] = tuple(_resolve_factor_path(factor_root, path) for path in factor_paths)
     factor_root = resolved["constants"]["factor_root"]
     presets: list[str] = list(resolved["combo"].get("data", {}).get("presets", ()))
     data_items = _resolve_data_pack(
@@ -588,28 +538,6 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         seen_paths=set(),
         presets=presets,
     )
-    has_explicit_factor = any(str(item.get("role", "aux")).lower() == "factor" for item in data_items)
-    features = resolved["combo"]["loader"].get("features")
-    if features is not None:
-        resolved_features = []
-        for feature in features:
-            resolved_feature = dict(feature)
-            kind = str(resolved_feature["kind"])
-            if kind != "ref":
-                for field in FEATURE_PATH_FIELDS:
-                    resolved_feature[field] = _resolve_feature_path(
-                        resolved_feature.get(field),
-                        kind=kind,
-                        field=field,
-                        factor_root=factor_root,
-                        base_dir=base_dir,
-                    )
-            resolved_features.append(resolved_feature)
-        for index, feature in enumerate(resolved_features):
-            data_items.append(_legacy_feature_to_data_item(feature, index))
-        resolved["combo"]["loader"]["features"] = tuple(resolved_features)
-    elif not has_explicit_factor:
-        data_items.extend(_factor_paths_to_data_items(resolved["combo"]["loader"].get("factor_paths") or ()))
     resolved["combo"]["data"] = {
         "attrs": dict(resolved["combo"].get("data", {}).get("attrs", {})),
         "items": tuple(data_items),
@@ -633,21 +561,18 @@ def _load_xml_config(path: str) -> dict:
     combo_element = root.find("combo")
     combo = {}
     if combo_element is not None:
+        if combo_element.find("loader") is not None:
+            raise ValueError("<combo><loader> is no longer supported; put loader/data attributes on <combo><data>")
         combo = {
             "paths": _parse_section_attributes(combo_element.find("paths"), DEFAULT_CONFIG["combo"]["paths"]),
             "output": _parse_section_attributes(combo_element.find("output"), DEFAULT_CONFIG["combo"]["output"]),
             "runtime": _parse_section_attributes(combo_element.find("runtime"), DEFAULT_CONFIG["combo"]["runtime"]),
             "model": _parse_section_attributes(combo_element.find("model"), DEFAULT_CONFIG["combo"]["model"], allow_extra=True),
-            "data": _parse_data_section(combo_element.find("data")) or {"attrs": {}, "imports": (), "items": ()},
-            "loader": _parse_section_attributes(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]),
             "defaults": _parse_section_attributes(combo_element.find("defaults"), DEFAULT_CONFIG["combo"]["defaults"]),
         }
-        factor_paths = _parse_factor_paths(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]["factor_paths"])
-        if factor_paths is not None:
-            combo["loader"]["factor_paths"] = factor_paths
-        features = _parse_features(combo_element.find("loader"))
-        if features is not None:
-            combo["loader"]["features"] = features
+        data_element = combo_element.find("data")
+        if data_element is not None:
+            combo["data"] = _parse_data_section(data_element) or {"attrs": {}, "imports": (), "items": ()}
 
     backtest = _parse_section_attributes(root.find("backtest"), DEFAULT_CONFIG["backtest"])
     monitor = _parse_section_attributes(root.find("monitor"), DEFAULT_CONFIG["monitor"])

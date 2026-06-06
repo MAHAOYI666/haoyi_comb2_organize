@@ -8,7 +8,6 @@ __all__ = [
     "DataItem",
     "DataRegistry",
     "DefaultSelectionModule",
-    "FeatureSpec",
     "LoaderConfig",
     "OpSpec",
     "SelectionModule",
@@ -31,13 +30,12 @@ def __getattr__(name: str):
             "ComboTrainDataset": ComboTrainDataset,
             "LoaderConfig": LoaderConfig,
         }[name]
-    if name in {"DataItem", "DataRegistry", "FeatureSpec", "OpSpec", "Universe"}:
-        from .DataRegistry import DataItem, DataRegistry, FeatureSpec, OpSpec, Universe
+    if name in {"DataItem", "DataRegistry", "OpSpec", "Universe"}:
+        from .DataRegistry import DataItem, DataRegistry, OpSpec, Universe
 
         return {
             "DataItem": DataItem,
             "DataRegistry": DataRegistry,
-            "FeatureSpec": FeatureSpec,
             "OpSpec": OpSpec,
             "Universe": Universe,
         }[name]

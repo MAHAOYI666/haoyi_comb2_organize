@@ -6,7 +6,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import os
 import time
-from pathlib import Path
 from typing import Any, Iterable, Protocol, Sequence
 
 import numpy as np
@@ -17,11 +16,9 @@ from .codec import Codec, PassthroughCodec, build_codec
 from .DataRegistry import (
     DataItem as _DataItem,
     DataRegistry as _DataRegistry,
-    FeatureSpec as _FeatureSpec,
     MASK,
     Universe,
     _coerce_data_item,
-    _coerce_feature_spec,
     _maybe_section,
     _require_memmaper2_cls,
 )
@@ -57,42 +54,6 @@ class EmptyCubeSource:
         return None
 
 
-class MemmapLabelSource:
-    def __init__(self, path: str, dtype: torch.dtype):
-        self.path = path
-        self.dtype = dtype
-        self._mmap = _require_memmaper2_cls()(path)
-        self._day_cache: dict[int, torch.Tensor] = {}
-
-    def load_day(self, ds: int) -> torch.Tensor:
-        ds = int(ds)
-        cached = self._day_cache.pop(ds, None)
-        if cached is not None:
-            return cached
-        monitor = getattr(self, "monitor", None)
-        with _maybe_section(monitor, "mmap_label.load", ds, level="full"):
-            data = self._mmap.load(start_ds=ds, end_ds=ds)[:]
-            label = torch.as_tensor(np.asarray(data)[0], dtype=self.dtype)
-            return label
-
-    def prefetch_days(self, days: Sequence[int]):
-        days = list(dict.fromkeys(int(ds) for ds in days))
-        if not days:
-            return
-        needed_days = [ds for ds in days if ds not in self._day_cache]
-        if not needed_days:
-            return
-        start_ds = min(needed_days)
-        end_ds = max(needed_days)
-        day_set = set(needed_days)
-        trading_days = [int(ds) for ds in MASK.date if start_ds <= int(ds) <= end_ds]
-        data = self._mmap.load(start_ds=start_ds, end_ds=end_ds)[:]
-        arr = np.asarray(data)
-        for offset, ds in enumerate(trading_days[: len(arr)]):
-            if ds in day_set:
-                self._day_cache[ds] = torch.as_tensor(arr[offset], dtype=self.dtype)
-
-
 class MemmapMaskSource:
     def __init__(self, path: str | None):
         self.path = path
@@ -112,13 +73,10 @@ class MemmapMaskSource:
 
 @dataclass
 class LoaderConfig:
-    factor_paths: Sequence[str] = ()
-    label_path: str | None = None
     dtype: torch.dtype = torch.float16
     data_start_ds: int = 20160101
     valid_path: str | None = None
     filtered_path: str | None = None
-    features: Sequence[_FeatureSpec] | None = None
     compression: str = "none"
     base_universe_path: str | None = None
     ashare_data_path: str | None = None
@@ -129,74 +87,10 @@ class LoaderConfig:
     verbose: bool = False
 
 
-def _legacy_feature_specs_to_data_items(features: Sequence[_FeatureSpec | dict[str, Any]]) -> tuple[_DataItem, ...]:
-    items: list[_DataItem] = []
-    for index, raw_spec in enumerate(features):
-        if isinstance(raw_spec, dict) and str(raw_spec.get("kind", "")).lower() == "ref":
-            ops = tuple(_coerce_op_spec(op) for op in raw_spec.get("ops", ()))
-            data_name = str(raw_spec["data"])
-            feature_name = str(raw_spec.get("name") or data_name)
-            items.append(
-                _DataItem(
-                    name=feature_name,
-                    module="builtin.ref",
-                    path=data_name,
-                    role="factor",
-                    ops=ops,
-                    params={"data": data_name},
-                )
-            )
-            continue
-        spec = _coerce_feature_spec(raw_spec)
-        kind = spec.kind.strip().lower()
-        if kind == "factor":
-            module = "builtin.factor"
-        elif kind == "alpha":
-            module = "builtin.alpha_parquet"
-        else:
-            raise ValueError(f"unsupported legacy feature kind: {spec.kind}")
-        items.append(
-            _DataItem(
-                name=spec.name or f"feature.{index:04d}",
-                module=module,
-                path=spec.path,
-                role="factor",
-                mode=spec.mode,
-                config_path=spec.config_path,
-                ops=spec.ops,
-            )
-        )
-    return tuple(items)
-
-
-def _legacy_factor_paths_to_data_items(factor_paths: Sequence[str]) -> tuple[_DataItem, ...]:
-    return tuple(
-        _DataItem(
-            name=Path(path).name,
-            module="builtin.factor",
-            path=str(path),
-            role="factor",
-        )
-        for path in factor_paths
-    )
-
-
 def _build_loader_data_items(config: LoaderConfig) -> tuple[_DataItem, ...]:
-    items = [_coerce_data_item(item) for item in config.data_items]
+    items = tuple(_coerce_data_item(item) for item in config.data_items)
     if not any(item.role == "factor" for item in items):
-        if config.features:
-            items.extend(_legacy_feature_specs_to_data_items(config.features))
-        else:
-            items.extend(_legacy_factor_paths_to_data_items(config.factor_paths))
-    if config.label_path and not any(item.role == "label" for item in items):
-        items.append(
-            _DataItem(
-                name="label.default",
-                module="builtin.label",
-                path=config.label_path,
-                role="label",
-            )
-        )
+        raise ValueError("LoaderConfig.data_items requires at least one role='factor' data item")
     return tuple(items)
 
 
