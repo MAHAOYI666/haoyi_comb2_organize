@@ -9,6 +9,7 @@
 - `correlation`: 计算 pnl correlation、position correlation、trade correlation，以及 pool 级别的 `maxcorr` / `avgcorr` / `topcorrN`。
 - `value_add`: 计算 guidance-style `IR_candidate - corr * IR_solid`、pool value-add 和 netting residual。
 - `constraints`: 本地实现 short-side equalization、universe coverage、trading-limit exposure 检查。
+- `exposure`: 计算 signal 对 Barra 风格因子的日频暴露，支持相关暴露和回归 beta 暴露两种口径。
 - `eval`: 对 `pnl` / `ic` 汇总结果执行本地 L1/L2 阈值检查。
 
 ## CLI
@@ -97,3 +98,22 @@ position / trade / alpha matrix 支持 csv/tsv/parquet。需要日期索引或 `
 4. date range / snaptime 列表。
 
 `10d IC`、`Barra IC`、`universe mask` 等 AshareCache 数据读取必须经由 `comb_eval.io.read_cache_array()`，该函数内部只调用 `from factorsim import Memmaper2` 和 `Memmaper2(path).load(start_ds, end_ds, df_type)[:]`。
+
+## Barra 风格暴露接口
+
+提供两个函数：
+
+1. `compute_style_factor_exposure(signal, style_factors, mode=0)`
+   - 输入 signal DataFrame 和 `{style_name: style_df}` 风格因子字典。
+   - `mode=0` 返回横截面相关暴露。
+   - `mode=1` 返回横截面回归 beta 暴露。
+   - 返回值是 `date x style` 的 DataFrame。
+
+2. `compute_barra_style_exposure(signal, start_ds=None, end_ds=None, mode=0, ashare_cache_path=...)`
+   - 自动从 `AshareCache/1d_BarraCNE5` 读取全部 Barra 风格因子。
+   - 输入:
+     - `signal`: `date x code` 的 DataFrame
+     - `start_ds`: 起始日期，默认自动匹配 signal 与 Barra 的最长交集
+     - `end_ds`: 结束日期，默认自动匹配 signal 与 Barra 的最长交集
+     - `mode`: `0` 为相关暴露，`1` 为 beta 暴露
+   - 返回值是 `date x style` 的 DataFrame，列名为 `BETA/BTOP/...`

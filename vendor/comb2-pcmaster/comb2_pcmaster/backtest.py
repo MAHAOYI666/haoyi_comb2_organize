@@ -5,14 +5,22 @@ import os
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from factorsim import IndexMask
 from factorsim.tushare_tool.tusharesql import Querytool
 from .dataloader import DataLoader
 from .strategy import StrategyBase
+
+
+def _load_pyplot():
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        return None
+    return plt
 
 
 @dataclass
@@ -40,8 +48,8 @@ class BacktestNode:
     asset_history: list[list[float]] = field(default_factory=list)
     position_history: list[pd.DataFrame] = field(default_factory=list)
     hold_history: list[pd.Series] = field(default_factory=list)
-    fig: plt.Figure | None = None
-    ax: plt.Axes | None = None
+    fig: Any | None = None
+    ax: Any | None = None
     daily_metrics_written: bool = False
     prev_total_asset: float | None = None
 
@@ -294,6 +302,9 @@ class DailyBacktest:
         return summary
 
     def setup_plot(self, title, xlabel, ylabel):
+        plt = _load_pyplot()
+        if plt is None:
+            raise RuntimeError("matplotlib is required to draw backtest plots")
         self.node.fig, self.node.ax = plt.subplots(figsize=(10, 6))
         self.node.ax.set_title(title, fontsize=14)
         self.node.ax.set_xlabel(xlabel, fontsize=12)
@@ -302,13 +313,18 @@ class DailyBacktest:
         self.node.fig.tight_layout()
 
     def save_plot(self, name):
+        plt = _load_pyplot()
         self.node.ax.legend()
         self.node.ax.tick_params(axis="x", rotation=45)
         self.node.fig.savefig(os.path.join(self.node.output_path, name))
-        plt.close(self.node.fig)
+        if plt is not None:
+            plt.close(self.node.fig)
 
     def draw(self):
         if self.asset_history.empty:
+            return
+        if _load_pyplot() is None:
+            warnings.warn("matplotlib is not installed; skipping backtest plots", RuntimeWarning)
             return
         x = [pd.to_datetime(str(date), format="%Y%m%d") for date in list(self.asset_history.index)]
         bench_data = self._fetch_benchmark_data()
