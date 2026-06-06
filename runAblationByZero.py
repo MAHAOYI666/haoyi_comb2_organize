@@ -226,7 +226,7 @@ def run_group(
             if include_baseline_output or name != "baseline"
         }
 
-        strategy_path = build_strategy_file()
+        strategy_path = build_strategy_file(organize_config)
         backtests = {
             name: DailyBacktest(build_backtest_node(strategy_path, config))
             for name, config in variant_configs.items()

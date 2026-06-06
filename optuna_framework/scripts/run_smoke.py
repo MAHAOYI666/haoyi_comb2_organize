@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+from pathlib import Path
 
 if __package__ in (None, ""):
     from _script_common import bootstrap_repo_imports
 
     bootstrap_repo_imports()
 
-from optuna_framework.paths import build_trial_run_paths
+from optuna_framework.config_renderer import render_config
+from optuna_framework.paths import build_trial_run_paths, get_repo_root
 from optuna_framework.runner import build_run_command
 from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
 from optuna_framework.scripts.run_study import make_callback, make_objective, storage_url
@@ -26,6 +29,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def validate_rendered_combo_config(config_path: Path) -> None:
+    """Ensure the rendered Optuna XML is accepted by the project config loader."""
+
+    repo_root = get_repo_root()
+    config_spec = importlib.util.spec_from_file_location("comb2_organize_config", repo_root / "config.py")
+    config_module = importlib.util.module_from_spec(config_spec)
+    assert config_spec.loader is not None
+    config_spec.loader.exec_module(config_module)
+    config_module.load_config(str(config_path))
+
+
 def main() -> None:
     args = parse_args()
     config = load_config_from_args(args)
@@ -39,6 +53,9 @@ def main() -> None:
         print(f"[DRY-RUN] run_window={config.tuning_run_window[0]}-{config.tuning_run_window[1]}")
         print(f"[DRY-RUN] scoring_window={config.scoring_window[0]}-{config.scoring_window[1]}")
         run_paths = build_trial_run_paths(config.study_root, 0, config.tuning_run_window, config.scoring_window)
+        render_config(config, run_paths, adapter, adapter.baseline_params())
+        validate_rendered_combo_config(run_paths.config_path)
+        print(f"[DRY-RUN] rendered_config_parse=OK config={run_paths.config_path}")
         print_command("[DRY-RUN] smoke/trial_00000", run_paths.config_path, build_run_command(run_paths.config_path))
         return
 
