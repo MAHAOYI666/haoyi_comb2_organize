@@ -16,6 +16,7 @@ from .codec import Codec, PassthroughCodec, build_codec
 from .DataRegistry import (
     DataItem as _DataItem,
     DataRegistry as _DataRegistry,
+    LoadStats,
     MASK,
     Universe,
     _coerce_data_item,
@@ -75,6 +76,7 @@ class MemmapMaskSource:
 class LoaderConfig:
     dtype: torch.dtype = torch.float16
     data_start_ds: int = 20160101
+    data_offset: int = 1024
     valid_path: str | None = None
     filtered_path: str | None = None
     compression: str = "none"
@@ -100,7 +102,8 @@ class ComboDataLoader:
         self.dtype = self.config.dtype
         self.codec = build_codec(self.config.compression, self.dtype)
         self.mask = MASK
-        self.universe = Universe.from_mask(self.mask, self.dtype)
+        self.data_offset = max(0, int(self.config.data_offset))
+        self.universe = Universe.from_mask(self.mask, self.dtype, data_offset=self.data_offset)
         self.data_start_ds = int(self.config.data_start_ds)
         self.data_start_didx = self.universe.date2idx(self.data_start_ds)
         data_items = _build_loader_data_items(config)
@@ -112,6 +115,7 @@ class ComboDataLoader:
             factor_root=self.config.factor_root,
             config_path=self.config.config_path,
             presets=self.config.data_presets,
+            verbose=bool(getattr(config, "verbose", False)),
         )
         self.factor_names = tuple(item.name for item in data_items if item.role == "factor")
         label_names = tuple(item.name for item in data_items if item.role == "label")
@@ -147,7 +151,7 @@ class ComboDataLoader:
 
     def didx2date(self, didx: int) -> int:
         didx = max(int(didx), self.data_start_didx)
-        return int(self.mask.date[didx])
+        return self.universe.idx2date(didx)
 
     def align_date(self, ds: int) -> int:
         aligned = self.didx2date(self.date2didx(ds))
@@ -220,14 +224,16 @@ class ComboDataLoader:
 
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
+        stats = LoadStats(request_days=len(days))
         if days:
-            self.registry._ensure_range(self.factor_names, min(days), max(days))
+            stats = self.registry._ensure_range(self.factor_names, min(days), max(days))
         self._sync_monitor_refs()
         self.cube_source.prefetch_days(days)
+        return stats
 
     def prefetch_labels(self, days: Sequence[int], ret_days: int = 1):
         if self.label_name is None:
-            return
+            return LoadStats()
         label_days: list[int] = []
         for ds in days:
             end_didx = self.date2didx(self.align_date(ds))
@@ -236,7 +242,8 @@ class ComboDataLoader:
                 raise ValueError(f"not enough label history for ds={ds}, ret_days={ret_days}")
             label_days.extend(self.didx2date(didx) for didx in range(start_didx, end_didx + 1))
         if label_days:
-            self.registry._ensure_range((self.label_name,), min(label_days), max(label_days))
+            return self.registry._ensure_range((self.label_name,), min(label_days), max(label_days))
+        return LoadStats()
 
     def gen_base_universe_mask(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
@@ -377,12 +384,30 @@ class ComboTrainDataset(Dataset):
         with _maybe_section(monitor, "dataset_init.loop_total", self.end_ds, level="full"):
             for window_start in range(0, self.ndays, self.load_chunk_days):
                 window_end = min(window_start + self.load_chunk_days, self.ndays)
-                feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
-                label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
-                load_start = time.perf_counter()
-                loader.prefetch_features(feature_days)
-                loader.prefetch_labels(label_days, ret_days=self.x_delay)
-                feature_load_time = time.perf_counter() - load_start
+                if loader.verbose:
+                    for offset in range(window_start, window_end):
+                        label_ds = loader.didx2date(self.start_didx + offset)
+                        feature_ds = loader.didx2date(self.start_didx + offset - self.x_delay + 1)
+                        load_start = time.perf_counter()
+                        feature_stats = loader.prefetch_features((feature_ds,))
+                        label_stats = loader.prefetch_labels((label_ds,), ret_days=self.x_delay)
+                        load_time = time.perf_counter() - load_start
+                        raw_time = feature_stats.raw_time + label_stats.raw_time
+                        ops_time = feature_stats.ops_time + label_stats.ops_time
+                        detail = f"day {feature_ds}, raw {raw_time:.2f}s, ops {ops_time:.2f}s, load {load_time:.2f}s"
+                        print_progress(
+                            "Stage:load_train_days",
+                            offset + 1,
+                            self.ndays,
+                            progress_start,
+                            detail,
+                            final=offset + 1 == self.ndays,
+                        )
+                else:
+                    feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
+                    label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
+                    loader.prefetch_features(feature_days)
+                    loader.prefetch_labels(label_days, ret_days=self.x_delay)
                 for offset in range(window_start, window_end):
                     label_didx = self.start_didx + offset
                     feature_didx = label_didx - self.x_delay + 1
@@ -399,9 +424,6 @@ class ComboTrainDataset(Dataset):
                     self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
                     self.W[offset] = w[self.validinsts].to(loader.dtype)
                     loaded_days += 1
-                if loader.verbose:
-                    detail = f"days {feature_days[0]}-{feature_days[-1]}, load {feature_load_time:.2f}s"
-                    print_progress("Stage:load_train_days", loaded_days, self.ndays, progress_start, detail, final=loaded_days == self.ndays)
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []

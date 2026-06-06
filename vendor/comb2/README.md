@@ -332,6 +332,7 @@ class ResearchModel:
     <data
       dtype="float16"
       data_start_ds="20160101"
+      data_offset="1024"
       valid_path="/path/to/valid"
       filtered_path="/path/to/filtered"
     >
@@ -358,7 +359,7 @@ class ResearchModel:
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`
 - 多个因子通过多个 `<data><item role="factor" ... /></data>` 声明
-- 引用完整 config 里的因子集时可写 `<import path="../task/config.xml" role="factor" />`
+- `<import path="...">` 只支持根节点为 `<data-pack>` 或 `<data>` 的纯 data 声明文件
 
 ---
 

@@ -8,6 +8,7 @@ import bisect
 import importlib
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -111,9 +112,10 @@ class Universe:
         self._code_to_idx = {str(code).zfill(6): idx for idx, code in enumerate(self.codes)}
 
     @classmethod
-    def from_mask(cls, mask: Any, dtype: torch.dtype) -> "Universe":
+    def from_mask(cls, mask: Any, dtype: torch.dtype, data_offset: int = 0) -> "Universe":
+        offset = max(0, int(data_offset))
         return cls(
-            dates=tuple(int(ds) for ds in mask.date),
+            dates=tuple(int(ds) for ds in mask.date[offset:]),
             codes=tuple(str(code).zfill(6) for code in mask.code),
             dtype=dtype,
         )
@@ -154,6 +156,28 @@ class DataItem:
 class OpRequirements:
     data_deps: tuple[str, ...] = ()
     lookback_days: int = 1
+
+
+@dataclass
+class LoadStats:
+    request_days: int = 0
+    raw_chunks: int = 0
+    raw_points: int = 0
+    raw_time: float = 0.0
+    ops_items: int = 0
+    ops_points: int = 0
+    ops_time: float = 0.0
+    total_time: float = 0.0
+
+    def merge(self, other: "LoadStats"):
+        self.request_days += other.request_days
+        self.raw_chunks += other.raw_chunks
+        self.raw_points += other.raw_points
+        self.raw_time += other.raw_time
+        self.ops_items += other.ops_items
+        self.ops_points += other.ops_points
+        self.ops_time += other.ops_time
+        self.total_time += other.total_time
 
 
 def _coerce_data_item(value: DataItem | dict[str, Any]) -> DataItem:
@@ -292,6 +316,7 @@ class DataRegistry:
         factor_root: str | None,
         config_path: str | None,
         presets: Sequence[str] = (),
+        verbose: bool = False,
     ):
         self.universe = universe
         self.data_start_ds = int(data_start_ds)
@@ -299,6 +324,7 @@ class DataRegistry:
         self.ashare_data_path = ashare_data_path
         self.factor_root = factor_root
         self.config_path = config_path
+        self.verbose = bool(verbose)
         self.module_cache: dict[str, Any] = {}
         self.modules: dict[str, DataLoadFn] = self._builtin_modules()
 
@@ -400,7 +426,7 @@ class DataRegistry:
             return start_idx, start_idx - 1
         return start_idx, end_idx
 
-    def _ensure_raw_range(self, name: str, start_ds: int, end_ds: int):
+    def _ensure_raw_range(self, name: str, start_ds: int, end_ds: int, stats: LoadStats | None = None):
         name = self._resolve_name(name)
         lo, hi = self._bounds_to_idx(start_ds, end_ds)
         if hi < lo:
@@ -409,6 +435,7 @@ class DataRegistry:
         for miss_lo, miss_hi in _missing_ranges(self.raw_loaded[name], lo, hi):
             chunk_start = self.universe.idx2date(miss_lo)
             chunk_end = self.universe.idx2date(miss_hi)
+            load_start = time.perf_counter()
             loaded = self._module_for(item)(item, self, chunk_start, chunk_end)
             tensor = _as_2d_tensor(loaded, dtype=self.universe.dtype)
             expected_shape = (miss_hi - miss_lo + 1, len(self.universe.codes))
@@ -419,8 +446,13 @@ class DataRegistry:
                 )
             self.raw_cache[name][miss_lo : miss_hi + 1] = tensor
             self.raw_loaded[name][miss_lo : miss_hi + 1] = True
+            total_time = time.perf_counter() - load_start
+            if stats is not None:
+                stats.raw_chunks += 1
+                stats.raw_points += miss_hi - miss_lo + 1
+                stats.raw_time += total_time
 
-    def _ensure_processed_range(self, name: str, start_ds: int, end_ds: int, stack: tuple[str, ...] = ()):
+    def _ensure_processed_range(self, name: str, start_ds: int, end_ds: int, stack: tuple[str, ...] = (), stats: LoadStats | None = None):
         name = self._resolve_name(name)
         if name in stack:
             chain = " -> ".join((*stack, name))
@@ -436,19 +468,31 @@ class DataRegistry:
         raw_lo = max(self.data_start_idx, lo - requirements.lookback_days + 1)
         raw_start_ds = self.universe.idx2date(raw_lo)
         for dep in requirements.data_deps:
-            self._ensure_processed_range(dep, raw_start_ds, end_ds, (*stack, name))
+            self._ensure_processed_range(dep, raw_start_ds, end_ds, (*stack, name), stats)
 
-        self._ensure_raw_range(name, raw_start_ds, end_ds)
+        self._ensure_raw_range(name, raw_start_ds, end_ds, stats)
         raw_window = self.raw_cache[name][raw_lo : hi + 1].to(torch.float32)
+        ops_start = time.perf_counter()
         processed_window = self._apply_ops(item, raw_window, raw_lo, hi)
+        ops_time = time.perf_counter() - ops_start
         out_lo = lo - raw_lo
         out_hi = hi - raw_lo + 1
         self.processed_cache[name][lo : hi + 1] = processed_window[out_lo:out_hi].to(self.universe.dtype)
         self.processed_loaded[name][lo : hi + 1] = True
+        if item.ops and stats is not None:
+            stats.ops_items += 1
+            stats.ops_points += hi - lo + 1
+            stats.ops_time += ops_time
 
     def _ensure_range(self, names: Sequence[str], start_ds: int, end_ds: int):
+        ensure_start = time.perf_counter()
+        stats = LoadStats()
         for name in names:
-            self._ensure_processed_range(name, start_ds, end_ds)
+            self._ensure_processed_range(name, start_ds, end_ds, stats=stats)
+        lo, hi = self._bounds_to_idx(start_ds, end_ds)
+        stats.request_days = max(0, hi - lo + 1)
+        stats.total_time = time.perf_counter() - ensure_start
+        return stats
 
     def _apply_ops(self, item: DataItem, x: torch.Tensor, lo_idx: int, hi_idx: int) -> torch.Tensor:
         out = x

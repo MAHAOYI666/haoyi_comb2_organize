@@ -441,6 +441,7 @@ XML：
   dtype="float16"
   compression="none"
   data_start_ds="20160101"
+  data_offset="1024"
 >
   <import preset="barra" />
 
@@ -457,7 +458,8 @@ XML：
 |---|---|---|---|
 | `dtype` | `float16` | torch.dtype | loader 输出 dtype。 |
 | `compression` | `none` | str | comb2 内部 X/buffer 压缩方式：`none` / `fp4` / `fp8`。 |
-| `data_start_ds` | `20160101` | int | 数据业务起点；不改变 Universe 的固定 tensor shape。 |
+| `data_start_ds` | `20160101` | int | 数据业务起点；早于该日期的数据不会被加载。 |
+| `data_offset` | `1024` | int | DataRegistry 日期轴偏移；数据索引使用 `loader.universe.date2idx(ds)` / `idx2date(didx)` 转换。 |
 | `ashare_data_path` | `{cache_path}/AshareCache` | path | AshareCache 根目录，供 label、Barra、mask 等内置读取使用。 |
 | `valid_path` | `{ashare_data_path}/Ashare` | path | valid mask 数据路径。 |
 | `filtered_path` | `{ashare_data_path}/AshareFiltered` | path | filtered mask 数据路径。 |
@@ -471,6 +473,7 @@ XML：
 - `<item role="label">` 会自动作为训练 label，当前只支持一个 label。
 - `<item role="aux">` 不会直接进模型，主要供 op 或自定义 loader 使用。
 - `<item><op ... /></item>` 是 data item 级预处理，发生在进入 `ComboDataLoader` 之前。
+- `registry.get_data(name)` 返回的数据索引使用 `loader.universe.date2idx(ds)` / `idx2date(didx)` 转换。
 - 默认 `ComboDataLoader.gen_feature(ds)` 还会对最终 feature 执行全局 `cs_zscore -> truncate(-4, 4) -> nan_to_num(0)`。
 - 默认 `ComboDataLoader.gen_label(ds, ret_days)` 会先聚合 label，再做 winsorize、标准化、truncate、normalize 和 invalid 填 0。
 
@@ -563,10 +566,10 @@ gen_label(ds, ret_days)
 <import path="packs/my_factors.xml" />
 ```
 
-如果引用的是一份完整任务 config，但只想导入其中的 feature 因子，可以加 role 过滤：
+`path` 只能指向根节点为 `<data-pack>` 或 `<data>` 的纯 data 声明文件，不能指向完整任务 `config.xml`。如果只想导入其中一类数据，可以加 role 过滤：
 
 ```xml
-<import path="../0603.tcn.update/config.xml" role="factor" />
+<import path="packs/my_factors.xml" role="factor" />
 ```
 
 data-pack 文件：

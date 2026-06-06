@@ -321,6 +321,7 @@ def test_config_accepts_data_compression_attribute(tmp_path) -> None:
 
     assert load_config()["combo"]["loader"]["compression"] == "none"
     assert loaded["combo"]["loader"]["compression"] == "fp4"
+    assert loaded["combo"]["loader"]["data_offset"] == 1024
 
 
 def test_config_accepts_data_items_and_rejects_loader_node(tmp_path) -> None:
@@ -457,7 +458,7 @@ def test_config_accepts_data_section_roles_and_ops(tmp_path) -> None:
         <config>
           <constants factor_root="factors" />
           <combo>
-            <data dtype="float32" compression="fp4" data_start_ds="20200101">
+            <data dtype="float32" compression="fp4" data_start_ds="20200101" data_offset="7">
               <import preset="barra" />
               <item name="alpha.turn20" module="builtin.factor" path="turn20" role="factor">
                 <op name="neut(barra.size, barra.btop)" />
@@ -477,6 +478,7 @@ def test_config_accepts_data_section_roles_and_ops(tmp_path) -> None:
 
     assert loader["dtype"] == torch.float32
     assert loader["compression"] == "fp4"
+    assert loader["data_offset"] == 7
     assert loader["data_presets"] == ("barra",)
     assert items[0]["name"] == "alpha.turn20"
     assert items[0]["path"].endswith("/factors/turn20")
@@ -511,6 +513,7 @@ def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch
         LoaderConfig(
             dtype=torch.float32,
             data_start_ds=20200101,
+            data_offset=0,
             data_items=(
                 DataItem(
                     name="alpha.raw",
@@ -559,6 +562,7 @@ def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypat
         LoaderConfig(
             dtype=torch.float32,
             data_start_ds=20200101,
+            data_offset=0,
             data_items=(
                 DataItem(
                     name="alpha.raw",
@@ -595,6 +599,7 @@ def test_combo_data_loader_preprocess_label_hook_can_replace_default(monkeypatch
         LoaderConfig(
             dtype=torch.float32,
             data_start_ds=20200101,
+            data_offset=0,
             data_items=(
                 DataItem(
                     name="alpha.raw",
@@ -620,6 +625,18 @@ def test_combo_data_loader_preprocess_label_hook_can_replace_default(monkeypatch
 
     assert torch.equal(y, torch.tensor([0.1, 0.0, -0.2], dtype=torch.float32))
     assert torch.equal(w, torch.tensor([True, True, True]))
+
+
+def test_universe_from_mask_applies_data_offset() -> None:
+    class FakeMask:
+        date = (20100104, 20100105, 20100106, 20100107)
+        code = ("000001", "000002")
+
+    universe = Universe.from_mask(FakeMask(), torch.float32, data_offset=2)
+
+    assert universe.dates == (20100106, 20100107)
+    assert universe.idx2date(0) == 20100106
+    assert universe.date2idx(20100106) == 0
 
 
 def test_barra_preset_registers_all_cne5_styles() -> None:
@@ -678,24 +695,19 @@ def test_config_imports_data_pack(tmp_path) -> None:
     assert items[0]["path"].endswith("/factors/pack_a")
 
 
-def test_config_import_can_filter_roles_from_full_config(tmp_path) -> None:
+def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
     from config import load_config
 
-    pack_path = tmp_path / "source_config.xml"
+    pack_path = tmp_path / "source_pack.xml"
     pack_path.write_text(
         """
-        <config>
-          <constants factor_root="factors" />
-          <combo>
-            <data>
-              <import preset="barra" />
-              <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor">
-                <op name="neut(size)" />
-              </item>
-              <item name="label.ret1" module="builtin.label" path="label1d" role="label" />
-            </data>
-          </combo>
-        </config>
+        <data-pack>
+          <import preset="barra" />
+          <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor">
+            <op name="neut(size)" />
+          </item>
+          <item name="label.ret1" module="builtin.label" path="label1d" role="label" />
+        </data-pack>
         """,
         encoding="utf-8",
     )
@@ -722,6 +734,40 @@ def test_config_import_can_filter_roles_from_full_config(tmp_path) -> None:
     assert loader["data_presets"] == ("barra",)
     assert [item["name"] for item in items] == ["factor.pack_a", "label.local"]
     assert items[0]["ops"][0]["name"] == "neut(size)"
+
+
+def test_config_import_rejects_full_config(tmp_path) -> None:
+    from config import load_config
+
+    source_path = tmp_path / "source_config.xml"
+    source_path.write_text(
+        """
+        <config>
+          <combo>
+            <data>
+              <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        f"""
+        <config>
+          <combo>
+            <data>
+              <import path="{source_path.name}" role="factor" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="data import root tag"):
+        load_config(str(xml_path))
 
 
 def test_data_registry_builtin_alpha_parquet_loads_date_and_reindexes_codes(tmp_path) -> None:
@@ -791,6 +837,7 @@ def test_data_registry_builtin_alpha_parquet_supports_neut_op(tmp_path) -> None:
 def _fake_registry(
     items: list[DataItem],
     presets: tuple[str, ...] = (),
+    verbose: bool = False,
 ) -> tuple[DataRegistry, list[tuple[str, int, int]]]:
     universe = Universe(
         dates=(20200101, 20200102, 20200103, 20200106),
@@ -806,6 +853,7 @@ def _fake_registry(
         factor_root=None,
         config_path=None,
         presets=presets,
+        verbose=verbose,
     )
 
     def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
@@ -817,6 +865,30 @@ def _fake_registry(
 
     registry.modules["test.tensor"] = load_tensor
     return registry, calls
+
+
+def test_data_registry_returns_load_timing_stats() -> None:
+    registry, _ = _fake_registry(
+        [
+            DataItem(
+                name="alpha.base",
+                module="test.tensor",
+                role="factor",
+                params={"values": torch.ones((4, 3), dtype=torch.float32)},
+            )
+        ],
+        verbose=True,
+    )
+
+    stats = registry._ensure_range(("alpha.base",), 20200101, 20200102)
+
+    assert stats.request_days == 2
+    assert stats.raw_points == 2
+    assert stats.raw_chunks == 1
+    assert stats.ops_points == 0
+    assert stats.ops_items == 0
+    assert stats.raw_time >= 0.0
+    assert stats.total_time >= stats.raw_time
 
 
 def test_data_registry_get_data_returns_processed_fixed_matrix() -> None:
