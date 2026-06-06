@@ -60,7 +60,6 @@ eg-lgbm/
 - `constants.output_root`：日志、alpha、回测输出的根目录
 - `constants.checkpoint_root`：模型 checkpoint 输出目录
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
-- `strategy.path`：指向回测策略文件，例如 `alpha_strategy.py`
 - `combo.paths.checkpoint_root`：checkpoint 输出目录
 - `combo.paths.output_dir`：日志和中间结果输出目录
 - `backtest.output_path`：回测结果输出目录
@@ -79,7 +78,6 @@ eg-lgbm/
 
 示例里：
 - `model_path="model.py"`
-- `path="../alpha_strategy.py"`
 - `checkpoint_root="checkpoints"`
 - `output_dir="output"`
 - `output_path="output/backtest"`
@@ -102,12 +100,10 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 ## 数据压缩选项
 
-实际使用时，只需要在 XML 的 `<combo><loader ...>` 节点里增加 `compression` 属性即可：
+实际使用时，只需要在 XML 的 `<combo><data ...>` 节点里增加 `compression` 属性即可：
 
 ```xml
-<loader dtype="float16" compression="fp4" data_start_ds="20160101">
-  ...
-</loader>
+<data dtype="float16" compression="fp4" data_start_ds="20160101" />
 ```
 
 可选值：
@@ -144,7 +140,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 - `runCombo.py`：research 运行入口，负责加载配置、调用 `comb2`、再接入 `comb2-pcmaster` 回测
 - `config.py`：配置解析与默认参数
-- `alpha_strategy.py`：把信号转换为回测仓位
+- 默认 config 使用内置 `AlphaStrategy`：只持有正 alpha，按正 alpha 权重归一化生成 long-only 仓位
 - `vendor/comb2`：临时内置的 `comb2` 源码
 - `vendor/comb2-pcmaster`：临时内置的 `comb2-pcmaster` 源码
 - `vendor/perf_monitor.py`：可选性能监控模块

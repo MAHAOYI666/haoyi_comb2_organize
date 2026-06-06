@@ -3,6 +3,7 @@ from setuptools import Extension, setup
 
 extensions = [
     Extension("src.ComboBase", ["src/ComboBase.py"]),
+    Extension("src.DataRegistry", ["src/DataRegistry.py"]),
     Extension("src.DataLoader", ["src/DataLoader.py"]),
     Extension("src.op_utils", ["src/op_utils.py"]),
     Extension("src.selection", ["src/selection.py"]),
