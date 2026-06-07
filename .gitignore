@@ -19,3 +19,4 @@ manual_logs/
 haoyi_models/
 correlation.py
 runFactorCorr.py
+*.txt
