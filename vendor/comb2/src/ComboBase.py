@@ -135,9 +135,8 @@ class ComboBase:
 
     def Combine(self, di, ti=None):
         if self.livetrading:
-            self.CombineLive(di, ti)
-        else:
-            self.CombineHist(di, ti)
+            return self.CombineLive(di, ti)
+        return self.CombineHist(di, ti)
 
     def _clear_alpha(self):
         if isinstance(self.node.alpha, torch.Tensor):
@@ -188,18 +187,19 @@ class ComboBase:
         pred_ds = self._prev_date(ds)
         if self.modelDir:
             self.LoadCheckpointModel(self.modelDir, pred_ds)
-        self.GenComboPos(pred_ds)
+        return self.GenComboPos(pred_ds)
 
     def CombineHist(self, di, ti=None):
         ds = self._resolve_date(di)
         pred_ds = self._prev_date(ds)
         if self.model is None and self.modelDir:
             self.LoadCheckpointModel(self.modelDir, pred_ds)
-        self.GenComboPos(pred_ds)
+        alpha = self.GenComboPos(pred_ds)
         if self.needTrain(ds):
             self.Train(ds)
             if self.modelDir:
                 self.SaveCheckpointModel(self.modelDir, self._prev_date(ds, self.trainDelay))
+        return alpha
 
     def _resolve_date(self, di) -> int:
         if isinstance(di, int) and di in self.loader.mask.date:
