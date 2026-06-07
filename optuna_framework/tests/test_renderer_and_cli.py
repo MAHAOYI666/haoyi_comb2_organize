@@ -24,10 +24,10 @@ def test_render_baseline_params_writes_paths_and_fixed_override(tmp_path) -> Non
     assert root.find("./strategy").get("start_ds") == "20200102"
     assert root.find("./strategy").get("end_ds") == "20231229"
     assert root.find("./combo/runtime").get("snaptime") == "trial_00007"
-    assert root.find("./combo/paths").get("model_path") == str((get_repo_root() / "eg-torch" / "model_hybrid_tcn.py").resolve())
+    assert root.find("./combo/paths").get("model_path") == str((get_repo_root() / "eg-torch" / "model.py").resolve())
     assert root.find("./combo/output").get("enable_alpha_analysis") == "false"
     assert root.find("./constants").get("output_root") == str(run_paths.output_root)
-    assert "scheduler_step_size" not in materialized
+    assert materialized["scheduler_step_size"] == 10
     assert root.find("./combo/model").get("scheduler_step_size") == "10"
 
 
