@@ -1,10 +1,10 @@
-"""Shared helpers for direct script execution from the repository root."""
+"""Shared helpers for direct detailed Optuna script execution."""
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 
 def bootstrap_repo_imports() -> None:
@@ -15,14 +15,37 @@ def bootstrap_repo_imports() -> None:
         sys.path.insert(0, cwd)
 
 
-def adapter_for_name(name: str) -> Any:
-    """Return an adapter instance by registered name."""
+def add_common_config_args(parser: argparse.ArgumentParser) -> None:
+    """Add config and study-root arguments shared by detailed scripts."""
 
-    from optuna_framework.adapters.eg_torch_v1 import EgTorchV1Adapter
+    parser.add_argument("--config", default=None, help="Path to optuna_framework XML config")
+    parser.add_argument("--study-root", default=None, help="Override configured/default study root")
 
-    if name == EgTorchV1Adapter.name:
-        return EgTorchV1Adapter()
-    raise KeyError(f"unknown adapter: {name}")
+
+def load_config_from_args(args: argparse.Namespace):
+    """Load StudyConfig from common CLI args."""
+
+    from optuna_framework.study_config import load_study_config
+
+    return load_study_config(args.config, study_root_override=args.study_root)
+
+
+def ensure_plan_for_args(config, args: argparse.Namespace, dry_run: bool = False):
+    """Check or generate the confirmation plan according to run mode."""
+
+    from optuna_framework.config_validator import assert_plan_ok, ensure_config_plan, write_config_plan
+
+    if dry_run:
+        plan = ensure_config_plan(config, write=True)
+        print(f"[DRY-RUN] config_plan={write_config_plan(plan)}")
+        return plan
+    return assert_plan_ok(config, skip_plan_check=getattr(args, "skip_plan_check", False))
+
+
+def add_plan_check_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the explicit plan-check bypass argument for real runs."""
+
+    parser.add_argument("--skip-plan-check", action="store_true", help="Bypass saved plan_hash check for real runs")
 
 
 def fixture_thresholds_path() -> Path:
@@ -40,4 +63,3 @@ def print_command(prefix: str, config_path: Path, cmd: list[str]) -> None:
 
     print(f"{prefix} config={config_path}")
     print(f"{prefix} cmd={command_to_string(cmd)}")
-

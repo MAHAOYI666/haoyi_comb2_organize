@@ -1,4 +1,4 @@
-"""Render isolated XML configs from the eg-torch baseline config."""
+"""Render isolated XML configs from a detailed Optuna study config."""
 
 from __future__ import annotations
 
@@ -10,44 +10,24 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from optuna_framework.adapters.base import ModelAdapter
+from optuna_framework.search_space import ConfigDrivenAdapter
 from optuna_framework.specs import RunPaths
+from optuna_framework.study_config import StudyConfig
+from optuna_framework.xml_patcher import apply_fixed_override, coerce_scalar, format_xml_value, indent_xml, resolve_relative_paths
 
 
 PATH_PATCH_KEYS = {
-    "config.constants.@cache_path",
-    "config.constants.@factor_root",
     "config.strategy.@start_ds",
     "config.strategy.@end_ds",
+    "config.strategy.@path",
     "config.constants.@output_root",
     "config.constants.@checkpoint_root",
     "config.combo.paths.@model_path",
-    "config.combo.paths.@research_loader_path",
-    "config.combo.paths.@research_dataset_path",
     "config.combo.runtime.@snaptime",
 }
 
-_RELATIVE_PATH_SPECS = (
-    ("./constants", "cache_path"),
-    ("./constants", "factor_root"),
-    ("./combo/paths", "model_path"),
-    ("./combo/paths", "research_loader_path"),
-    ("./combo/paths", "research_dataset_path"),
-)
-
 OPTUNA_RUNTIME_PATCH_KEYS = PATH_PATCH_KEYS | {
     "config.combo.output.@enable_alpha_analysis",
-}
-
-MODEL_PATCH_KEYS = {
-    "config.combo.model.@lr",
-    "config.combo.model.@weight_decay",
-    "config.combo.model.@dropout",
-    "config.combo.model.@hiddenSize",
-    "config.combo.model.@fcSize",
-    "config.combo.model.@epochs",
-    "config.combo.model.@scheduler_step_size",
-    "config.combo.model.@scheduler_gamma",
 }
 
 
@@ -61,94 +41,63 @@ class XmlDiff:
 
 
 def render_config(
-    baseline_config_path: str | Path,
+    config: StudyConfig,
     run_paths: RunPaths,
-    adapter: ModelAdapter,
+    adapter: ConfigDrivenAdapter,
     params: dict[str, Any],
-    fixed_overrides: dict[str, Any] | None = None,
+    extra_overrides: dict[str, Any] | None = None,
     git_commit: str | None = None,
 ) -> dict[str, Any]:
     """Render ``config.xml`` plus metadata for one isolated run."""
 
-    baseline_config_path = Path(baseline_config_path).expanduser().resolve()
-    tree = ET.parse(baseline_config_path)
+    tree = ET.parse(config.baseline_config_path)
     root = tree.getroot()
 
     materialized = adapter.apply_params_to_xml(root, params)
-    _set_attr(root, "./strategy", "start_ds", run_paths.segment.start_ds)
-    _set_attr(root, "./strategy", "end_ds", run_paths.segment.end_ds)
+    _set_attr(root, "./strategy", "start_ds", run_paths.run_start_ds)
+    _set_attr(root, "./strategy", "end_ds", run_paths.run_end_ds)
     _set_attr(root, "./constants", "output_root", str(run_paths.output_root))
     _set_attr(root, "./constants", "checkpoint_root", str(run_paths.checkpoint_root))
     _set_attr(root, "./combo/runtime", "snaptime", run_paths.snaptime)
 
-    for dotted_path, value in (fixed_overrides or {}).items():
+    fixed_overrides = {**config.fixed_overrides, **(extra_overrides or {})}
+    for dotted_path, value in fixed_overrides.items():
         apply_fixed_override(root, dotted_path, value)
 
-    _resolve_relative_paths(root, baseline_config_path.parent)
+    resolve_relative_paths(root, config.baseline_config_path.parent)
 
-    run_paths.segment_dir.mkdir(parents=True, exist_ok=True)
+    run_paths.run_dir.mkdir(parents=True, exist_ok=True)
     run_paths.output_root.mkdir(parents=True, exist_ok=True)
     run_paths.checkpoint_root.mkdir(parents=True, exist_ok=True)
 
-    _indent_xml(root)
+    indent_xml(root)
     tree.write(run_paths.config_path, encoding="utf-8", xml_declaration=False)
     _write_json(run_paths.params_path, materialized)
     resolved_meta = {
+        "study_name": config.study_name,
+        "optuna_name": config.optuna_name,
+        "config_file": str(config.config_path),
+        "baseline_config": str(config.baseline_config_path),
         "trial_number": run_paths.trial_number,
-        "segment": run_paths.segment.name,
-        "start_ds": run_paths.segment.start_ds,
-        "end_ds": run_paths.segment.end_ds,
+        "run_window": {
+            "start_ds": run_paths.run_start_ds,
+            "end_ds": run_paths.run_end_ds,
+        },
+        "score_window": {
+            "start_ds": run_paths.score_start_ds,
+            "end_ds": run_paths.score_end_ds,
+        },
         "output_root": str(run_paths.output_root),
         "checkpoint_root": str(run_paths.checkpoint_root),
         "snaptime": run_paths.snaptime,
         "seed": _read_xml_attr(root, "./combo/model", "seed"),
-        "git_commit": git_commit if git_commit is not None else get_git_commit(baseline_config_path.parent),
+        "git_commit": git_commit if git_commit is not None else get_git_commit(config.baseline_config_path.parent),
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "fixed_overrides": dict(fixed_overrides or {}),
+        "fixed_overrides": dict(fixed_overrides),
         "kind": run_paths.kind,
     }
     _write_json(run_paths.resolved_meta_path, resolved_meta)
     return materialized
-
-
-def _resolve_relative_paths(root: ET.Element, base_dir: Path) -> None:
-    """Convert relative file paths to absolute paths anchored to the baseline config."""
-
-    for xpath, attr in _RELATIVE_PATH_SPECS:
-        element = root.find(xpath)
-        if element is None:
-            continue
-        value = element.get(attr)
-        if value and not Path(value).expanduser().is_absolute():
-            element.set(attr, str((base_dir / value).resolve()))
-    for item in root.findall("./combo/data/item"):
-        module = (item.get("module") or "").strip().lower()
-        for attr in ("path", "config_path"):
-            value = item.get(attr)
-            if not value or Path(value).expanduser().is_absolute():
-                continue
-            if attr == "path" and module in {"factor", "builtin.factor", "label", "builtin.label", "barra_style", "builtin.barra_style"}:
-                continue
-            item.set(attr, str((base_dir / value).resolve()))
-
-
-def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None:
-    """Apply a dotted override like ``combo.model.device`` to an XML attribute."""
-
-    parts = dotted_path.split(".")
-    if len(parts) < 2:
-        raise ValueError(f"invalid fixed override path: {dotted_path}")
-    element_path = "./" + "/".join(parts[:-1])
-    attr_name = parts[-1]
-    element = root.find(element_path)
-    if element is None and element_path == "./combo/output":
-        combo = root.find("./combo")
-        if combo is None:
-            raise ValueError("XML is missing element: ./combo")
-        element = ET.SubElement(combo, "output")
-    if element is None:
-        raise ValueError(f"XML is missing element: {element_path}")
-    element.set(attr_name, _format_xml_value(value))
 
 
 def structured_xml_diff(path_a: str | Path, path_b: str | Path) -> list[XmlDiff]:
@@ -183,18 +132,18 @@ def flatten_xml(root: ET.Element) -> dict[str, Any]:
 
     def visit(element: ET.Element, path: str) -> None:
         for attr, raw_value in element.attrib.items():
-            fields[f"{path}.@{attr}"] = _coerce_scalar(raw_value)
+            fields[f"{path}.@{attr}"] = coerce_scalar(raw_value)
         text = (element.text or "").strip()
         if text:
             fields[f"{path}.#text"] = text
         totals: dict[str, int] = {}
-        for child in list(element):
-            totals[child.tag] = totals.get(child.tag, 0) + 1
+        for child_item in list(element):
+            totals[child_item.tag] = totals.get(child_item.tag, 0) + 1
         seen: dict[str, int] = {}
-        for child in list(element):
-            seen[child.tag] = seen.get(child.tag, 0) + 1
-            child_name = child.tag if totals[child.tag] == 1 else f"{child.tag}[{seen[child.tag]}]"
-            visit(child, f"{path}.{child_name}")
+        for child_item in list(element):
+            seen[child_item.tag] = seen.get(child_item.tag, 0) + 1
+            child_name = child_item.tag if totals[child_item.tag] == 1 else f"{child_item.tag}[{seen[child_item.tag]}]"
+            visit(child_item, f"{path}.{child_name}")
 
     visit(root, root.tag)
     return fields
@@ -223,7 +172,7 @@ def _set_attr(root: ET.Element, element_path: str, attr: str, value: Any) -> Non
     element = root.find(element_path)
     if element is None:
         raise ValueError(f"XML is missing element: {element_path}")
-    element.set(attr, _format_xml_value(value))
+    element.set(attr, format_xml_value(value))
 
 
 def _read_xml_attr(root: ET.Element, element_path: str, attr: str) -> str | None:
@@ -238,31 +187,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _format_xml_value(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return f"{value:.12g}"
-    return str(value)
-
-
-def _coerce_scalar(raw_value: str) -> Any:
-    stripped = raw_value.strip()
-    lowered = stripped.lower()
-    if lowered in {"true", "false"}:
-        return lowered == "true"
-    try:
-        return int(stripped)
-    except ValueError:
-        pass
-    try:
-        return float(stripped)
-    except ValueError:
-        return stripped
-
-
 def _semantic_equal(left: Any, right: Any) -> bool:
     if isinstance(left, float) or isinstance(right, float):
         try:
@@ -270,16 +194,3 @@ def _semantic_equal(left: Any, right: Any) -> bool:
         except (TypeError, ValueError):
             return False
     return left == right
-
-
-def _indent_xml(element: ET.Element, level: int = 0) -> None:
-    indent = "\n" + level * "  "
-    if len(element):
-        if not element.text or not element.text.strip():
-            element.text = indent + "  "
-        for child in element:
-            _indent_xml(child, level + 1)
-        if not child.tail or not child.tail.strip():
-            child.tail = indent
-    if level and (not element.tail or not element.tail.strip()):
-        element.tail = indent

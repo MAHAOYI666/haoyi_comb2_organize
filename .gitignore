@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
-.*
+
+.pytest_cache/
+
 .venv/
 .pdm-build/
 .pdm-python
@@ -11,4 +13,10 @@ output**/
 checkpoints**/
 optuna_runs/
 AGENTS.md
+pos_corr/
+manual_logs/
 
+haoyi_models/
+correlation.py
+runFactorCorr.py
+*.txt

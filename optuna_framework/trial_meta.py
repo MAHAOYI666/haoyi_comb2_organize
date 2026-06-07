@@ -1,4 +1,4 @@
-"""Atomic ``trial_meta.json`` state management."""
+﻿"""Atomic ``trial_meta.json`` state management."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ def init_trial_meta(
     trial_dir: str | Path,
     trial_number: int,
     params: dict[str, Any],
-    segment_names: list[str],
 ) -> dict[str, Any]:
     """Initialize ``trial_meta.json`` for a trial."""
 
@@ -26,7 +25,7 @@ def init_trial_meta(
         "started_at": _now(),
         "ended_at": None,
         "params": dict(params),
-        "segments": {name: {"state": "skipped"} for name in segment_names},
+        "scoring_window": {"state": "pending"},
         "objective": None,
         "hard_filter_triggered": False,
     }
@@ -51,20 +50,19 @@ def write_trial_meta(trial_dir: str | Path, meta: dict[str, Any]) -> None:
     os.replace(tmp, target)
 
 
-def update_segment(
+def update_window(
     trial_dir: str | Path,
-    segment_name: str,
     state: str,
     metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update one segment state and optional metrics."""
+    """Update the single scoring-window state and optional metrics."""
 
     meta = read_trial_meta(trial_dir)
-    segment = dict(meta.setdefault("segments", {}).get(segment_name, {}))
-    segment["state"] = state
+    window = dict(meta.get("scoring_window", {}))
+    window["state"] = state
     if metrics:
-        segment.update(metrics)
-    meta["segments"][segment_name] = segment
+        window.update(metrics)
+    meta["scoring_window"] = window
     write_trial_meta(trial_dir, meta)
     return meta
 

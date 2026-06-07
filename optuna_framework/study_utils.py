@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 
-from optuna_framework.runner import SegmentRunError
+from optuna_framework.runner import InferenceRunError
 
 
 def missing_dependency_message(package: str) -> str:
@@ -76,10 +76,10 @@ def create_study(
 
 
 def optimize_study(study: Any, objective: Any, n_trials: int, callbacks: list[Any] | None = None) -> None:
-    """Run Optuna optimization while catching segment failures."""
+    """Run Optuna optimization while catching inference failures."""
 
     try:
-        study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(SegmentRunError,), callbacks=callbacks)
+        study.optimize(objective, n_trials=n_trials, n_jobs=1, catch=(InferenceRunError,), callbacks=callbacks)
     except KeyboardInterrupt:
         raise
 
@@ -122,7 +122,7 @@ def append_resource_metric(study_root: Path, trial: Any) -> None:
 
 
 def write_study_reports(study: Any, study_root: Path) -> None:
-    """Write trials and segment metric CSV reports from Optuna and trial_meta files."""
+    """Write trials and scoring metric CSV reports from Optuna and trial_meta files."""
 
     reports_dir = Path(study_root) / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -137,21 +137,22 @@ def write_study_reports(study: Any, study_root: Path) -> None:
         trial_rows.append(row)
     pd.DataFrame(trial_rows).to_csv(reports_dir / "trials.csv", index=False)
 
-    segment_rows = []
+    scoring_rows = []
     for meta_path in sorted((Path(study_root) / "trials").glob("trial_*/trial_meta.json")):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        for segment_name, segment in meta.get("segments", {}).items():
-            row = {
-                "trial_number": meta.get("trial_number"),
-                "segment": segment_name,
-                "state": segment.get("state"),
-                "objective": meta.get("objective"),
-                "hard_filter_triggered": meta.get("hard_filter_triggered"),
-            }
-            for key in ("sharpe_idx", "dd_li", "li_ret", "ret", "pnl", "days"):
-                row[key] = segment.get(key)
-            segment_rows.append(row)
-    pd.DataFrame(segment_rows).to_csv(reports_dir / "segment_metrics.csv", index=False)
+        metrics = meta.get("scoring_window", {})
+        row = {
+            "trial_number": meta.get("trial_number"),
+            "state": meta.get("state"),
+            "objective": meta.get("objective"),
+            "sharpe_idx": metrics.get("sharpe_idx"),
+            "dd_li": metrics.get("dd_li"),
+            "li_ret": metrics.get("li_ret"),
+            "ret": metrics.get("ret"),
+            "days": metrics.get("days"),
+        }
+        scoring_rows.append(row)
+    pd.DataFrame(scoring_rows).to_csv(reports_dir / "scoring_metrics.csv", index=False)
     _write_top10(reports_dir / "trials.csv", reports_dir / "top10.csv")
 
 
@@ -176,10 +177,10 @@ def export_optuna_visualizations(study: Any, study_root: Path) -> None:
 def cleanup_bad_trial_artifacts(trial_dir: Path) -> None:
     """Remove heavyweight artifacts while preserving configs, metrics, and logs."""
 
-    for checkpoint_dir in trial_dir.glob("*/checkpoints"):
+    for checkpoint_dir in [trial_dir / "checkpoints", *trial_dir.glob("*/checkpoints")]:
         if checkpoint_dir.exists():
             shutil.rmtree(checkpoint_dir, ignore_errors=True)
-    for alpha_history in trial_dir.glob("*/output/alpha_history.pt"):
+    for alpha_history in [trial_dir / "output" / "alpha_history.pt", *trial_dir.glob("*/output/alpha_history.pt")]:
         alpha_history.unlink(missing_ok=True)
 
 

@@ -1,13 +1,11 @@
-"""Manual Phase B candidate stability runner."""
+"""Manual Phase B candidate stability runner for detailed configs."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import textwrap
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree as ET
 
 import numpy as np
 import pandas as pd
@@ -17,146 +15,77 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_framework.aggregators import load_baseline_thresholds
+from optuna_framework.aggregators import load_baseline_thresholds, require_tuning_period_baseline
 from optuna_framework.config_renderer import render_config
-from optuna_framework.paths import build_named_run_paths, resolve_study_root
-from optuna_framework.runner import build_run_command, run_segment
-from optuna_framework.scripts._script_common import adapter_for_name, fixture_thresholds_path, print_command
-from optuna_framework.studies.eg_torch_v1 import STUDY_SPEC
-
-
-SEEDS = (42, 43, 44)
-
-SEEDED_MODEL_TEMPLATE = """
-from __future__ import annotations
-
-import importlib.util
-import random
-from pathlib import Path
-
-import numpy as np
-import torch
-
-
-_ORIGINAL_MODEL_PATH = Path(__ORIGINAL_MODEL_PATH__)
-_SPEC = importlib.util.spec_from_file_location("_phase_b_seeded_base_model", _ORIGINAL_MODEL_PATH)
-_BASE_MODULE = importlib.util.module_from_spec(_SPEC)
-assert _SPEC.loader is not None
-_SPEC.loader.exec_module(_BASE_MODULE)
-
-
-def _apply_seed(seed: int) -> None:
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
-
-
-class ResearchModel(_BASE_MODULE.ResearchModel):
-    def __init__(self, config):
-        self.seed = int(config.get("seed", 42))
-        _apply_seed(self.seed)
-        super().__init__(config)
-
-    def fit(self, dataset):
-        _apply_seed(self.seed)
-        original_dataloader = getattr(_BASE_MODULE, "DataLoader", None)
-        if original_dataloader is None:
-            return super().fit(dataset)
-
-        def seeded_dataloader(*args, **kwargs):
-            if kwargs.get("generator") is None:
-                generator = torch.Generator()
-                generator.manual_seed(self.seed)
-                kwargs["generator"] = generator
-            return original_dataloader(*args, **kwargs)
-
-        _BASE_MODULE.DataLoader = seeded_dataloader
-        try:
-            return super().fit(dataset)
-        finally:
-            _BASE_MODULE.DataLoader = original_dataloader
-"""
+from optuna_framework.metrics_parser import WindowMetrics
+from optuna_framework.paths import build_named_run_paths
+from optuna_framework.runner import build_run_command, run_inference
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, fixture_thresholds_path, load_config_from_args, print_command
+from optuna_framework.search_space import ConfigDrivenAdapter
+from optuna_framework.study_config import PhaseBConfig
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-
     parser = argparse.ArgumentParser(description="Run Phase B seed stability checks.")
+    add_common_config_args(parser)
+    add_plan_check_arg(parser)
     parser.add_argument("--dry-run", action="store_true", help="Print planned commands without running runCombo.py")
-    parser.add_argument("--study-root", default=None, help="Override default study root")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Run or print Phase B commands."""
-
     args = parse_args()
-    study_root = resolve_study_root(args.study_root, STUDY_SPEC.name)
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    thresholds = _load_thresholds(study_root, args.dry_run)
-    candidates = _load_candidates(study_root, args.dry_run)
+    config = load_config_from_args(args)
+    ensure_plan_for_args(config, args, dry_run=args.dry_run)
+    adapter = ConfigDrivenAdapter(config)
+    thresholds = _load_thresholds(config.study_root, args.dry_run)
+    tuning_baseline = None if args.dry_run else require_tuning_period_baseline(thresholds)
+    candidates = _load_candidates(config, adapter, args.dry_run)
+    seeds = config.phase_b.seeds
     if args.dry_run:
-        print(f"[DRY-RUN] Phase B study_root={study_root}")
-        print(f"[DRY-RUN] candidates={len(candidates)} seeds={list(SEEDS)}")
-        for cand_idx, params in enumerate(candidates, start=1):
-            for seed in SEEDS:
-                for segment in STUDY_SPEC.tuning_segments:
-                    segment_dir = study_root / "phase_b" / f"candidate_{cand_idx:02d}" / f"seed_{seed}" / segment.name
-                    run_paths = build_named_run_paths(
-                        study_root,
-                        segment_dir,
-                        segment,
-                        snaptime=f"phase_b_c{cand_idx:02d}_seed_{seed}_{segment.name}",
-                        kind="phase_b",
-                    )
-                    print_command(
-                        f"[DRY-RUN] phase_b/candidate_{cand_idx:02d}/seed_{seed}/{segment.name}",
-                        run_paths.config_path,
-                        build_run_command(run_paths.config_path),
-                    )
+        print(f"[DRY-RUN] Phase B study_root={config.study_root}")
+        print(f"[DRY-RUN] candidates={len(candidates)} seeds={list(seeds)}")
+        print(f"[DRY-RUN] run_window={config.tuning_run_window[0]}-{config.tuning_run_window[1]}")
+        print(f"[DRY-RUN] scoring_window={config.scoring_window[0]}-{config.scoring_window[1]}")
+        for cand_idx, _params in enumerate(candidates, start=1):
+            for seed in seeds:
+                subdir = f"phase_b/candidate_{cand_idx:02d}/seed_{seed}"
+                run_paths = build_named_run_paths(
+                    config.study_root,
+                    subdir,
+                    kind="phase_b",
+                    run_window=config.tuning_run_window,
+                    score_window=config.scoring_window,
+                    snaptime=f"phase_b_c{cand_idx:02d}_seed_{seed}",
+                )
+                print_command(f"[DRY-RUN] {subdir}", run_paths.config_path, build_run_command(run_paths.config_path))
         return
 
-    base_model_path = _baseline_model_path()
     results = []
     survivors = []
     for cand_idx, params in enumerate(candidates, start=1):
         candidate_rows = []
-        eliminated_reasons = []
-        seed_mean_sharpes = []
-        for seed in SEEDS:
-            seed_metrics = []
-            for segment in STUDY_SPEC.tuning_segments:
-                segment_dir = study_root / "phase_b" / f"candidate_{cand_idx:02d}" / f"seed_{seed}" / segment.name
-                run_paths = build_named_run_paths(
-                    study_root,
-                    segment_dir,
-                    segment,
-                    snaptime=f"phase_b_c{cand_idx:02d}_seed_{seed}_{segment.name}",
-                    kind="phase_b",
-                )
-                seeded_model_path = _write_seeded_model(run_paths.segment_dir, base_model_path)
-                overrides = _seeded_overrides(seed, seeded_model_path)
-                render_config(STUDY_SPEC.baseline_config_path, run_paths, adapter, params, overrides)
-                metric = run_segment(run_paths)
-                seed_metrics.append(metric)
-                candidate_rows.append({"seed": seed, "segment": segment.name, **metric.to_dict()})
-                segment_limits = thresholds["hard_filter_by_segment"][segment.name]
-                if metric.sharpe_idx < segment_limits["min_sharpe"]:
-                    eliminated_reasons.append(f"seed {seed} {segment.name} sharpe below baseline-0.3")
-                if metric.dd_li > segment_limits["max_dd"]:
-                    eliminated_reasons.append(f"seed {seed} {segment.name} dd_li above baseline*1.3")
-            seed_mean_sharpes.append(float(np.mean([metric.sharpe_idx for metric in seed_metrics])))
-        if np.std(seed_mean_sharpes) > 0.3:
-            eliminated_reasons.append("three-seed mean sharpe std > 0.3")
+        seed_metrics = []
+        for seed in seeds:
+            subdir = f"phase_b/candidate_{cand_idx:02d}/seed_{seed}"
+            run_paths = build_named_run_paths(
+                config.study_root,
+                subdir,
+                kind="phase_b",
+                run_window=config.tuning_run_window,
+                score_window=config.scoring_window,
+                snaptime=f"phase_b_c{cand_idx:02d}_seed_{seed}",
+            )
+            render_config(config, run_paths, adapter, params, _seeded_overrides(seed))
+            metric = run_inference(run_paths)
+            seed_metrics.append((seed, metric))
+            candidate_rows.append({"seed": seed, **metric.to_dict()})
+        eliminated_reasons = _phase_b_rejection_reasons(seed_metrics, tuning_baseline, config.phase_b)
         eliminated = bool(eliminated_reasons)
         payload = {
             "candidate": f"candidate_{cand_idx:02d}",
             "params": params,
-            "seeds": list(SEEDS),
+            "seeds": list(seeds),
             "eliminated": eliminated,
             "reasons": sorted(set(eliminated_reasons)),
             "metrics": candidate_rows,
@@ -164,7 +93,7 @@ def main() -> None:
         results.append(payload)
         if not eliminated:
             survivors.append(payload)
-    phase_dir = study_root / "phase_b"
+    phase_dir = config.study_root / "phase_b"
     phase_dir.mkdir(parents=True, exist_ok=True)
     (phase_dir / "results.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (phase_dir / "survivors.json").write_text(json.dumps(survivors, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -183,26 +112,22 @@ def _load_thresholds(study_root: Path, dry_run: bool) -> dict[str, Any]:
     return load_baseline_thresholds(threshold_path)
 
 
-def _load_candidates(study_root: Path, dry_run: bool) -> list[dict[str, Any]]:
-    top10_path = study_root / "reports" / "top10.csv"
+def _load_candidates(config: Any, adapter: ConfigDrivenAdapter, dry_run: bool) -> list[dict[str, Any]]:
+    top10_path = config.study_root / "reports" / "top10.csv"
     if top10_path.exists():
         df = pd.read_csv(top10_path)
         candidates = []
-        for _, row in df.head(6).iterrows():
+        for _, row in df.head(config.phase_b.candidate_scan_top_n).iterrows():
             params = {key.removeprefix("param_"): row[key] for key in row.index if key.startswith("param_")}
             if not params:
                 continue
-            candidates.append(_normalize_params(params))
-        distinct = _select_distinct(candidates, limit=3)
+            candidates.append(adapter.normalize_params(params))
+        distinct = _select_distinct(candidates, limit=config.phase_b.candidate_limit)
         if len(distinct) >= 1:
-            return distinct[:3]
+            return distinct[: config.phase_b.candidate_limit]
     if not dry_run:
         raise FileNotFoundError(f"Phase A top10.csv not found or empty: {top10_path}")
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
-    baseline = adapter.baseline_params()
-    variant1 = {**baseline, "lr": 5e-6, "dropout": 0.4}
-    variant2 = {**baseline, "hiddenSize": 384, "fcSize": 128}
-    return [baseline, variant1, variant2]
+    return _dry_run_candidates(config, adapter)
 
 
 def _select_distinct(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -215,52 +140,54 @@ def _select_distinct(candidates: list[dict[str, Any]], limit: int) -> list[dict[
     return selected
 
 
-def _normalize_params(params: dict[str, Any]) -> dict[str, Any]:
-    adapter = adapter_for_name(STUDY_SPEC.adapter_name)
+def _dry_run_candidates(config: Any, adapter: ConfigDrivenAdapter) -> list[dict[str, Any]]:
     baseline = adapter.baseline_params()
-    normalized = {}
-    for key, default in baseline.items():
-        value = params.get(key, default)
-        if isinstance(default, int) and not isinstance(default, bool):
-            normalized[key] = int(value)
-        elif isinstance(default, float):
-            normalized[key] = float(value)
-        else:
-            normalized[key] = value
-    return normalized
+    candidates = [baseline]
+    for spec in config.params:
+        if len(candidates) >= config.phase_b.candidate_limit:
+            break
+        variant = dict(baseline)
+        if spec.param_type == "categorical":
+            for choice in adapter._typed_choices(spec):
+                if choice != baseline[spec.name]:
+                    variant[spec.name] = choice
+                    break
+        elif spec.param_type == "float":
+            low, high = float(spec.low), float(spec.high)
+            candidate = min(high, max(low, float(baseline[spec.name]) * 2.0))
+            if candidate == baseline[spec.name]:
+                candidate = (low + high) / 2.0
+            variant[spec.name] = candidate
+        elif spec.param_type == "int":
+            variant[spec.name] = int((int(float(spec.low)) + int(float(spec.high))) // 2)
+        if variant != baseline and variant not in candidates:
+            candidates.append(variant)
+    return candidates[: config.phase_b.candidate_limit]
 
 
-def _seeded_overrides(seed: int, seeded_model_path: Path) -> dict[str, Any]:
-    return {
-        **STUDY_SPEC.fixed_overrides,
-        "combo.model.seed": int(seed),
-        "combo.paths.model_path": str(seeded_model_path),
-    }
+def _seeded_overrides(seed: int) -> dict[str, Any]:
+    return {"combo.model.seed": int(seed)}
 
 
-def _baseline_model_path() -> Path:
-    root = ET.parse(STUDY_SPEC.baseline_config_path).getroot()
-    paths = root.find("./combo/paths")
-    if paths is None:
-        raise ValueError("baseline XML is missing <combo><paths>")
-    raw_path = paths.get("model_path")
-    if not raw_path:
-        raise ValueError("baseline XML is missing combo.paths.model_path")
-    model_path = Path(raw_path).expanduser()
-    if not model_path.is_absolute():
-        model_path = Path(STUDY_SPEC.baseline_config_path).parent / model_path
-    return model_path.resolve()
-
-
-def _write_seeded_model(segment_dir: Path, base_model_path: Path) -> Path:
-    segment_dir.mkdir(parents=True, exist_ok=True)
-    model_path = (segment_dir / "seeded_model.py").resolve()
-    source = textwrap.dedent(SEEDED_MODEL_TEMPLATE).lstrip().replace(
-        "__ORIGINAL_MODEL_PATH__",
-        repr(str(base_model_path)),
-    )
-    model_path.write_text(source, encoding="utf-8")
-    return model_path
+def _phase_b_rejection_reasons(
+    seed_metrics: list[tuple[int, WindowMetrics]],
+    baseline: dict[str, Any],
+    phase_b: PhaseBConfig | None = None,
+) -> list[str]:
+    cfg = phase_b or PhaseBConfig(seeds=(42, 43, 44))
+    reasons = []
+    baseline_sharpe = float(baseline["sharpe_idx"])
+    baseline_dd_li = float(baseline["dd_li"])
+    sharpes = []
+    for seed, metric in seed_metrics:
+        sharpes.append(metric.sharpe_idx)
+        if metric.sharpe_idx < baseline_sharpe - cfg.sharpe_margin:
+            reasons.append(f"seed {seed} scoring-window sharpe_idx below baseline-{cfg.sharpe_margin:g}")
+        if metric.dd_li > baseline_dd_li * cfg.dd_multiplier:
+            reasons.append(f"seed {seed} scoring-window dd_li above baseline*{cfg.dd_multiplier:g}")
+    if len(sharpes) == len(cfg.seeds) and float(np.std(sharpes)) > cfg.sharpe_std_max:
+        reasons.append(f"three-seed scoring-window sharpe_idx std > {cfg.sharpe_std_max:g}")
+    return sorted(set(reasons))
 
 
 if __name__ == "__main__":
