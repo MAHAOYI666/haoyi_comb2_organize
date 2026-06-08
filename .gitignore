@@ -12,6 +12,8 @@ pyproject.toml
 output**/
 checkpoints**/
 optuna_runs/
+build/protected_wheel/
+dist_protected/
 AGENTS.md
 pos_corr/
 manual_logs/

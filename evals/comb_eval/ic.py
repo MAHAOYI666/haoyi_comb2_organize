@@ -42,7 +42,7 @@ def summarize_ic(path: str | Path | pd.DataFrame, start: str | None = None, end:
         rows.append(row)
     table = pd.DataFrame(rows).set_index("period")
     table.loc["ALL"] = _average_all_row(table)
-    return MetricResult("ic", table.round(2), {"input": str(path), "start": start, "end": end})
+    return MetricResult("ic", table, {"input": str(path), "start": start, "end": end})
 
 
 def summarize_cache_ic(path: str | Path, start_ds: str | int, end_ds: str | int, df_type: str, columns: list[str] | None = None) -> MetricResult:

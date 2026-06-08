@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from comb_eval.formatting import output_frame_to_text
+
 
 def write_frame(frame: pd.DataFrame, path: str | Path) -> None:
     path = Path(path)
@@ -19,7 +21,7 @@ def write_text(text: str, path: str | Path) -> None:
 
 
 def frame_to_text(frame: pd.DataFrame) -> str:
-    return frame.to_string()
+    return output_frame_to_text(frame)
 
 
 def select_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

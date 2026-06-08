@@ -296,6 +296,8 @@ XML：
   tsDays="5"
   load_chunk_days="128"
   processed_feature_cache="false"
+  torch_threads="64"
+  torch_interop_threads="1"
   model_smooth_rate="0.7"
   model_keep_num="0"
   select_days="120"
@@ -313,6 +315,8 @@ XML：
 | `tsDays` | `8` | int | 每个样本的时间窗口长度。 |
 | `load_chunk_days` | `None` | int / None | 构造训练集时每次预取多少天。为 None 时使用 `tsDays`。 |
 | `processed_feature_cache` | `False` | bool | 是否缓存处理后的每日 feature。可提速重复访问，但会明显增加内存。 |
+| `torch_threads` | `64` | int | PyTorch CPU intra-op 线程数。用于限制单个 op 内部并行度，避免多项目并发时每个进程默认占满物理核。 |
+| `torch_interop_threads` | `1` | int | PyTorch CPU inter-op 线程数。通常设为 1，避免多个 op 调度线程池在并发任务中放大竞争。 |
 | `model_smooth_rate` | `0.7` | float | 新旧模型预测平滑比例。`1.0` 表示只用新模型。 |
 | `model_keep_num` | `2` | int | 保留多少个 checkpoint。`0` 表示不保存。负数表示不清理。 |
 | `select_days` | `100` | int / None | 默认选择模块的选择窗口参数。当前默认模块只记录 metadata，不主动筛选。 |
@@ -778,6 +782,8 @@ monitor.maybe_section
       tsDays="5"
       load_chunk_days="128"
       processed_feature_cache="true"
+      torch_threads="64"
+      torch_interop_threads="1"
       model_smooth_rate="0.7"
       model_keep_num="0"
       select_days="120"

@@ -384,30 +384,30 @@ class ComboTrainDataset(Dataset):
         with _maybe_section(monitor, "dataset_init.loop_total", self.end_ds, level="full"):
             for window_start in range(0, self.ndays, self.load_chunk_days):
                 window_end = min(window_start + self.load_chunk_days, self.ndays)
+                feature_days = [
+                    loader.didx2date(self.start_didx + offset - self.x_delay + 1)
+                    for offset in range(window_start, window_end)
+                ]
+                label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
+                load_start = time.perf_counter()
+                feature_stats = loader.prefetch_features(feature_days)
+                label_stats = loader.prefetch_labels(label_days, ret_days=self.x_delay)
+                load_time = time.perf_counter() - load_start
                 if loader.verbose:
-                    for offset in range(window_start, window_end):
-                        label_ds = loader.didx2date(self.start_didx + offset)
-                        feature_ds = loader.didx2date(self.start_didx + offset - self.x_delay + 1)
-                        load_start = time.perf_counter()
-                        feature_stats = loader.prefetch_features((feature_ds,))
-                        label_stats = loader.prefetch_labels((label_ds,), ret_days=self.x_delay)
-                        load_time = time.perf_counter() - load_start
-                        raw_time = feature_stats.raw_time + label_stats.raw_time
-                        ops_time = feature_stats.ops_time + label_stats.ops_time
-                        detail = f"day {feature_ds}, raw {raw_time:.2f}s, ops {ops_time:.2f}s, load {load_time:.2f}s"
-                        print_progress(
-                            "Stage:load_train_days",
-                            offset + 1,
-                            self.ndays,
-                            progress_start,
-                            detail,
-                            final=offset + 1 == self.ndays,
-                        )
-                else:
-                    feature_days = [loader.didx2date(self.start_didx + offset - self.x_delay + 1) for offset in range(window_start, window_end)]
-                    label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
-                    loader.prefetch_features(feature_days)
-                    loader.prefetch_labels(label_days, ret_days=self.x_delay)
+                    raw_time = feature_stats.raw_time + label_stats.raw_time
+                    ops_time = feature_stats.ops_time + label_stats.ops_time
+                    detail = (
+                        f"days {feature_days[0]}-{feature_days[-1]}, chunk {window_end - window_start}, "
+                        f"raw {raw_time:.2f}s, ops {ops_time:.2f}s, load {load_time:.2f}s"
+                    )
+                    print_progress(
+                        "Stage:load_train_days",
+                        window_end,
+                        self.ndays,
+                        progress_start,
+                        detail,
+                        final=window_end == self.ndays,
+                    )
                 for offset in range(window_start, window_end):
                     label_didx = self.start_didx + offset
                     feature_didx = label_didx - self.x_delay + 1

@@ -1,14 +1,45 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import time
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
+
+
+DEFAULT_COMB_TORCH_THREADS = 64
+DEFAULT_COMB_TORCH_INTEROP_THREADS = 1
+_EXPLICIT_THREAD_ENV = {
+    name: os.environ.get(name)
+    for name in (
+        "COMB_TORCH_THREADS",
+        "TORCH_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "COMB_TORCH_INTEROP_THREADS",
+        "TORCH_NUM_INTEROP_THREADS",
+    )
+}
+
+
+def _install_thread_env_defaults():
+    requested_threads = (
+        _EXPLICIT_THREAD_ENV["COMB_TORCH_THREADS"]
+        or _EXPLICIT_THREAD_ENV["TORCH_NUM_THREADS"]
+        or _EXPLICIT_THREAD_ENV["OMP_NUM_THREADS"]
+    )
+    if not requested_threads:
+        requested_threads = str(min(DEFAULT_COMB_TORCH_THREADS, os.cpu_count() or DEFAULT_COMB_TORCH_THREADS))
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(name, requested_threads)
+
+
+_install_thread_env_defaults()
 
 import numpy as np
 import pandas as pd
@@ -30,10 +61,59 @@ from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
 from vendor.perf_monitor import PerfMonitor, print_progress
 
-organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
-organize_config_module = importlib.util.module_from_spec(organize_config_spec)
-assert organize_config_spec.loader is not None
-organize_config_spec.loader.exec_module(organize_config_module)
+
+def _load_organize_config_module():
+    config_path = ORGANIZE_ROOT / "config.py"
+    if config_path.exists():
+        config_spec = importlib.util.spec_from_file_location("comb2_organize_config", config_path)
+        config_module = importlib.util.module_from_spec(config_spec)
+        assert config_spec.loader is not None
+        config_spec.loader.exec_module(config_module)
+        return config_module
+    return importlib.import_module("config")
+
+
+organize_config_module = _load_organize_config_module()
+
+
+def _parse_positive_int(name: str, value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer, got {value!r}") from None
+    if parsed <= 0:
+        raise ValueError(f"{name} must be positive, got {parsed}")
+    return parsed
+
+
+def _explicit_env_int(*names: str) -> int | None:
+    for name in names:
+        value = _EXPLICIT_THREAD_ENV.get(name)
+        if value is None or value == "":
+            continue
+        return _parse_positive_int(name, value)
+    return None
+
+
+def configure_torch_threads(organize_config: dict):
+    runtime = organize_config["combo"]["runtime"]
+    intra_threads = _explicit_env_int("COMB_TORCH_THREADS", "TORCH_NUM_THREADS", "OMP_NUM_THREADS")
+    interop_threads = _explicit_env_int("COMB_TORCH_INTEROP_THREADS", "TORCH_NUM_INTEROP_THREADS")
+    if intra_threads is None:
+        intra_threads = _parse_positive_int("combo.runtime.torch_threads", runtime.get("torch_threads", DEFAULT_COMB_TORCH_THREADS))
+    if interop_threads is None:
+        interop_threads = _parse_positive_int(
+            "combo.runtime.torch_interop_threads",
+            runtime.get("torch_interop_threads", DEFAULT_COMB_TORCH_INTEROP_THREADS),
+        )
+    if intra_threads is not None:
+        torch.set_num_threads(intra_threads)
+    if interop_threads is not None:
+        torch.set_num_interop_threads(interop_threads)
+    print(
+        f"[THREADS] torch_num_threads={torch.get_num_threads()} "
+        f"torch_num_interop_threads={torch.get_num_interop_threads()}"
+    )
 
 
 class Node:
@@ -351,6 +431,7 @@ def main():
     args = parse_args()
     config_path = args.config_flag or args.config
     organize_config = organize_config_module.load_config(config_path)
+    configure_torch_threads(organize_config)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:
         install_perf_decorators(monitor)

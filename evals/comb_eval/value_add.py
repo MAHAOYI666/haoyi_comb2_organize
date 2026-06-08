@@ -43,7 +43,7 @@ def pool_value_added(candidate: str | Path | pd.DataFrame, pool_paths: list[str 
             "avg_value_added_ir": float(table["value_added_ir"].mean()),
             "max_corr": float(table["corr"].max()),
         }})
-    return table.round(6)
+    return table
 
 
 def netting_return(candidate: str | Path | pd.DataFrame, pool: str | Path | pd.DataFrame, column: str = "pnl", start: str | None = None, end: str | None = None) -> dict[str, float | int | str]:
