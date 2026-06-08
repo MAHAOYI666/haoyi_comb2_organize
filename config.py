@@ -46,6 +46,8 @@ DEFAULT_CONFIG = {
             "tsDays": 8,
             "load_chunk_days": None,
             "processed_feature_cache": False,
+            "torch_threads": 64,
+            "torch_interop_threads": 1,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
             "select_days": 100,
