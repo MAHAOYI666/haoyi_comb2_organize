@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib
 import importlib.util
 import re
 import sys
@@ -27,10 +28,19 @@ from runCombo import Node, build_backtest_node, build_strategy_file, dump_alpha_
 from src.DataLoader import nan_to_num
 from vendor.perf_monitor import PerfMonitor, print_progress
 
-organize_config_spec = importlib.util.spec_from_file_location("comb2_organize_config", ORGANIZE_ROOT / "config.py")
-organize_config_module = importlib.util.module_from_spec(organize_config_spec)
-assert organize_config_spec.loader is not None
-organize_config_spec.loader.exec_module(organize_config_module)
+
+def _load_organize_config_module():
+    config_path = ORGANIZE_ROOT / "config.py"
+    if config_path.exists():
+        config_spec = importlib.util.spec_from_file_location("comb2_organize_config", config_path)
+        config_module = importlib.util.module_from_spec(config_spec)
+        assert config_spec.loader is not None
+        config_spec.loader.exec_module(config_module)
+        return config_module
+    return importlib.import_module("config")
+
+
+organize_config_module = _load_organize_config_module()
 
 
 class AblationCombo(ComboBase):

@@ -105,11 +105,11 @@ def pnl_quality_stats(table: pd.DataFrame) -> dict[str, float]:
 
 def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int | str]:
     pnl = _series(df, "pnl")
-    long = _series(df, "long", df["total_asset"] - df.get("reserve_cash", 0) if "total_asset" in df.columns else None)
-    short = _series(df, "short")
-    ret = _series(df, "ret", pnl / long.replace(0, np.nan))
+    long_side = _series(df, "long", df["total_asset"] - df.get("reserve_cash", 0) if "total_asset" in df.columns else None)
+    short_side = _series(df, "short")
+    ret = _series(df, "ret", pnl / long_side.replace(0, np.nan))
     turnover_input = _series(df, "tvr_pct") if "tvr_pct" in df.columns else None
-    holdvalue = _series(df, "sh_hld", long.abs() + short.abs())
+    holdvalue = _series(df, "sh_hld", long_side.abs() + short_side.abs())
     tradevalue = _series(df, "sh_trd", turnover_input / 100 * holdvalue if turnover_input is not None else None)
     n_long = _series(df, "n_long")
     n_short = _series(df, "n_short")
@@ -117,12 +117,12 @@ def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int
     longonly_tradecost = _series(df, "longonly_tradecost")
     longonly_turnover_input = _series(df, "longonly_tvr_pct") if "longonly_tvr_pct" in df.columns else None
 
-    active = (long.fillna(0) != 0) | (short.fillna(0) != 0)
+    active = (long_side.fillna(0) != 0) | (short_side.fillna(0) != 0)
     if not active.any():
         active = pnl.notna()
     days = int(active.sum())
     tdays = int(len(df))
-    avg_long = float(long[active].sum() / days) if days else np.nan
+    avg_long = float(long_side[active].sum() / days) if days else np.nan
     ir = sample_ir(ret)
     hold_sum = holdvalue.sum()
     trade_sum = tradevalue.sum()
@@ -131,7 +131,7 @@ def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int
         turnover = float(turnover_input.mean() / 100)
     longonly_turnover = float(longonly_turnover_input.mean() / 100) if longonly_turnover_input is not None and not longonly_turnover_input.dropna().empty else np.nan
     annual_ret = float(ret.mean() * TRADING_DAYS * 100)
-    longonly_ret = longonly_pnl / long.replace(0, np.nan)
+    longonly_ret = longonly_pnl / long_side.replace(0, np.nan)
     longonly_ir = sample_ir(longonly_ret)
     longonly_ret_pct = float(longonly_ret.mean() * TRADING_DAYS * 100)
     longonly_sharpe = float(longonly_ir * np.sqrt(TRADING_DAYS)) if not np.isnan(longonly_ir) else np.nan
@@ -147,7 +147,7 @@ def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int
         "days": days,
         "tdays": tdays,
         "long_m": avg_long / 1e6 if not np.isnan(avg_long) else np.nan,
-        "short_m": float(short[active].sum() / days / 1e6) if days else np.nan,
+        "short_m": float(short_side[active].sum() / days / 1e6) if days else np.nan,
         "pnl_m": float(pnl.sum() / 1e6),
         "ret_pct": annual_ret,
         "longonly_pnl_m": float(longonly_pnl.sum() / 1e6) if longonly_pnl.notna().any() else np.nan,
