@@ -61,7 +61,7 @@ def main() -> None:
     )
     aligned = _align_longonly_pnl(base, new)
     weights = [float(value) for value in args.weights.split(",") if value]
-    table = _longonly_va_table(aligned, weights).round(2)
+    table = _longonly_va_table(aligned, weights)
     text = frame_to_text(table)
     print(text)
     if args.output:

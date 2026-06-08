@@ -74,7 +74,7 @@ def summarize_pnl(path: str | Path | pd.DataFrame, start: str | None = None, end
     rows = [_summarize_pnl_group(period, group) for period, group in period_groups(df, include_all=False)]
     table = pd.DataFrame(rows).set_index("period")
     table.loc["ALL"] = _average_all_row(table)
-    return MetricResult("pnl", table.round(2), {"input": str(path), "start": start, "end": end})
+    return MetricResult("pnl", table, {"input": str(path), "start": start, "end": end})
 
 
 def summarize_pnl_with_benchmark(path: str | Path | pd.DataFrame, benchmark_path: str | Path | pd.DataFrame | None = None, start: str | None = None, end: str | None = None) -> MetricResult:
@@ -86,7 +86,7 @@ def summarize_pnl_with_benchmark(path: str | Path | pd.DataFrame, benchmark_path
     table["long_zz500_ret"] = np.nan
     common = table.index.intersection(benchmark.index)
     table.loc[common, "long_zz500_ret"] = benchmark.loc[common, "ret_pct"] / 100
-    return MetricResult("pnl", table.round(6), {**result.metadata, "benchmark_input": str(benchmark_path)})
+    return MetricResult("pnl", table, {**result.metadata, "benchmark_input": str(benchmark_path)})
 
 
 def pnl_quality_stats(table: pd.DataFrame) -> dict[str, float]:

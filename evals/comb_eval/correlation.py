@@ -64,7 +64,7 @@ def pnl_pool_correlation(candidate: str | Path | pd.DataFrame, pool_paths: list[
     })
     summary.index.name = "metric"
     table.attrs["summary"] = summary
-    return table.round(6)
+    return table
 
 
 def daily_matrix_correlation(

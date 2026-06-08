@@ -6,6 +6,7 @@ from pathlib import Path
 from .constraints import equalize_short_side, trading_limit_exposure, universe_coverage
 from .correlation import matrix_correlation, pnl_correlation, pnl_pool_correlation
 from .evaluator import run_evaluation
+from .formatting import output_dict_to_lines, output_frame_to_text
 from .ic import summarize_cache_ic, summarize_ic
 from .pnl import summarize_pnl, summarize_pnl_with_benchmark
 from .value_add import netting_return, pool_value_added, value_added
@@ -83,55 +84,51 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "pnl":
         result = summarize_pnl_with_benchmark(args.path, args.pnlzz500, start=args.start, end=args.end)
-        print(result.table.to_string())
+        print(output_frame_to_text(result.table))
     elif args.command == "ic":
-        print(summarize_ic(args.path, start=args.start, end=args.end, normalize_names=args.normalize_names).table.to_string())
+        print(output_frame_to_text(summarize_ic(args.path, start=args.start, end=args.end, normalize_names=args.normalize_names).table))
     elif args.command == "cache-ic":
-        print(summarize_cache_ic(args.path, args.start_ds, args.end_ds, args.df_type).table.to_string())
+        print(output_frame_to_text(summarize_cache_ic(args.path, args.start_ds, args.end_ds, args.df_type).table))
     elif args.command == "corr":
         if len(args.pool) == 1:
-            print(_dict_to_lines(pnl_correlation(args.candidate, args.pool[0], column=args.column, start=args.start, end=args.end)))
+            print(output_dict_to_lines(pnl_correlation(args.candidate, args.pool[0], column=args.column, start=args.start, end=args.end)))
         else:
             table = pnl_pool_correlation(args.candidate, args.pool, column=args.column, top=args.top, start=args.start, end=args.end)
-            print(table.to_string())
+            print(output_frame_to_text(table))
             if "summary" in table.attrs:
                 print("\n[summary]")
-                print(table.attrs["summary"].to_string())
+                print(output_frame_to_text(table.attrs["summary"]))
     elif args.command == "matrix-corr":
-        print(_dict_to_lines(matrix_correlation(args.candidate, args.pool, start=args.start, end=args.end, corr_days=args.corr_days, min_valid=args.min_valid)))
+        print(output_dict_to_lines(matrix_correlation(args.candidate, args.pool, start=args.start, end=args.end, corr_days=args.corr_days, min_valid=args.min_valid)))
     elif args.command == "value-add":
         if len(args.pool) == 1:
-            print(_dict_to_lines(value_added(args.candidate, args.pool[0], column=args.column, start=args.start, end=args.end)))
+            print(output_dict_to_lines(value_added(args.candidate, args.pool[0], column=args.column, start=args.start, end=args.end)))
         else:
             table = pool_value_added(args.candidate, args.pool, column=args.column, start=args.start, end=args.end)
-            print(table.to_string())
+            print(output_frame_to_text(table))
             if "summary" in table.attrs:
                 print("\n[summary]")
-                print(table.attrs["summary"].to_string())
+                print(output_frame_to_text(table.attrs["summary"]))
     elif args.command == "netting":
-        print(_dict_to_lines(netting_return(args.candidate, args.pool, column=args.column, start=args.start, end=args.end)))
+        print(output_dict_to_lines(netting_return(args.candidate, args.pool, column=args.column, start=args.start, end=args.end)))
     elif args.command == "equalize-short":
         equalize_short_side(args.alpha, percentile=args.percentile, group=args.group, start=args.start, end=args.end).to_parquet(args.output)
     elif args.command == "universe":
-        print(universe_coverage(args.alpha, args.mask, start=args.start, end=args.end).to_string())
+        print(output_frame_to_text(universe_coverage(args.alpha, args.mask, start=args.start, end=args.end)))
     elif args.command == "trade-limit":
-        print(trading_limit_exposure(args.trades, args.mask, start=args.start, end=args.end).to_string())
+        print(output_frame_to_text(trading_limit_exposure(args.trades, args.mask, start=args.start, end=args.end)))
     elif args.command == "eval":
         outputs = run_evaluation(args.pnl, args.ic, pnlzz500_path=args.pnlzz500, start=args.start, end=args.end)
         for module, tables in outputs.items():
             print(f"\n[{module}.summary]")
-            print(tables["summary"].to_string())
+            print(output_frame_to_text(tables["summary"]))
             print(f"\n[{module}.checks]")
-            print(tables["checks"].to_string())
+            print(output_frame_to_text(tables["checks"]))
 
 
 def _add_date_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start", help="Start date, e.g. 20160101")
     parser.add_argument("--end", help="End date, e.g. 20240101")
-
-
-def _dict_to_lines(values: dict) -> str:
-    return "\n".join(f"{key}: {value}" for key, value in values.items())
 
 
 if __name__ == "__main__":
