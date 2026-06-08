@@ -106,4 +106,3 @@ def _mark_failed(run_paths: RunPaths) -> None:
     meta_path = trial_dir / "trial_meta.json"
     if meta_path.exists():
         update_window(trial_dir, "failed")
-

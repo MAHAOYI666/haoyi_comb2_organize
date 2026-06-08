@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+import subprocess
 import sys
 import time
 from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -23,7 +26,6 @@ for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"
 
 from comb2 import ComboBase, LoaderConfig
 from src.DataLoader import ComboDataLoader, ComboTrainDataset
-from comb2_pcmaster import BacktestNode, DailyBacktest
 from factorsim import IndexMask, Memmaper2, fast, operator
 from factorsim.config import NAN_DTYPE
 from vendor.perf_monitor import PerfMonitor, print_progress
@@ -65,6 +67,24 @@ def print_daily_metrics(metrics: dict):
     header = " ".join(f"{name:<{width}}" for name, _, width in columns)
     row = " ".join(f"{value:<{width}}" for _, value, width in columns)
     print("[BACKTEST]")
+    print(header)
+    print(row)
+
+
+def print_live_metrics(meta: dict):
+    columns = [
+        ("date", str(meta["trade_ds"]), 10),
+        ("pred_ds", str(meta["pred_ds"]), 10),
+        ("model_dt", str(meta["checkpoint_model_dt"]), 10),
+        ("finite", str(meta["finite_count"]), 10),
+        ("nonzero", str(meta["nonzero_count"]), 10),
+        ("nan", str(meta["nan_count"]), 10),
+        ("mean", f"{meta['mean']:.6f}" if meta["mean"] is not None else "NA", 12),
+        ("std", f"{meta['std']:.6f}" if meta["std"] is not None else "NA", 12),
+    ]
+    header = " ".join(f"{name:<{width}}" for name, _, width in columns)
+    row = " ".join(f"{value:<{width}}" for _, value, width in columns)
+    print("[LIVE]")
     print(header)
     print(row)
 
@@ -152,6 +172,8 @@ def build_strategy_file(organize_config: dict) -> Path:
 
 
 def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestNode:
+    from comb2_pcmaster import BacktestNode
+
     strategy_config = organize_config["strategy"]
     backtest_config = organize_config["backtest"]
     output_path = Path(backtest_config["output_path"])
@@ -176,14 +198,17 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
 
 
 class ExperimentRunner:
-    def __init__(self, organize_config: dict, monitor: PerfMonitor):
+    def __init__(self, organize_config: dict, monitor: PerfMonitor, config_path: str | None = None):
         self.organize_config = organize_config
         self.combo_config = organize_config["combo"]
         self.monitor = monitor
+        self.config_path = str(Path(config_path).expanduser().resolve()) if config_path else None
+        self.live_mode = bool(self.combo_config["runtime"].get("livetrading", False))
         self.node: Node | None = None
         self.combo: ComboBase | None = None
         self.codes: pd.Index | None = None
-        self.backtest: DailyBacktest | None = None
+        self.backtest: Any | None = None
+        self.live_output_dir = Path(self.combo_config["paths"]["output_dir"]) / "live"
 
     def setup(self):
         self.node = Node(self.combo_config)
@@ -191,13 +216,30 @@ class ExperimentRunner:
         self.combo = ComboBase(self.node)
         if self.monitor.enabled:
             install_research_model_decorators(self.monitor, self.combo.research_model_cls)
-        self.codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
+        self.codes = pd.Index([str(code).zfill(6) for code in IndexMask().code], name="code")
+
+        if self.live_mode:
+            self.live_output_dir.mkdir(parents=True, exist_ok=True)
+            return
 
         strategy_path = build_strategy_file(self.organize_config)
         backtest_node = build_backtest_node(strategy_path, self.organize_config)
+        from comb2_pcmaster import DailyBacktest
+
         self.backtest = DailyBacktest(backtest_node)
 
     def dates(self):
+        if self.live_mode:
+            start_ds = int(self.organize_config["strategy"]["start_ds"])
+            end_ds = int(self.organize_config["strategy"]["end_ds"])
+            dates = [
+                int(ds)
+                for ds in sorted(self.combo.loader.mask.date)
+                if start_ds <= int(ds) <= end_ds
+            ]
+            if not dates:
+                raise ValueError(f"no live trading dates in range {start_ds}-{end_ds}; live mode does not auto-align dates")
+            return dates
         return sorted(self.backtest.vwap_data.index)
 
     def alpha_convert(self, date_int: int):
@@ -214,6 +256,56 @@ class ExperimentRunner:
             print("[IC] alpha analysis disabled by config")
             return
         dump_alpha_analysis(self.node, self.combo_config)
+
+    def live_step(self, date_int: int, alpha) -> dict:
+        if self.combo.model is None or int(self.combo.model_dt) < 0:
+            raise RuntimeError(f"live mode failed to load checkpoint for trade date {date_int}")
+        pred_ds = self.combo._prev_date(date_int)
+        alpha_array = np.asarray(alpha, dtype=float)
+        finite_mask = np.isfinite(alpha_array)
+        valid = alpha_array[finite_mask]
+        meta = {
+            "mode": "livetrading",
+            "config": self.config_path,
+            "trade_ds": int(date_int),
+            "pred_ds": int(pred_ds),
+            "snaptime": str(self.combo.snaptime),
+            "checkpoint_model_dt": int(self.combo.model_dt),
+            "checkpoint_dir": str(Path(self.combo.modelDir) / str(self.combo.model_dt)) if self.combo.modelDir else None,
+            "model_path": str(self.combo.model_path),
+            "git_commit": get_git_commit(),
+            "finite_count": int(finite_mask.sum()),
+            "nonzero_count": int(np.count_nonzero(valid)) if valid.size else 0,
+            "nan_count": int((~finite_mask).sum()),
+            "mean": float(valid.mean()) if valid.size else None,
+            "std": float(valid.std()) if valid.size else None,
+            "min": float(valid.min()) if valid.size else None,
+            "max": float(valid.max()) if valid.size else None,
+        }
+        if meta["finite_count"] == 0:
+            raise RuntimeError(f"live mode produced no finite alpha for trade date {date_int}")
+        if meta["nonzero_count"] == 0:
+            raise RuntimeError(f"live mode produced all-zero finite alpha for trade date {date_int}")
+
+        alpha_path = self.live_output_dir / f"alpha_{date_int}.csv"
+        meta_path = self.live_output_dir / f"meta_{date_int}.json"
+        pd.Series(alpha_array, index=self.codes, name="alpha").to_csv(alpha_path)
+        meta["alpha_path"] = str(alpha_path)
+        meta["meta_path"] = str(meta_path)
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        return meta
+
+
+def get_git_commit() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ORGANIZE_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,7 +355,7 @@ def main():
     if monitor.enabled:
         install_perf_decorators(monitor)
     try:
-        runner = ExperimentRunner(organize_config, monitor)
+        runner = ExperimentRunner(organize_config, monitor, config_path=config_path)
         runner.setup()
 
         dates = runner.dates()
@@ -271,6 +363,7 @@ def main():
         combine_time = 0.0
         alpha_time = 0.0
         backtest_time = 0.0
+        live_output_time = 0.0
         verbose = bool(monitor.config.verbose)
         for update_idx, date in enumerate(dates, start=1):
             date_int = int(date)
@@ -280,6 +373,21 @@ def main():
             section_start = time.perf_counter()
             alpha = runner.alpha_convert(date_int)
             alpha_time += time.perf_counter() - section_start
+            if runner.live_mode:
+                section_start = time.perf_counter()
+                meta = runner.live_step(date_int, alpha)
+                live_output_time += time.perf_counter() - section_start
+                print_live_metrics(meta)
+                if verbose:
+                    print_progress(
+                        "Stage:runComboLive",
+                        update_idx,
+                        len(dates),
+                        loop_start,
+                        f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, output {live_output_time:.2f}",
+                        final=update_idx == len(dates),
+                    )
+                continue
             section_start = time.perf_counter()
             metrics = runner.backtest_step(date_int, alpha)
             backtest_time += time.perf_counter() - section_start
@@ -294,8 +402,9 @@ def main():
                     final=update_idx == len(dates),
                 )
 
-        runner.backtest_finalize()
-        runner.alpha_analysis()
+        if not runner.live_mode:
+            runner.backtest_finalize()
+            runner.alpha_analysis()
     finally:
         monitor.close()
 
