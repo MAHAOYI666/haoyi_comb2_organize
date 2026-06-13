@@ -5,11 +5,17 @@ import argparse
 import copy
 import re
 import time
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parent
+SIMBASE_ROOT = REPO_ROOT / "vendor" / "comb2-simbase"
+if SIMBASE_ROOT.exists() and str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
 
 from runCombo import (
     ComboBase,

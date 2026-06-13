@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,11 @@ from xml.etree import ElementTree as ET
 
 import numpy as np
 import pandas as pd
+
+SIMBASE_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "comb2-simbase"
+if str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
+
 from comb2_simbase.benchmark import benchmark_returns_from_cache, cache_path_from_rendered_config
 
 

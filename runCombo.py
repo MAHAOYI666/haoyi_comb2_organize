@@ -50,7 +50,7 @@ VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 organize_root_path = str(ORGANIZE_ROOT)
 if organize_root_path not in sys.path:
     sys.path.insert(0, organize_root_path)
-for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"):
+for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster", VENDOR_ROOT / "comb2-simbase"):
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
         sys.path.insert(0, local_package_path)

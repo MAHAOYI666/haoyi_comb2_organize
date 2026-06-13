@@ -22,6 +22,9 @@ from .op_utils import cs_zscore, nan_to_num, nanmean, neut, normalize_by_max_abs
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
     sys.path.insert(0, str(ORGANIZE_ROOT))
+SIMBASE_ROOT = ORGANIZE_ROOT / "vendor" / "comb2-simbase"
+if str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
 
 from comb2_simbase import IndexMask, Memmaper2
 

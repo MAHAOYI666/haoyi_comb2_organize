@@ -5,11 +5,7 @@ __pycache__/
 .mindfs/
 
 .venv/
-.pdm-build/
-.pdm-python
 .python-version
-pdm.lock
-pyproject.toml
 output**/
 checkpoints**/
 optuna_runs/
