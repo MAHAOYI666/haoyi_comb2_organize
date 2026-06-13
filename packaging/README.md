@@ -34,12 +34,17 @@ runCombo config.xml
 runEval config.xml
 ```
 
-The build uses Python 3.13 for the wheel ABI and reads pinned third-party
-dependency versions from `../python310fs` by default. If `python3.13` is not on
-`PATH`, pass an absolute path with `--python`. The resulting wheel
-contains all local comb2_organize runtime code and full dependency metadata for
-training, evaluation, backtesting, Optuna workflows, LightGBM examples, and
-report plotting.
+The build uses Python 3.13 for the wheel ABI and writes pinned third-party
+dependency metadata that is compatible with Python 3.13 Linux x86_64 wheels.
+The numpy pin follows `../aresium/pdm.lock`; pandas and pyarrow follow the
+Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
+`python3.13` is not on `PATH`, pass an absolute path with `--python`.
+
+The resulting wheel contains all local comb2_organize runtime code. Third-party
+packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
+psutil, and Plotly are not bundled into the wheel; they are declared in the
+wheel metadata so `pip install` can resolve and install them for the target
+Python 3.13 environment.
 
 The build compiles:
 

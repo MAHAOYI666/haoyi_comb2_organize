@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import subprocess
 import sys
@@ -43,17 +42,24 @@ ENTRY_POINTS = {
 }
 CONSOLE_SCRIPTS = [f"{name}={target}" for name, target in ENTRY_POINTS.items()]
 
-BUILD_DEPENDENCIES = ("setuptools", "wheel", "Cython")
-RUNTIME_DEPENDENCIES = (
-    "numpy",
-    "pandas",
-    "pyarrow",
-    "torch",
-    "matplotlib",
-    "optuna",
-    "psutil",
-    "plotly",
-    "lightgbm",
+# These pins target Python 3.13 Linux x86_64 wheels.  numpy follows
+# ../aresium/pdm.lock, while pandas/pyarrow follow the lower bounds in
+# ../aressignalclient/pyproject.toml.
+BUILD_DEPENDENCY_PINS = (
+    ("setuptools", "82.0.1"),
+    ("wheel", "0.47.0"),
+    ("Cython", "3.0.12"),
+)
+RUNTIME_DEPENDENCY_PINS = (
+    ("numpy", "2.3.5"),
+    ("pandas", "3.0.2"),
+    ("pyarrow", "23.0.1"),
+    ("torch", "2.9.1"),
+    ("matplotlib", "3.9.4"),
+    ("optuna", "4.8.0"),
+    ("psutil", "7.2.2"),
+    ("plotly", "6.7.0"),
+    ("lightgbm", "4.4.0"),
 )
 
 IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
@@ -75,9 +81,8 @@ ALLOWED_SOURCE_FILES = {
 def main() -> None:
     args = parse_args()
     python = resolve_path_arg(args.python)
-    dependency_python = resolve_path_arg(args.dependency_python)
     assert_python_313(python)
-    dependencies = resolve_dependencies(dependency_python)
+    dependencies = resolve_dependencies()
     build_root = args.build_root.resolve()
     stage_root = build_root / "protected_src"
     dist_dir = args.dist_dir.resolve()
@@ -91,7 +96,7 @@ def main() -> None:
     write_build_files(stage_root, args.name, args.version, dependencies)
 
     if args.dry_run:
-        print_plan(stage_root, dependencies, python, dependency_python)
+        print_plan(stage_root, dependencies, python)
         return
 
     require_compiler()
@@ -111,12 +116,6 @@ def main() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for comb2_organize and bundled vendor packages.")
     parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
-    parser.add_argument(
-        "--dependency-python",
-        type=Path,
-        default=Path("../python310fs/bin/python3"),
-        help="Python environment used as the source of pinned dependency versions",
-    )
     parser.add_argument("--name", default="comb2_organize", help="Wheel distribution name")
     parser.add_argument("--version", default="0.1.0", help="Wheel version")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
@@ -167,43 +166,15 @@ def ensure_pip(python: Path) -> None:
     subprocess.run([str(python), "-m", "ensurepip", "--upgrade"], check=True)
 
 
-def resolve_dependencies(dependency_python: Path) -> dict[str, object]:
-    names = sorted(set(BUILD_DEPENDENCIES) | set(RUNTIME_DEPENDENCIES))
-    script = """
-import importlib.metadata as md
-import json
-
-names = {names!r}
-versions = {{}}
-missing = []
-for name in names:
-    try:
-        versions[name] = md.version(name)
-    except md.PackageNotFoundError:
-        missing.append(name)
-print(json.dumps({{"versions": versions, "missing": missing}}, sort_keys=True))
-""".format(names=names)
-    proc = subprocess.run(
-        [str(dependency_python), "-c", script],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    )
-    result = json.loads(proc.stdout)
-    versions = result["versions"]
-    missing = set(result["missing"])
-    missing_required = sorted(missing)
-    if missing_required:
-        raise RuntimeError(f"{dependency_python} is missing dependency versions: {', '.join(missing_required)}")
-
+def resolve_dependencies() -> dict[str, object]:
     return {
-        "build_requires": pin_dependencies(BUILD_DEPENDENCIES, versions),
-        "install_requires": pin_dependencies(RUNTIME_DEPENDENCIES, versions),
+        "build_requires": pin_dependencies(BUILD_DEPENDENCY_PINS),
+        "install_requires": pin_dependencies(RUNTIME_DEPENDENCY_PINS),
     }
 
 
-def pin_dependencies(names: tuple[str, ...], versions: dict[str, str]) -> list[str]:
-    return [f"{name}=={versions[name]}" for name in names]
+def pin_dependencies(pins: tuple[tuple[str, str], ...]) -> list[str]:
+    return [f"{name}=={version}" for name, version in pins]
 
 
 def prepare_stage(stage_root: Path) -> None:
@@ -333,12 +304,12 @@ def verify_wheel(wheel: Path) -> None:
         raise RuntimeError(f"protected wheel still contains source files:\n{joined}")
 
 
-def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path, dependency_python: Path) -> None:
+def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path) -> None:
     extensions = extension_specs(stage_root)
     packages = package_names(stage_root)
     print(f"staged source: {stage_root}")
     print(f"build python: {python}")
-    print(f"dependency version source: {dependency_python}")
+    print("dependency version source: built-in Python 3.13 wheel-compatible pins")
     print(f"packages: {len(packages)}")
     print(f"compiled extensions: {len(extensions)}")
     print("install_requires:")
