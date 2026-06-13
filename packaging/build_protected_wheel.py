@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 PACKAGE_SOURCES = {
+    "comb2_simbase": REPO_ROOT / "comb2_simbase",
     "optuna_framework": REPO_ROOT / "optuna_framework",
     "comb_eval": REPO_ROOT / "evals" / "comb_eval",
     "src": REPO_ROOT / "vendor" / "comb2" / "src",
@@ -23,6 +24,7 @@ PACKAGE_SOURCES = {
 MODULE_SOURCES = {
     "config": REPO_ROOT / "config.py",
     "runCombo": REPO_ROOT / "runCombo.py",
+    "comboRunner": REPO_ROOT / "comboRunner.py",
     "runAblationByZero": REPO_ROOT / "runAblationByZero.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
@@ -30,6 +32,7 @@ MODULE_SOURCES = {
 
 ENTRY_POINTS = {
     "comb-run": "runCombo:main",
+    "comb-combo-runner": "comboRunner:main",
     "comb-ablation-zero": "runAblationByZero:main",
     "comb-pos-corr": "runPosCorr:main",
     "comb-eval": "comb_eval.cli:main",
@@ -40,6 +43,7 @@ IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
     "comb2/__init__.py",
+    "comb2_simbase/__init__.py",
     "comb2_metrics/__init__.py",
     "comb2_pcmaster/__init__.py",
     "comb_eval/__init__.py",
@@ -166,6 +170,7 @@ setup(
         "optuna",
         "matplotlib",
     ],
+    package_data={{"comb2_simbase": ["index_mask/memmap_mask/*.npy"]}},
     zip_safe=False,
 )
 """

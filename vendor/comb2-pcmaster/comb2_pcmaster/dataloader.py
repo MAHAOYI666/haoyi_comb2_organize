@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
-from factorsim import IndexMask, Memmaper2
+from comb2_simbase import IndexMask, Memmaper2
 
 
 class DataLoader:

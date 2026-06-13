@@ -115,16 +115,19 @@ constants.cache_path
 constants.factor_root
 constants.output_root
 constants.checkpoint_root
+strategy.path
 combo.paths.base_dir
 combo.paths.output_dir
 combo.paths.model_path
+combo.paths.research_loader_path
+combo.paths.research_dataset_path
 combo.paths.checkpoint_root
 combo.output.alpha_history_path
 combo.output.log_path
-combo.data.ashare_data_path
-combo.data.valid_path
-combo.data.filtered_path
-combo.data.base_universe_path
+combo.loader.ashare_data_path
+combo.loader.valid_path
+combo.loader.filtered_path
+combo.loader.base_universe_path
 backtest.output_path
 monitor.output_path
 ```
@@ -192,13 +195,13 @@ backtest.output_path = constants.output_root / "backtest"
 同时自动派生：
 
 ```text
-combo.data.ashare_data_path      = {cache_path}
-combo.data.valid_path            = {cache_path}/Ashare
-combo.data.filtered_path         = {cache_path}/AshareFiltered
-combo.data.base_universe_path    = {cache_path}/1d_StockMask2/StockMask2.BaseUnivMask
+combo.loader.ashare_data_path      = {cache_path}
+combo.loader.valid_path            = {cache_path}/Ashare
+combo.loader.filtered_path         = {cache_path}/AshareFiltered
+combo.loader.base_universe_path    = {cache_path}/1d_StockMask2/StockMask2.BaseUnivMask
 ```
 
-解析后这些值会进入内部 `combo["loader"]` 字典，用于构造 `LoaderConfig`。
+XML 中这些 loader 运行时属性仍写在 `<combo><data ...>` 上；解析后会进入内部 `combo["loader"]` 字典，用于构造 `LoaderConfig`。
 
 ---
 
@@ -210,6 +213,7 @@ XML：
 <strategy
   start_ds="20200101"
   end_ds="20240628"
+  path="vendor/comb2-pcmaster/examples/alpha_strategy.py"
 />
 ```
 
@@ -217,8 +221,9 @@ XML：
 |---|---:|---|---|
 | `start_ds` | `20160111` | int | 回测开始日期，格式通常是 `YYYYMMDD`。 |
 | `end_ds` | `20200101` | int | 回测结束日期。 |
+| `path` | `vendor/comb2-pcmaster/examples/alpha_strategy.py` | path | 回测策略文件，必须定义 `AlphaStrategy`。 |
 
-默认 config 使用内置 `AlphaStrategy`：只持有正 alpha，按正 alpha 权重归一化生成 long-only 仓位。
+默认 config 使用内置 `AlphaStrategy`：先对有效 alpha 减去当日截面中位数，再持有调整后为正的 alpha，并按调整后正值归一化生成 long-only 仓位。
 
 ---
 

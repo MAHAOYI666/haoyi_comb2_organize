@@ -12,6 +12,45 @@ VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 COMB2_ROOT = VENDOR_ROOT / "comb2"
 PCM_ROOT = VENDOR_ROOT / "comb2-pcmaster"
 
+
+def _builtin_factor_item(path: str) -> dict[str, Any]:
+    return {
+        "name": f"alpha.{path}",
+        "module": "builtin.factor",
+        "path": path,
+        "role": "factor",
+        "mode": "read_dump",
+        "config_path": None,
+        "ops": (),
+        "params": {"display_name": path},
+    }
+
+
+def _builtin_label_item(path: str = "label1d") -> dict[str, Any]:
+    return {
+        "name": "label.default",
+        "module": "builtin.label",
+        "path": path,
+        "role": "label",
+        "mode": "read_dump",
+        "config_path": None,
+        "ops": (),
+        "params": {},
+    }
+
+
+DEFAULT_FACTOR_PATHS = (
+    "yz_20250219_02",
+    "wjx_20240829_02",
+    "guanxl_05",
+    "alpha1_20251008_01",
+    "alpha2_20251008_02",
+    "alpha3_20251008_03",
+    "alpha4_20251008_04",
+    "alpha5_20251008_05",
+)
+
+
 DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
@@ -57,98 +96,7 @@ DEFAULT_CONFIG = {
         "model": {},
         "data": {
             "imports": (),
-            "items": (
-                {
-                    "name": "alpha.yz_20250219_02",
-                    "module": "builtin.factor",
-                    "path": "yz_20250219_02",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "yz_20250219_02"},
-                },
-                {
-                    "name": "alpha.wjx_20240829_02",
-                    "module": "builtin.factor",
-                    "path": "wjx_20240829_02",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "wjx_20240829_02"},
-                },
-                {
-                    "name": "alpha.guanxl_05",
-                    "module": "builtin.factor",
-                    "path": "guanxl_05",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "guanxl_05"},
-                },
-                {
-                    "name": "alpha.alpha1_20251008_01",
-                    "module": "builtin.factor",
-                    "path": "alpha1_20251008_01",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "alpha1_20251008_01"},
-                },
-                {
-                    "name": "alpha.alpha2_20251008_02",
-                    "module": "builtin.factor",
-                    "path": "alpha2_20251008_02",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "alpha2_20251008_02"},
-                },
-                {
-                    "name": "alpha.alpha3_20251008_03",
-                    "module": "builtin.factor",
-                    "path": "alpha3_20251008_03",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "alpha3_20251008_03"},
-                },
-                {
-                    "name": "alpha.alpha4_20251008_04",
-                    "module": "builtin.factor",
-                    "path": "alpha4_20251008_04",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "alpha4_20251008_04"},
-                },
-                {
-                    "name": "alpha.alpha5_20251008_05",
-                    "module": "builtin.factor",
-                    "path": "alpha5_20251008_05",
-                    "role": "factor",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {"display_name": "alpha5_20251008_05"},
-                },
-                {
-                    "name": "label.default",
-                    "module": "builtin.label",
-                    "path": "label1d",
-                    "role": "label",
-                    "mode": "read_dump",
-                    "config_path": None,
-                    "ops": (),
-                    "params": {},
-                },
-            ),
+            "items": (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), _builtin_label_item()),
             "presets": (),
             "attrs": {},
         },

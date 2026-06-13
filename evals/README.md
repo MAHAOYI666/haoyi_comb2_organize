@@ -27,6 +27,54 @@ python -m comb_eval.cli eval --pnl /path/to/pnl.tsv --pnlzz500 /path/to/pnlzz500
 python -m comb_eval.cli eval --pnl /path/to/pnl.tsv --ic /path/to/daily_ic --start 20160101 --end 20240101
 ```
 
+配置输出评估：
+
+```bash
+python -m comb_eval.cli eval --config /path/to/config.xml
+```
+
+该入口会读取 comb2-organize XML config，检查 `constants.output_root` 下至少存在一个 `alpha.parquet`：
+
+```text
+<output_root>/alpha.parquet
+```
+
+PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。
+
+默认输出到 `<output_root>/eval_report/`：
+
+```text
+ic_summary.csv
+pnl_summary.csv
+ic_checks.csv
+pnl_checks.csv
+decile_summary.csv
+barra_exposure_summary.csv
+top10_excess.csv
+signal_analysis.png
+report.json
+```
+
+其中 `signal_analysis.png` 是信号综合长图，包含 IC 统计、PNL 统计、信号 10 分位数时间序列、10 组分组回测、Barra 风格暴露范围，以及 top10% 回测相对基准的累计超额收益。PNL 与分组回测使用与 `evals/tools/rundailypnl.py` 相同的本地 daily-pnl 逻辑，IC 从 1d/5d label 重新计算。
+
+常用可选项：
+
+```bash
+python -m comb_eval.cli eval --config /path/to/config.xml \
+  --report-dir /tmp/eval_report \
+  --plot-output /tmp/eval_report/signal_analysis.png \
+  --start 20160101 --end 20240101 \
+  --skip-exposure
+```
+
+如果 label 不走 config 默认 cache，可以显式指定 1d / 5d label 表：
+
+```bash
+python -m comb_eval.cli eval --config /path/to/config.xml \
+  --label /path/to/label1d.csv --label-is-table \
+  --label-5d /path/to/label5d.csv --label-5d-is-table
+```
+
 相关性 / value-add：
 
 ```bash
@@ -97,7 +145,7 @@ position / trade / alpha matrix 支持 csv/tsv/parquet。需要日期索引或 `
 3. 需要对比的 alpha 名单和对应文件路径。
 4. date range / snaptime 列表。
 
-`10d IC`、`Barra IC`、`universe mask` 等 AshareCache 数据读取必须经由 `comb_eval.io.read_cache_array()`，该函数内部只调用 `from factorsim import Memmaper2` 和 `Memmaper2(path).load(start_ds, end_ds, df_type)[:]`。
+`10d IC`、`Barra IC`、`universe mask` 等 AshareCache 数据读取必须经由 `comb_eval.io.read_cache_array()`，该函数内部只调用 `from comb2_simbase import Memmaper2` 和 `Memmaper2(path).load(start_ds, end_ds, df_type)[:]`。
 
 ## Barra 风格暴露接口
 

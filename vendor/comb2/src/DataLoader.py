@@ -25,11 +25,6 @@ from .DataRegistry import (
 )
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, to_bool_mask, truncate, winsorize_by_quantile
 
-try:
-    from factorsim import Memmaper2
-except ModuleNotFoundError:
-    Memmaper2 = None
-
 from vendor.perf_monitor import print_progress
 
 

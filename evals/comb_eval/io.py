@@ -48,7 +48,7 @@ def read_table(path: str | Path | pd.DataFrame, start: DateLike | None = None, e
 
 
 def read_cache_array(path: str | Path, start_ds: str | int, end_ds: str | int, df_type: str):
-    from factorsim import Memmaper2
+    from comb2_simbase import Memmaper2
 
     return Memmaper2(str(path)).load(start_ds, end_ds, df_type)[:]
 

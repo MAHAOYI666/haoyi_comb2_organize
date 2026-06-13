@@ -24,6 +24,7 @@ dist_protected/*.whl
 The build compiles:
 
 - `config`, `runCombo`, `runAblationByZero`, `runPosCorr`
+- `comb2_simbase`
 - `optuna_framework`
 - `comb_eval`
 - vendor packages: `src`, `comb2`, `comb2_pcmaster`, `comb2_metrics`

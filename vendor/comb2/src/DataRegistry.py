@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import bisect
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-import bisect
 import importlib
 import re
 import sys
@@ -18,15 +19,11 @@ import torch
 
 from .op_utils import cs_zscore, nan_to_num, nanmean, neut, normalize_by_max_abs, truncate, winsorize_by_quantile
 
-try:
-    from factorsim import IndexMask, Memmaper2
-except ModuleNotFoundError:
-    IndexMask = None
-    Memmaper2 = None
-
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
     sys.path.insert(0, str(ORGANIZE_ROOT))
+
+from comb2_simbase import IndexMask, Memmaper2
 
 BARRA_STYLE_DIRNAME = "1d_BarraCNE5"
 BARRA_STYLE_PREFIX = "BarraCNE5."
@@ -47,13 +44,13 @@ BARRA_PRESET_STYLES = (
 
 def _require_index_mask_cls():
     if IndexMask is None:
-        raise ModuleNotFoundError("factorsim is required to build the comb2 trading universe")
+        raise ModuleNotFoundError("comb2_simbase is required to build the comb2 trading universe")
     return IndexMask
 
 
 def _require_memmaper2_cls():
     if Memmaper2 is None:
-        raise ModuleNotFoundError("factorsim is required to read Memmaper2 data")
+        raise ModuleNotFoundError("comb2_simbase is required to read Memmaper2 data")
     return Memmaper2
 
 
@@ -211,7 +208,118 @@ def _parse_op_call(raw_name: str) -> tuple[str, tuple[str, ...]]:
     raw_args = match.group(2).strip()
     if not raw_args:
         return name, ()
-    return name, tuple(part.strip() for part in raw_args.split(",") if part.strip())
+    return name, tuple(_split_op_args(raw_args))
+
+
+def _split_op_args(raw_args: str) -> list[str]:
+    args: list[str] = []
+    start = 0
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for idx, char in enumerate(raw_args):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            value = raw_args[start:idx].strip()
+            if value:
+                args.append(value)
+            start = idx + 1
+    value = raw_args[start:].strip()
+    if value:
+        args.append(value)
+    return args
+
+
+def _strip_arg_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1].strip()
+    return value
+
+
+def _is_float_arg(value: str) -> bool:
+    try:
+        float(_strip_arg_quotes(value))
+    except ValueError:
+        return False
+    return True
+
+
+def _literal_list_arg(value: str) -> list[Any] | None:
+    arg = _strip_arg_quotes(value)
+    if not (arg.startswith("[") and arg.endswith("]")):
+        return None
+    try:
+        parsed = ast.literal_eval(arg)
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(parsed, (list, tuple)):
+        return list(parsed)
+    return None
+
+
+def _float_list_arg(value: str) -> tuple[float, ...] | None:
+    parsed = _literal_list_arg(value)
+    if parsed is None:
+        return None
+    values: list[float] = []
+    for item in parsed:
+        try:
+            values.append(float(str(item).strip()))
+        except ValueError:
+            return None
+    return tuple(values)
+
+
+def _coerce_neut_ratio(value: Any) -> float | tuple[float, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(float(item) for item in value)
+    if isinstance(value, str):
+        ratio_list = _float_list_arg(value)
+        if ratio_list is not None:
+            return ratio_list
+        return float(_strip_arg_quotes(value))
+    return float(value)
+
+
+def _expand_neut_dep_arg(raw_arg: str) -> list[str]:
+    arg = _strip_arg_quotes(raw_arg)
+    if arg.startswith("[") and arg.endswith("]"):
+        parsed = _literal_list_arg(arg)
+        if parsed is not None:
+            return [str(value).strip() for value in parsed if str(value).strip()]
+        inner = arg[1:-1].strip()
+        return [_strip_arg_quotes(value) for value in _split_op_args(inner)]
+    return [arg] if arg else []
+
+
+def _neut_deps_and_ratio(op: OpSpec, args: tuple[str, ...]) -> tuple[tuple[str, ...], float | tuple[float, ...]]:
+    ratio = _coerce_neut_ratio(op.params.get("ratio", 1.0))
+    dep_args = list(args)
+    if dep_args:
+        ratio_list = _float_list_arg(dep_args[-1])
+        if ratio_list is not None:
+            ratio = ratio_list
+            dep_args.pop()
+        elif _is_float_arg(dep_args[-1]):
+            ratio = float(_strip_arg_quotes(dep_args.pop()))
+    deps: list[str] = []
+    for arg in dep_args:
+        _merge_deps(deps, _expand_neut_dep_arg(arg))
+    return tuple(deps), ratio
 
 
 def _int_op_arg(op: OpSpec, args: tuple[str, ...], *param_names: str, default: int | None = None) -> int:
@@ -237,7 +345,8 @@ def _op_requirements(ops: Sequence[OpSpec]) -> OpRequirements:
     for op in ops:
         name, args = _parse_op_call(op.name)
         if name == "neut":
-            _merge_deps(deps, args)
+            neut_deps, _ = _neut_deps_and_ratio(op, args)
+            _merge_deps(deps, neut_deps)
         elif name == "delay":
             lookback += max(0, _int_op_arg(op, args, "days", "periods", "n", default=1))
         elif name in {"ts_mean", "ts_avg"}:
@@ -511,10 +620,11 @@ class DataRegistry:
             elif name == "normalize_by_max_abs":
                 out = _rowwise_normalize_by_max_abs(out)
             elif name == "neut":
-                if not args:
+                deps, ratio = _neut_deps_and_ratio(op, args)
+                if not deps:
                     raise ValueError(f"{op.name} requires at least one data dependency")
-                xs = [self.get_data(dep)[lo_idx : hi_idx + 1].to(torch.float32) for dep in args]
-                out = neut(out, xs)
+                xs = [self.get_data(dep)[lo_idx : hi_idx + 1].to(torch.float32) for dep in deps]
+                out = neut(out, xs, ratio=ratio)
             elif name == "delay":
                 periods = max(0, _int_op_arg(op, args, "days", "periods", "n", default=1))
                 shifted = torch.full_like(out, torch.nan)
