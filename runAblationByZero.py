@@ -3,44 +3,33 @@ from __future__ import annotations
 
 import argparse
 import copy
-import importlib
-import importlib.util
 import re
-import sys
 import time
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 import torch
 
-ORGANIZE_ROOT = Path(__file__).resolve().parent
-VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
-for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"):
-    local_package_path = str(local_package_root)
-    if local_package_path not in sys.path:
-        sys.path.insert(0, local_package_path)
+REPO_ROOT = Path(__file__).resolve().parent
+SIMBASE_ROOT = REPO_ROOT / "vendor" / "comb2-simbase"
+if SIMBASE_ROOT.exists() and str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
 
-from comb2 import ComboBase
+from runCombo import (
+    ComboBase,
+    Node,
+    build_backtest_node,
+    build_strategy_file,
+    dump_alpha_analysis,
+    organize_config_module,
+    print_daily_metrics,
+)
+from comb2_simbase import IndexMask
 from comb2_pcmaster import DailyBacktest
-from factorsim import IndexMask
-from runCombo import Node, build_backtest_node, build_strategy_file, dump_alpha_analysis, print_daily_metrics
 from src.DataLoader import nan_to_num
 from vendor.perf_monitor import PerfMonitor, print_progress
-
-
-def _load_organize_config_module():
-    config_path = ORGANIZE_ROOT / "config.py"
-    if config_path.exists():
-        config_spec = importlib.util.spec_from_file_location("comb2_organize_config", config_path)
-        config_module = importlib.util.module_from_spec(config_spec)
-        assert config_spec.loader is not None
-        config_spec.loader.exec_module(config_module)
-        return config_module
-    return importlib.import_module("config")
-
-
-organize_config_module = _load_organize_config_module()
 
 
 class AblationCombo(ComboBase):
@@ -84,15 +73,6 @@ class AblationCombo(ComboBase):
         for name in self.variant_names:
             self._store_variant_alpha(name, ds, self._empty_alpha())
         self.variant_alphas["baseline"] = self.node.alpha.detach().cpu().clone()
-
-    def _predict_alpha(self, feature_window: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
-        cur_pred = self._predict_with_refill(self.model, feature_window)
-        if self.oldModel is not None:
-            old_pred = self._predict_with_refill(self.oldModel, feature_window)
-            cur_pred = cur_pred * self.model_smooth_rate + old_pred * (1 - self.model_smooth_rate)
-        alpha = cur_pred.to(self.loader.dtype).clone()
-        alpha[~valid_mask] = torch.nan
-        return alpha
 
     def _can_predict_batch(self, model) -> bool:
         return bool(hasattr(model, "model") and getattr(model, "model") is not None and self._model_trainii(model) is not None)

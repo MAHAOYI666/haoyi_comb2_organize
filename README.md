@@ -98,6 +98,42 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 研究员只需要把命令里的 `runCombo.py` 和 `config.xml` 换成自己的实际路径。
 
+### 5. 评估已有输出
+
+`runEval.py` 和 `runCombo.py` 一样可以从任意目录执行：
+
+```bash
+/path/to/comb2-organize/runEval.py /path/to/research/config.xml
+```
+
+或者：
+
+```bash
+/path/to/comb2-organize/runEval.py --config /path/to/research/config.xml
+```
+
+`runEval.py` 的 shebang 固定使用 `/root/autodl/python310fs/bin/python3`。如果当前就在 `comb2-organize` 仓库目录下，也可以直接：
+
+```bash
+./runEval.py /path/to/research/config.xml
+```
+
+入口会先检查 config 对应的必要输出文件是否齐全：
+
+```text
+<output_root>/alpha.parquet
+```
+
+如果缺失或为空，会打印不齐全的文件列表并退出。齐全后会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算 IC、PNL、分组回测，并在 `<output_root>/eval_report/` 下生成 summary、检查表和 `signal_analysis.png` 长图，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`。
+
+默认会从 config 的 `combo.loader.ashare_data_path` 下读取 `DailyLabel.vwap30_label1d` 和 `DailyLabel.vwap30_label5d`。如果要显式指定本地 label 表：
+
+```bash
+./runEval.py /path/to/research/config.xml \
+  --label /path/to/label1d.csv --label-is-table \
+  --label-5d /path/to/label5d.csv --label-5d-is-table
+```
+
 ## 数据压缩选项
 
 实际使用时，只需要在 XML 的 `<combo><data ...>` 节点里增加 `compression` 属性即可：
@@ -123,6 +159,8 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 - `output/train.log`
 - `output/alpha_history.pt`
+- `output/alpha.parquet`
+- `output/daily_ic`
 - `output/backtest/daily_pnl.csv`
 - `checkpoints/` 下的模型文件
 
@@ -139,8 +177,9 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 ## 当前目录说明
 
 - `runCombo.py`：research 运行入口，负责加载配置、调用 `comb2`、再接入 `comb2-pcmaster` 回测
+- `runEval.py`：评估入口，检查 config 输出是否齐全并生成本地评估报告
 - `config.py`：配置解析与默认参数
-- 默认 config 使用内置 `AlphaStrategy`：只持有正 alpha，按正 alpha 权重归一化生成 long-only 仓位
+- 默认 config 使用内置 `AlphaStrategy`：先对有效 alpha 减去当日截面中位数，再持有调整后为正的 alpha，并按调整后正值归一化生成 long-only 仓位
 - `vendor/comb2`：临时内置的 `comb2` 源码
 - `vendor/comb2-pcmaster`：临时内置的 `comb2-pcmaster` 源码
 - `vendor/perf_monitor.py`：可选性能监控模块

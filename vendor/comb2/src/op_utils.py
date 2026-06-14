@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+import warnings
+
+import numpy as np
+import pandas as pd
 import torch
 
 
@@ -11,6 +16,53 @@ def _default_eps(dtype: torch.dtype) -> float:
 
 def nan_to_num(x: torch.Tensor, value: float = 0.0) -> torch.Tensor:
     return torch.nan_to_num(x, nan=value, posinf=value, neginf=value)
+
+
+def purify(x: torch.Tensor) -> torch.Tensor:
+    y = x.clone()
+    y[torch.isinf(y)] = torch.nan
+    return y
+
+
+def rank(x: torch.Tensor, dim: int = 0, pct: bool = False) -> torch.Tensor:
+    axis = dim if dim >= 0 else x.ndim + dim
+    ranked = pd.DataFrame(x.detach().cpu().numpy()).rank(axis=axis, pct=pct, method="first").to_numpy()
+    return torch.as_tensor(ranked, dtype=x.dtype, device=x.device)
+
+
+def perc_long(x: torch.Tensor, percentile: float = 0.5) -> torch.Tensor:
+    arr = x.detach().cpu().numpy()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        threshold = np.nanquantile(arr, percentile, axis=1, keepdims=True)
+    out = arr - threshold
+    high = arr > threshold
+    low = arr < threshold
+    positive_sum = np.where(high, out, 0.0).sum(axis=1, keepdims=True)
+    low_count = low.sum(axis=1, keepdims=True)
+    replacement = np.divide(-positive_sum, low_count, out=np.zeros_like(positive_sum), where=low_count > 0)
+    out = np.where(low & (low_count > 0), replacement, out)
+    out = np.where(np.isfinite(arr) & np.isfinite(threshold), out, np.nan)
+    return torch.as_tensor(out, dtype=x.dtype, device=x.device)
+
+
+def corr(left: torch.Tensor, right: torch.Tensor, dim: int = -1, keepdims: bool = False) -> torch.Tensor:
+    left = left.to(torch.float32)
+    right = right.to(torch.float32)
+    valid = torch.isfinite(left) & torch.isfinite(right)
+    count = valid.sum(dim=dim, keepdim=True)
+    left_mean = torch.where(valid, left, torch.nan).nanmean(dim=dim, keepdim=True)
+    right_mean = torch.where(valid, right, torch.nan).nanmean(dim=dim, keepdim=True)
+    left_centered = torch.where(valid, left - left_mean, torch.zeros_like(left))
+    right_centered = torch.where(valid, right - right_mean, torch.zeros_like(right))
+    numerator = (left_centered * right_centered).sum(dim=dim, keepdim=True)
+    denominator = torch.sqrt(
+        (left_centered * left_centered).sum(dim=dim, keepdim=True)
+        * (right_centered * right_centered).sum(dim=dim, keepdim=True)
+    )
+    out = numerator / denominator
+    out = torch.where((count >= 2) & (denominator > 0), out, torch.full_like(out, torch.nan))
+    return out if keepdims else out.squeeze(dim)
 
 
 def _nan_masked(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -72,6 +124,7 @@ def neut(
     y: torch.Tensor,
     xs: torch.Tensor | list[torch.Tensor] | tuple[torch.Tensor, ...],
     intercept: bool = True,
+    ratio: float | Sequence[float] = 1.0,
     eps: float | None = None,
 ) -> torch.Tensor:
     eps = _default_eps(y.dtype) if eps is None else eps
@@ -106,7 +159,19 @@ def neut(
     rhs = xt @ y_vec
     eye = torch.eye(gram.shape[-1], device=device, dtype=cast_dtype)
     beta = torch.linalg.pinv(gram + eye * eps) @ rhs
-    fitted = (x_mat @ beta).squeeze(-1)
+    if isinstance(ratio, Sequence) and not isinstance(ratio, (str, bytes)):
+        ratio_tensor = torch.as_tensor(list(ratio), device=device, dtype=cast_dtype)
+        if ratio_tensor.numel() == len(xs_list):
+            if intercept:
+                ratio_tensor = torch.cat([torch.ones(1, device=device, dtype=cast_dtype), ratio_tensor])
+        elif ratio_tensor.numel() != x_mat.shape[-1]:
+            raise ValueError(
+                f"neut ratio length must be {len(xs_list)}"
+                f"{f' or {len(xs_list) + 1}' if intercept else ''}, got {ratio_tensor.numel()}"
+            )
+        fitted = ((x_mat * ratio_tensor) @ beta).squeeze(-1)
+    else:
+        fitted = (x_mat @ beta).squeeze(-1) * float(ratio)
     residual = y - fitted
     return torch.where(valid, residual, torch.full_like(y, torch.nan))
 

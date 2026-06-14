@@ -60,7 +60,7 @@ Supported item ops:
 | `nan_to_num` / `fillna` | Fill NaN/inf with `value`. |
 | `winsorize_by_quantile` | Row-wise quantile winsorization. |
 | `normalize_by_max_abs` | Row-wise max-abs normalization. |
-| `neut(name, ...)` | Neutralize against one or more data dependencies. |
+| `neut(name, ..., ratio)` | Neutralize against one or more data dependencies; optional final `ratio` defaults to `1.0` and may be a per-dependency ratio array. |
 | `delay(n)` | Shift data by `n` trading days. |
 | `ts_mean(n)` / `ts_avg(n)` | Rolling mean over `n` trading days. |
 

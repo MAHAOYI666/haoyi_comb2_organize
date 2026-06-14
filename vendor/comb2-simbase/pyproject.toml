@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comb2-simbase"
+version = "0.1.0"
+description = "Local simbase compatibility package for comb2"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "torch",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["comb2_simbase"]
+
+[tool.setuptools.package-data]
+comb2_simbase = ["index_mask/memmap_mask/*.npy"]

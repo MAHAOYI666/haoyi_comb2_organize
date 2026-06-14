@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,12 @@ from xml.etree import ElementTree as ET
 
 import numpy as np
 import pandas as pd
+
+SIMBASE_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "comb2-simbase"
+if str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
+
+from comb2_simbase.benchmark import benchmark_returns_from_cache, cache_path_from_rendered_config
 
 
 @dataclass(frozen=True)
@@ -316,32 +323,24 @@ def _infer_booksize(summary_df: pd.DataFrame) -> float:
 
 
 def _fetch_benchmark_returns(dates: list[int], daily_path: Path) -> pd.Series:
-    try:
-        from factorsim.tushare_tool.tusharesql import Querytool
-    except Exception as exc:
+    cache_path = _cache_path_for_daily_metrics(daily_path)
+    if cache_path is None:
         raise ValueError(
-            "daily metrics lacks li_ret/benchmark_ret columns and factorsim Querytool is unavailable; "
-            f"cannot compute scoring-window sharpe_idx from {daily_path}"
-        ) from exc
+            "daily metrics lacks li_ret/benchmark_ret columns and no rendered config with constants.cache_path "
+            f"was found; cannot compute scoring-window sharpe_idx from {daily_path}"
+        )
+    return benchmark_returns_from_cache(cache_path, dates, ts_code="000905.SH")
 
-    pro = Querytool()
-    bench_raw = pro.index_daily(
-        ts_code="000905.SH",
-        target_columns=["close"],
-        start_date=min(dates),
-        end_date=max(dates),
-    )
-    bench = pd.DataFrame(bench_raw).copy()
-    if bench.empty or "trade_date" not in bench.columns or "close" not in bench.columns:
-        raise ValueError("benchmark query returned no trade_date/close data for scoring-window metrics")
-    bench["date"] = pd.to_numeric(bench["trade_date"], errors="coerce").astype("Int64")
-    bench = bench.dropna(subset=["date"]).copy()
-    bench["date"] = bench["date"].astype(int)
-    close = bench.sort_values("date").set_index("date")["close"].astype(float)
-    close = close.reindex(pd.Index(dates, name="date")).ffill()
-    if close.isna().any():
-        raise ValueError("benchmark close series could not be aligned to daily metrics dates")
-    return close.pct_change().fillna(0.0).reset_index(drop=True)
+
+def _cache_path_for_daily_metrics(daily_path: Path) -> Path | None:
+    candidates: list[Path] = []
+    for parent in daily_path.parents:
+        candidates.append(parent / "config.xml")
+    for config_path in candidates:
+        cache_path = cache_path_from_rendered_config(config_path)
+        if cache_path is not None:
+            return cache_path
+    return None
 
 
 def _max_drawdown(cum_ret: pd.Series) -> float:
@@ -394,7 +393,7 @@ def _warn_if_days_suspicious(days: int, start_ds: int, end_ds: int) -> None:
 
 def _expected_trading_days(start_ds: int, end_ds: int) -> int | None:
     try:
-        from factorsim import IndexMask
+        from comb2_simbase import IndexMask
     except Exception:
         return None
     try:
@@ -419,4 +418,3 @@ def is_valid_summary(path: str | Path) -> bool:
         if metrics.days > 0 and not np.isnan(metrics.sharpe_idx):
             return True
     return False
-

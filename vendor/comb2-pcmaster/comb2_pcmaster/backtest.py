@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,8 +10,13 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from factorsim import IndexMask
-from factorsim.tushare_tool.tusharesql import Querytool
+
+SIMBASE_ROOT = Path(__file__).resolve().parents[3] / "vendor" / "comb2-simbase"
+if str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
+
+from comb2_simbase import IndexMask
+from comb2_simbase.benchmark import load_index_benchmark
 from .dataloader import DataLoader
 from .strategy import StrategyBase
 
@@ -168,16 +174,12 @@ class DailyBacktest:
             print(message)
 
     def _fetch_benchmark_data(self) -> pd.DataFrame:
-        pro = Querytool()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            bench_raw = pro.index_daily(
-                ts_code="000905.SH",
-                target_columns=["close"],
-                start_date=self.node.start_ds,
-                end_date=self.node.end_ds,
-            )
-        return pd.DataFrame(bench_raw).copy()
+        return load_index_benchmark(
+            self.node.cache_path,
+            start_ds=self.node.start_ds,
+            end_ds=self.node.end_ds,
+            ts_code="000905.SH",
+        )
 
     def step(self, date: int, alpha: pd.Series | np.ndarray) -> dict:
         date = self._align_date(date)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 import pandas as pd
@@ -21,4 +22,14 @@ def _format_value(value: Any) -> Any:
 
 
 def _format_float(value: float) -> str:
+    if pd.isna(value):
+        return "NaN"
+    if math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    abs_value = abs(float(value))
+    if abs_value == 0:
+        return "0.00"
+    if abs_value < 1:
+        decimal_places = max(2, -math.floor(math.log10(abs_value)) + 1)
+        return f"{value:.{decimal_places}f}"
     return f"{value:.2f}"

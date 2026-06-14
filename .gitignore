@@ -2,13 +2,10 @@ __pycache__/
 *.py[cod]
 
 .pytest_cache/
+.mindfs/
 
 .venv/
-.pdm-build/
-.pdm-python
 .python-version
-pdm.lock
-pyproject.toml
 output**/
 checkpoints**/
 optuna_runs/

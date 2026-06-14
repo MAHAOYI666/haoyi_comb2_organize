@@ -50,15 +50,15 @@ VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 organize_root_path = str(ORGANIZE_ROOT)
 if organize_root_path not in sys.path:
     sys.path.insert(0, organize_root_path)
-for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"):
+for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster", VENDOR_ROOT / "comb2-simbase"):
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
         sys.path.insert(0, local_package_path)
 
 from comb2 import ComboBase, LoaderConfig
 from src.DataLoader import ComboDataLoader, ComboTrainDataset
-from factorsim import IndexMask, Memmaper2, fast, operator
-from factorsim.config import NAN_DTYPE
+from comb2_simbase import IndexMask, Memmaper2, fast
+from comb2_simbase.config import NAN_DTYPE
 from vendor.perf_monitor import PerfMonitor, print_progress
 
 
@@ -133,8 +133,15 @@ class Node:
         self.loader_config = LoaderConfig(**loader_config)
 
 
-def print_daily_metrics(metrics: dict):
+def _print_metric_table(title: str, columns: list[tuple[str, str, int]]) -> None:
+    header = " ".join(f"{name:<{width}}" for name, _, width in columns)
+    row = " ".join(f"{value:<{width}}" for _, value, width in columns)
+    print(title)
+    print(header)
+    print(row)
 
+
+def print_daily_metrics(metrics: dict):
     columns = [
         ("date", str(metrics["date"]), 10),
         ("pnl", f"{metrics['pnl']:.2f}", 14),
@@ -144,11 +151,7 @@ def print_daily_metrics(metrics: dict):
         ("tvr", f"{metrics['tvr']:.4f}", 10),
         ("long_num", str(metrics["long_num"]), 10),
     ]
-    header = " ".join(f"{name:<{width}}" for name, _, width in columns)
-    row = " ".join(f"{value:<{width}}" for _, value, width in columns)
-    print("[BACKTEST]")
-    print(header)
-    print(row)
+    _print_metric_table("[BACKTEST]", columns)
 
 
 def print_live_metrics(meta: dict):
@@ -162,25 +165,39 @@ def print_live_metrics(meta: dict):
         ("mean", f"{meta['mean']:.6f}" if meta["mean"] is not None else "NA", 12),
         ("std", f"{meta['std']:.6f}" if meta["std"] is not None else "NA", 12),
     ]
-    header = " ".join(f"{name:<{width}}" for name, _, width in columns)
-    row = " ".join(f"{value:<{width}}" for _, value, width in columns)
-    print("[LIVE]")
-    print(header)
-    print(row)
+    _print_metric_table("[LIVE]", columns)
 
 
-def safe_to_numpy(data):
-    if isinstance(data, torch.Tensor):
-        return data.cpu().numpy()
-    if isinstance(data, (list, tuple)):
-        return np.array(data)
-    return data
+BASE_UNIVERSE_MASK_PATH = "1d_StockMask2/StockMask2.BaseUnivMask"
+TRADING_MASK_PATH = "1d_StockMask2/StockMask2.LimitMask"
+
+
+def load_shifted_mask(mask_path: str, start_ds: int, end_ds: int, shift_n: int = -1) -> np.ndarray:
+    mask = Memmaper2(mask_path).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].values
+    if shift_n == 0:
+        return mask
+    if shift_n != -1:
+        raise ValueError(f"unsupported mask shift_n={shift_n}")
+
+    if mask.shape[0] == 1:
+        raise ValueError("need at least one array to concatenate")
+    shifted = np.full_like(mask, np.nan, dtype=np.float64)
+    if mask.shape[0] > 2:
+        shifted[1:-1] = mask[2:]
+    return shifted
+
+
+def apply_mask(y: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
+    mask_tensor = torch.as_tensor(mask, dtype=y.dtype, device=y.device)
+    return y * mask_tensor
 
 
 def process_label(y, start_ds: int, end_ds: int, ashare_data_path: str):
     y = fast.purify(y)
-    y = operator.baseUniMask(y, start_ds=start_ds, end_ds=end_ds, path=ashare_data_path, shift_n=-1)
-    y = operator.trdMask(y, start_ds=start_ds, end_ds=end_ds, path=ashare_data_path, shift_n=-1)
+    base_mask = load_shifted_mask(f"{ashare_data_path}/{BASE_UNIVERSE_MASK_PATH}", start_ds, end_ds, shift_n=-1)
+    trading_mask = load_shifted_mask(f"{ashare_data_path}/{TRADING_MASK_PATH}", start_ds, end_ds, shift_n=-1)
+    y = apply_mask(y, base_mask)
+    y = apply_mask(y, trading_mask)
     return y
 
 
@@ -210,10 +227,10 @@ def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFra
     label_1d_masked = process_label(torch.tensor(label_1d), start_time, end_time, ashare_data_path).numpy()
     label_5d_masked = process_label(torch.tensor(label_5d), start_time, end_time, ashare_data_path).numpy()
 
-    ic_1d = safe_to_numpy(fast.corr(x_masked, label_1d_masked, dim=-1, keepdims=True))
-    ic_perc = safe_to_numpy(fast.corr(fast.perc_long(x_masked), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True))
-    ic_rank = safe_to_numpy(fast.corr(fast.rank(x_masked, dim=-1), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True))
-    ic_5d = safe_to_numpy(fast.corr(x_masked, label_5d_masked, dim=-1, keepdims=True))
+    ic_1d = fast.corr(x_masked, label_1d_masked, dim=-1, keepdims=True)
+    ic_perc = fast.corr(fast.perc_long(x_masked), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
+    ic_rank = fast.corr(fast.rank(x_masked, dim=-1), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
+    ic_5d = fast.corr(x_masked, label_5d_masked, dim=-1, keepdims=True)
     x_cov = (~np.isnan(x_masked) & ~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
     label_cov = (~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
     label_cov[label_cov == 0] = np.nan

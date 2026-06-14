@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 PACKAGE_SOURCES = {
+    "comb2_simbase": REPO_ROOT / "vendor" / "comb2-simbase" / "comb2_simbase",
     "optuna_framework": REPO_ROOT / "optuna_framework",
     "comb_eval": REPO_ROOT / "evals" / "comb_eval",
     "src": REPO_ROOT / "vendor" / "comb2" / "src",
@@ -23,23 +24,49 @@ PACKAGE_SOURCES = {
 MODULE_SOURCES = {
     "config": REPO_ROOT / "config.py",
     "runCombo": REPO_ROOT / "runCombo.py",
+    "runEval": REPO_ROOT / "runEval.py",
+    "comboRunner": REPO_ROOT / "comboRunner.py",
     "runAblationByZero": REPO_ROOT / "runAblationByZero.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
 }
 
 ENTRY_POINTS = {
+    "runCombo": "runCombo:main",
+    "runEval": "runEval:main",
     "comb-run": "runCombo:main",
+    "comb-combo-runner": "comboRunner:main",
     "comb-ablation-zero": "runAblationByZero:main",
     "comb-pos-corr": "runPosCorr:main",
     "comb-eval": "comb_eval.cli:main",
 }
 CONSOLE_SCRIPTS = [f"{name}={target}" for name, target in ENTRY_POINTS.items()]
 
+# These pins target Python 3.13 Linux x86_64 wheels.  numpy follows
+# ../aresium/pdm.lock, while pandas/pyarrow follow the lower bounds in
+# ../aressignalclient/pyproject.toml.
+BUILD_DEPENDENCY_PINS = (
+    ("setuptools", "82.0.1"),
+    ("wheel", "0.47.0"),
+    ("Cython", "3.0.12"),
+)
+RUNTIME_DEPENDENCY_PINS = (
+    ("numpy", "2.3.5"),
+    ("pandas", "3.0.2"),
+    ("pyarrow", "23.0.1"),
+    ("torch", "2.9.1"),
+    ("matplotlib", "3.9.4"),
+    ("optuna", "4.8.0"),
+    ("psutil", "7.2.2"),
+    ("plotly", "6.7.0"),
+    ("lightgbm", "4.4.0"),
+)
+
 IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
     "comb2/__init__.py",
+    "comb2_simbase/__init__.py",
     "comb2_metrics/__init__.py",
     "comb2_pcmaster/__init__.py",
     "comb_eval/__init__.py",
@@ -53,7 +80,9 @@ ALLOWED_SOURCE_FILES = {
 
 def main() -> None:
     args = parse_args()
-    python = args.python.expanduser().resolve()
+    python = resolve_path_arg(args.python)
+    assert_python_313(python)
+    dependencies = resolve_dependencies()
     build_root = args.build_root.resolve()
     stage_root = build_root / "protected_src"
     dist_dir = args.dist_dir.resolve()
@@ -64,18 +93,18 @@ def main() -> None:
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     prepare_stage(stage_root)
-    write_build_files(stage_root, args.name, args.version)
+    write_build_files(stage_root, args.name, args.version, dependencies)
 
     if args.dry_run:
-        print_plan(stage_root)
+        print_plan(stage_root, dependencies, python)
         return
 
     require_compiler()
-    subprocess.run(
-        [str(python), "setup.py", "bdist_wheel", "--dist-dir", str(dist_dir)],
-        cwd=stage_root,
-        check=True,
-    )
+    ensure_pip(python)
+    command = [str(python), "-m", "pip", "wheel", ".", "--no-deps", "--wheel-dir", str(dist_dir)]
+    if args.no_build_isolation:
+        command.append("--no-build-isolation")
+    subprocess.run(command, cwd=stage_root, check=True)
     wheels = sorted(dist_dir.glob(f"{normalize_dist_name(args.name)}-*.whl"), key=lambda path: path.stat().st_mtime)
     if not wheels:
         raise RuntimeError(f"no wheel produced in {dist_dir}")
@@ -86,14 +115,66 @@ def main() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for comb2_organize and bundled vendor packages.")
-    parser.add_argument("--python", type=Path, default=Path("../python310fs/bin/python"), help="Python executable used to build the wheel")
-    parser.add_argument("--name", default="comb2-organize-protected", help="Wheel distribution name")
+    parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
+    parser.add_argument("--name", default="comb2_organize", help="Wheel distribution name")
     parser.add_argument("--version", default="0.1.0", help="Wheel version")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
     parser.add_argument("--dist-dir", type=Path, default=REPO_ROOT / "dist_protected", help="Output wheel directory")
     parser.add_argument("--dry-run", action="store_true", help="Prepare the build tree and print what would be compiled")
     parser.add_argument("--no-clean", action="store_true", help="Reuse the existing build root")
+    parser.add_argument("--no-build-isolation", action="store_true", help="Build with packages already installed in --python")
     return parser.parse_args()
+
+
+def default_build_python() -> Path:
+    python313 = shutil.which("python3.13")
+    if python313:
+        return Path(python313)
+    repo_venv_python = REPO_ROOT / ".venv" / "bin" / "python"
+    if repo_venv_python.exists():
+        return repo_venv_python
+    return Path(sys.executable)
+
+
+def resolve_path_arg(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    if len(expanded.parts) == 1:
+        executable = shutil.which(str(expanded))
+        if executable:
+            return Path(executable).resolve()
+    return (REPO_ROOT / expanded).resolve()
+
+
+def assert_python_313(python: Path) -> None:
+    proc = subprocess.run(
+        [str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    version = proc.stdout.strip()
+    if version != "3.13":
+        raise RuntimeError(f"protected wheel must be built with Python 3.13, got Python {version} from {python}")
+
+
+def ensure_pip(python: Path) -> None:
+    probe = subprocess.run([str(python), "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if probe.returncode == 0:
+        return
+    subprocess.run([str(python), "-m", "ensurepip", "--upgrade"], check=True)
+
+
+def resolve_dependencies() -> dict[str, object]:
+    return {
+        "build_requires": pin_dependencies(BUILD_DEPENDENCY_PINS),
+        "install_requires": pin_dependencies(RUNTIME_DEPENDENCY_PINS),
+    }
+
+
+def pin_dependencies(pins: tuple[tuple[str, str], ...]) -> list[str]:
+    return [f"{name}=={version}" for name, version in pins]
 
 
 def prepare_stage(stage_root: Path) -> None:
@@ -119,9 +200,11 @@ def copy_tree(source: Path, target: Path) -> None:
     shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
 
 
-def write_build_files(stage_root: Path, name: str, version: str) -> None:
+def write_build_files(stage_root: Path, name: str, version: str, dependencies: dict[str, object]) -> None:
     extensions = extension_specs(stage_root)
     packages = package_names(stage_root)
+    install_requires = dependencies["install_requires"]
+    build_requires = dependencies["build_requires"]
     setup_py = f"""
 from __future__ import annotations
 
@@ -146,7 +229,7 @@ setup(
     name={name!r},
     version={version!r},
     description="Protected binary wheel for comb2_organize",
-    python_requires=">=3.10",
+    python_requires=">=3.13,<3.14",
     packages={packages!r},
     ext_modules=cythonize(
         extensions,
@@ -158,23 +241,20 @@ setup(
     ),
     cmdclass={{"build_py": build_py}},
     entry_points={{"console_scripts": {CONSOLE_SCRIPTS!r}}},
-    install_requires=[
-        "numpy",
-        "pandas",
-        "pyarrow",
-        "torch",
-        "optuna",
-        "matplotlib",
-    ],
+    install_requires={install_requires!r},
+    package_data={{
+        "comb2_simbase": ["index_mask/memmap_mask/*.npy"],
+        "optuna_framework": ["config.xml"],
+    }},
     zip_safe=False,
 )
 """
     (stage_root / "setup.py").write_text(textwrap.dedent(setup_py).lstrip(), encoding="utf-8")
     (stage_root / "pyproject.toml").write_text(
         textwrap.dedent(
-            """
+            f"""
             [build-system]
-            requires = ["setuptools>=68", "wheel", "Cython>=3.0"]
+            requires = {build_requires!r}
             build-backend = "setuptools.build_meta"
             """
         ).lstrip(),
@@ -224,12 +304,20 @@ def verify_wheel(wheel: Path) -> None:
         raise RuntimeError(f"protected wheel still contains source files:\n{joined}")
 
 
-def print_plan(stage_root: Path) -> None:
+def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path) -> None:
     extensions = extension_specs(stage_root)
     packages = package_names(stage_root)
     print(f"staged source: {stage_root}")
+    print(f"build python: {python}")
+    print("dependency version source: built-in Python 3.13 wheel-compatible pins")
     print(f"packages: {len(packages)}")
     print(f"compiled extensions: {len(extensions)}")
+    print("install_requires:")
+    for dep in dependencies["install_requires"]:
+        print(f"  {dep}")
+    print("build-system.requires:")
+    for dep in dependencies["build_requires"]:
+        print(f"  {dep}")
     for module, path in extensions:
         print(f"  {module}: {path}")
 

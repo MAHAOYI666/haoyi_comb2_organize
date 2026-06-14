@@ -9,6 +9,7 @@ from .evaluator import run_evaluation
 from .formatting import output_dict_to_lines, output_frame_to_text
 from .ic import summarize_cache_ic, summarize_ic
 from .pnl import summarize_pnl, summarize_pnl_with_benchmark
+from .report import config_eval_to_text, run_config_evaluation
 from .value_add import netting_return, pool_value_added, value_added
 
 
@@ -75,10 +76,22 @@ def main() -> None:
     limit_parser.add_argument("mask")
     _add_date_args(limit_parser)
 
-    eval_parser = subparsers.add_parser("eval", help="Run local checks over available files")
+    eval_parser = subparsers.add_parser("eval", help="Run local checks over available files or a config output")
+    eval_parser.add_argument("--config", help="Run a full evaluation report from a comb2-organize XML config")
+    eval_parser.add_argument("--report-dir", help="Directory for config eval artifacts; defaults to <output_root>/eval_report")
+    eval_parser.add_argument("--plot-output", help="Path for the signal analysis long image")
     eval_parser.add_argument("--pnl")
     eval_parser.add_argument("--pnlzz500")
     eval_parser.add_argument("--ic")
+    eval_parser.add_argument("--label", help="1d forward-return label path for PNL/IC/decile calculation")
+    eval_parser.add_argument("--label-5d", help="5d forward-return label path for IC calculation")
+    eval_parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
+    eval_parser.add_argument("--label-5d-is-table", action="store_true", help="Read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
+    eval_parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
+    eval_parser.add_argument("--booksize", type=float, help="Booksize for generated daily pnl and decile backtests")
+    eval_parser.add_argument("--tradecost-ratio", type=float, help="Cost multiplier; cost = tradevalue * 0.003 * ratio")
+    eval_parser.add_argument("--skip-deciles", action="store_true", help="Skip 10-group backtests")
+    eval_parser.add_argument("--skip-exposure", action="store_true", help="Skip Barra exposure analysis")
     _add_date_args(eval_parser)
 
     args = parser.parse_args()
@@ -118,6 +131,26 @@ def main() -> None:
     elif args.command == "trade-limit":
         print(output_frame_to_text(trading_limit_exposure(args.trades, args.mask, start=args.start, end=args.end)))
     elif args.command == "eval":
+        if args.config:
+            result = run_config_evaluation(
+                args.config,
+                report_dir=args.report_dir,
+                plot_path=args.plot_output,
+                pnlzz500_path=args.pnlzz500,
+                label_path=args.label,
+                label_5d_path=args.label_5d,
+                label_is_table=args.label_is_table,
+                label_5d_is_table=args.label_5d_is_table,
+                label_df_type=_parse_df_type(args.label_df_type),
+                booksize=args.booksize,
+                tradecost_ratio=args.tradecost_ratio,
+                start=args.start,
+                end=args.end,
+                skip_deciles=args.skip_deciles,
+                skip_exposure=args.skip_exposure,
+            )
+            print(config_eval_to_text(result))
+            return
         outputs = run_evaluation(args.pnl, args.ic, pnlzz500_path=args.pnlzz500, start=args.start, end=args.end)
         for module, tables in outputs.items():
             print(f"\n[{module}.summary]")
@@ -129,6 +162,15 @@ def main() -> None:
 def _add_date_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start", help="Start date, e.g. 20160101")
     parser.add_argument("--end", help="End date, e.g. 20240101")
+
+
+def _parse_df_type(value: str) -> object:
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return value
 
 
 if __name__ == "__main__":

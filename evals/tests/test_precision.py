@@ -27,3 +27,21 @@ def test_summarize_pnl_keeps_full_precision_until_output() -> None:
     assert np.isclose(ir, 2.1213203435596424)
     assert ir != 2.12
     assert "2.12" in output_frame_to_text(result.table)
+
+
+def test_output_frame_uses_effective_decimal_places_for_small_values() -> None:
+    frame = pd.DataFrame(
+        {
+            "small": [0.006789],
+            "negative_small": [-0.0004567],
+            "normal": [12.345],
+        },
+        index=["row"],
+    )
+
+    text = output_frame_to_text(frame)
+
+    assert "0.0068" in text
+    assert "-0.00046" in text
+    assert "12.35" in text
+    assert "0.01" not in text

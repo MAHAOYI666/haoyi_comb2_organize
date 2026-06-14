@@ -834,6 +834,110 @@ def test_data_registry_builtin_alpha_parquet_supports_neut_op(tmp_path) -> None:
     assert _finite_abs_max(loaded) < 1e-4
 
 
+def test_data_registry_neut_supports_ratio() -> None:
+    y = torch.tensor([[4.0, 7.0, 10.0], [5.0, 8.0, 11.0], [6.0, 9.0, 12.0], [7.0, 10.0, 13.0]])
+    size = torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)
+    registry, calls = _fake_registry(
+        [
+            DataItem(
+                name="alpha.neut",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("neut(size, 0.5)", {}),),
+                params={"values": y},
+            ),
+            DataItem(
+                name="barra.size",
+                module="test.tensor",
+                role="aux",
+                params={"values": size},
+            ),
+        ]
+    )
+
+    registry._ensure_range(("alpha.neut",), 20200101, 20200101)
+    data = registry.get_data("alpha.neut")
+
+    assert torch.allclose(data[0], y[0] * 0.5, atol=1e-4)
+    assert calls == [("barra.size", 20200101, 20200101), ("alpha.neut", 20200101, 20200101)]
+
+
+def test_data_registry_neut_supports_array_string_dependencies_and_ratio() -> None:
+    y = torch.tensor([[4.0, 7.0, 10.0], [5.0, 8.0, 11.0], [6.0, 9.0, 12.0], [7.0, 10.0, 13.0]])
+    registry, calls = _fake_registry(
+        [
+            DataItem(
+                name="alpha.neut",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("neut(['size', 'btop'], 0.5)", {}),),
+                params={"values": y},
+            ),
+            DataItem(
+                name="barra.size",
+                module="test.tensor",
+                role="aux",
+                params={"values": torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)},
+            ),
+            DataItem(
+                name="barra.btop",
+                module="test.tensor",
+                role="aux",
+                params={"values": torch.tensor([[2.0, 3.0, 4.0]]).repeat(4, 1)},
+            ),
+        ]
+    )
+
+    registry._ensure_range(("alpha.neut",), 20200101, 20200101)
+    data = registry.get_data("alpha.neut")
+
+    assert torch.allclose(data[0], y[0] * 0.5, atol=1e-4)
+    assert calls == [
+        ("barra.size", 20200101, 20200101),
+        ("barra.btop", 20200101, 20200101),
+        ("alpha.neut", 20200101, 20200101),
+    ]
+
+
+def test_data_registry_neut_supports_per_dependency_ratio_array() -> None:
+    size = torch.tensor([[1.0, 0.0, -1.0]]).repeat(4, 1)
+    btop = torch.tensor([[0.0, 1.0, -1.0]]).repeat(4, 1)
+    y = 2.0 * size + 3.0 * btop
+    registry, calls = _fake_registry(
+        [
+            DataItem(
+                name="alpha.neut",
+                module="test.tensor",
+                role="factor",
+                ops=(OpSpec("neut(['size', 'btop'], [0.5, 1.0])", {}),),
+                params={"values": y},
+            ),
+            DataItem(
+                name="barra.size",
+                module="test.tensor",
+                role="aux",
+                params={"values": size},
+            ),
+            DataItem(
+                name="barra.btop",
+                module="test.tensor",
+                role="aux",
+                params={"values": btop},
+            ),
+        ]
+    )
+
+    registry._ensure_range(("alpha.neut",), 20200101, 20200101)
+    data = registry.get_data("alpha.neut")
+
+    assert torch.allclose(data[0], torch.tensor([1.0, 0.0, -1.0]), atol=1e-4)
+    assert calls == [
+        ("barra.size", 20200101, 20200101),
+        ("barra.btop", 20200101, 20200101),
+        ("alpha.neut", 20200101, 20200101),
+    ]
+
+
 def _fake_registry(
     items: list[DataItem],
     presets: tuple[str, ...] = (),
