@@ -74,7 +74,7 @@ build:
           continue
         fi
 
-        if "${resolved}" - <<'PY' && "${resolved}" -m pip --version >/dev/null 2>&1; then
+        if "${resolved}" - <<'PY'; then
       import sys
       import sysconfig
       from pathlib import Path
@@ -99,6 +99,22 @@ build:
       export COMBO2_PYTHON
       echo "Using build Python: ${COMBO2_PYTHON}"
       "${COMBO2_PYTHON}" --version
+
+      rm -rf .ci-pip .ci-get-pip.py
+      if ! "${COMBO2_PYTHON}" -m pip --version; then
+        echo "Python 3.13 pip is not usable; bootstrapping pip into ${PWD}/.ci-pip"
+        "${COMBO2_PYTHON}" - <<'PY'
+      from pathlib import Path
+      from urllib.request import urlretrieve
+
+      url = "https://bootstrap.pypa.io/get-pip.py"
+      target = Path(".ci-get-pip.py")
+      print(f"downloading {url} -> {target}")
+      urlretrieve(url, target)
+      PY
+        "${COMBO2_PYTHON}" .ci-get-pip.py --target "${PWD}/.ci-pip" --no-warn-script-location
+        export PYTHONPATH="${PWD}/.ci-pip${PYTHONPATH:+:${PYTHONPATH}}"
+      fi
       "${COMBO2_PYTHON}" -m pip --version
 
       if ! command -v gcc >/dev/null 2>&1 && ! command -v cc >/dev/null 2>&1; then
