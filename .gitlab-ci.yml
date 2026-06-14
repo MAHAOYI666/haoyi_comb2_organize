@@ -17,6 +17,8 @@ build:
     - main
   script:
     - |
+      set -e
+
       if command -v "${COMBO2_BUILD_PYTHON}" >/dev/null 2>&1; then
         COMBO2_PYTHON="$(command -v "${COMBO2_BUILD_PYTHON}")"
       elif [ -x "${COMBO2_BUILD_PYTHON}" ]; then
@@ -42,15 +44,17 @@ build:
       if not python_h.exists():
           raise SystemExit(f"Python development headers are required, missing {python_h}")
       PY
-    - "${COMBO2_PYTHON}" -m pip --version
-    - |
+
+      "${COMBO2_PYTHON}" -m pip --version
+
       if ! command -v gcc >/dev/null 2>&1 && ! command -v cc >/dev/null 2>&1; then
         echo "Cython extension build requires gcc or cc in PATH."
         exit 1
       fi
-    - "${COMBO2_PYTHON}" packaging/build_protected_wheel.py --python "${COMBO2_PYTHON}" --name combo2 --version "${COMBO2_WHEEL_VERSION}" --dist-dir "${COMBO2_DIST_DIR}" ${COMBO2_BUILD_EXTRA_ARGS}
-    - mkdir -p "${COMBO2_PUBLISH_DIR}"
-    - cp -v "${COMBO2_DIST_DIR}"/combo2-*.whl "${COMBO2_PUBLISH_DIR}/"
+
+      "${COMBO2_PYTHON}" packaging/build_protected_wheel.py --python "${COMBO2_PYTHON}" --name combo2 --version "${COMBO2_WHEEL_VERSION}" --dist-dir "${COMBO2_DIST_DIR}" ${COMBO2_BUILD_EXTRA_ARGS}
+      mkdir -p "${COMBO2_PUBLISH_DIR}"
+      cp -v "${COMBO2_DIST_DIR}"/combo2-*.whl "${COMBO2_PUBLISH_DIR}/"
   artifacts:
     name: "combo2-${CI_COMMIT_SHORT_SHA}"
     paths:
