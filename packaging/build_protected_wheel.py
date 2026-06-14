@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 PACKAGE_SOURCES = {
+    "comb2_templates": REPO_ROOT / "comb2_templates",
     "comb2_simbase": REPO_ROOT / "vendor" / "comb2-simbase" / "comb2_simbase",
     "optuna_framework": REPO_ROOT / "optuna_framework",
     "comb_eval": REPO_ROOT / "evals" / "comb_eval",
@@ -28,6 +29,7 @@ MODULE_SOURCES = {
     "comboRunner": REPO_ROOT / "comboRunner.py",
     "runAblationByZero": REPO_ROOT / "runAblationByZero.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
+    "comboHelloWorld": REPO_ROOT / "comboHelloWorld.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
 }
 
@@ -39,6 +41,7 @@ ENTRY_POINTS = {
     "comb-ablation-zero": "runAblationByZero:main",
     "comb-pos-corr": "runPosCorr:main",
     "comb-eval": "comb_eval.cli:main",
+    "combo-hello-world": "comboHelloWorld:main",
 }
 CONSOLE_SCRIPTS = [f"{name}={target}" for name, target in ENTRY_POINTS.items()]
 
@@ -66,7 +69,9 @@ IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
     "comb2/__init__.py",
+    "comb2_templates/__init__.py",
     "comb2_simbase/__init__.py",
+    "comb2_pcmaster/default_strategy.py",
     "comb2_metrics/__init__.py",
     "comb2_pcmaster/__init__.py",
     "comb_eval/__init__.py",
@@ -76,6 +81,7 @@ ALLOWED_SOURCE_FILES = {
     "src/codec/__init__.py",
     "vendor/__init__.py",
 }
+PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
 
 
 def main() -> None:
@@ -181,6 +187,8 @@ def prepare_stage(stage_root: Path) -> None:
     for package, source in PACKAGE_SOURCES.items():
         copy_tree(source, stage_root / package)
 
+    shutil.copy2(REPO_ROOT / "config.human", stage_root / "comb2_templates" / "config.human")
+
     for module, source in MODULE_SOURCES.items():
         target = stage_root / Path(*module.split(".")).with_suffix(".py")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +251,8 @@ setup(
     entry_points={{"console_scripts": {CONSOLE_SCRIPTS!r}}},
     install_requires={install_requires!r},
     package_data={{
+        "comb2_templates": ["config.human"],
+        "comb2_pcmaster": ["default_strategy.py"],
         "comb2_simbase": ["index_mask/memmap_mask/*.npy"],
         "optuna_framework": ["config.xml"],
     }},
@@ -268,6 +278,8 @@ def extension_specs(stage_root: Path) -> list[tuple[str, str]]:
         package_root = stage_root / package
         for path in sorted(package_root.rglob("*.py")):
             if path.name == "__init__.py":
+                continue
+            if path.relative_to(stage_root).as_posix() in PLAIN_SOURCE_FILES:
                 continue
             module = ".".join(path.relative_to(stage_root).with_suffix("").parts)
             specs.append((module, path.relative_to(stage_root).as_posix()))

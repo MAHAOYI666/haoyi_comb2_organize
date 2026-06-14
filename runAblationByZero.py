@@ -25,6 +25,7 @@ from runCombo import (
     dump_alpha_analysis,
     organize_config_module,
     print_daily_metrics,
+    resolve_config_arg,
 )
 from comb2_simbase import IndexMask
 from comb2_pcmaster import DailyBacktest
@@ -160,7 +161,11 @@ def parse_features(value: str | None) -> list[int] | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run full Combo flow with one zero-ablation output per feature.")
+    parser = argparse.ArgumentParser(
+        prog="comb-ablation-zero",
+        description="Run full Combo flow with one zero-ablation output per feature.",
+        epilog="example: comb-ablation-zero config.xml --features 0,1,2",
+    )
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
     parser.add_argument("--features", type=str, default=None, help="Comma-separated feature indices to ablate")
@@ -266,9 +271,11 @@ def run_group(
             dump_alpha_analysis(SimpleNamespace(alpha_history=combo.variant_histories[name]), config["combo"])
 
 
-def main():
+def main() -> int:
     args = parse_args()
-    config_path = args.config_flag or args.config
+    config_path = resolve_config_arg(args, prog="comb-ablation-zero")
+    if config_path is None:
+        return 2
     organize_config = organize_config_module.load_config(config_path)
     monitor = PerfMonitor.from_config(organize_config)
 
@@ -295,7 +302,8 @@ def main():
                 print_progress("Stage:ablation_groups", group_idx, len(groups), groups_start, final=group_idx == len(groups))
     finally:
         monitor.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

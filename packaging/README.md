@@ -67,6 +67,7 @@ Requirements:
 
 Installed commands include:
 
+- `combo-hello-world`
 - `runCombo`
 - `runEval`
 - `comb-run`

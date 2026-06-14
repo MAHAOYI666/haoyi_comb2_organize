@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib.util
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
@@ -11,6 +12,20 @@ ORGANIZE_ROOT = Path(__file__).resolve().parent
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 COMB2_ROOT = VENDOR_ROOT / "comb2"
 PCM_ROOT = VENDOR_ROOT / "comb2-pcmaster"
+
+
+def _default_strategy_path() -> str:
+    source_path = PCM_ROOT / "comb2_pcmaster" / "default_strategy.py"
+    if source_path.is_file():
+        return str(source_path)
+
+    package_spec = importlib.util.find_spec("comb2_pcmaster")
+    if package_spec is not None and package_spec.origin:
+        package_strategy = Path(package_spec.origin).resolve().parent / "default_strategy.py"
+        if package_strategy.is_file():
+            return str(package_strategy)
+
+    return str(PCM_ROOT / "examples" / "alpha_strategy.py")
 
 
 def _builtin_factor_item(path: str) -> dict[str, Any]:
@@ -61,7 +76,7 @@ DEFAULT_CONFIG = {
     "strategy": {
         "start_ds": 20160111,
         "end_ds": 20200101,
-        "path": str(PCM_ROOT / "examples" / "alpha_strategy.py"),
+        "path": _default_strategy_path(),
     },
     "combo": {
         "paths": {
@@ -80,7 +95,7 @@ DEFAULT_CONFIG = {
         "runtime": {
             "snaptime": "mlp_minimal",
             "livetrading": False,
-            "trainDelay": 1,
+            "trainDelay": 0,
             "retDays": 1,
             "tsDays": 8,
             "load_chunk_days": None,
