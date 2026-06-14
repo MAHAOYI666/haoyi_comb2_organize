@@ -1,0 +1,58 @@
+stages:
+  - build
+
+variables:
+  GIT_CLONE_PATH: $CI_BUILDS_DIR/$CI_PROJECT_PATH
+  COMBO2_BUILD_PYTHON: python3.13
+  COMBO2_DIST_DIR: dist_protected
+  COMBO2_PUBLISH_DIR: /home/shared/data2/codes/factorsimteam/combo/combo2
+  COMBO2_BUILD_EXTRA_ARGS: ""
+  COMBO2_WHEEL_VERSION: "0.1.0"
+
+build:
+  stage: build
+  tags:
+    - Ares_short
+  only:
+    - main
+  script:
+    - |
+      if command -v "${COMBO2_BUILD_PYTHON}" >/dev/null 2>&1; then
+        COMBO2_PYTHON="$(command -v "${COMBO2_BUILD_PYTHON}")"
+      elif [ -x "${COMBO2_BUILD_PYTHON}" ]; then
+        COMBO2_PYTHON="${COMBO2_BUILD_PYTHON}"
+      elif command -v python3 >/dev/null 2>&1; then
+        COMBO2_PYTHON="$(command -v python3)"
+      else
+        echo "Python 3.13 is required. Install it on the runner or set COMBO2_BUILD_PYTHON to its executable path."
+        exit 1
+      fi
+      export COMBO2_PYTHON
+      echo "Using Python: ${COMBO2_PYTHON}"
+      "${COMBO2_PYTHON}" --version
+      "${COMBO2_PYTHON}" - <<'PY'
+      import sys
+      import sysconfig
+      from pathlib import Path
+
+      if sys.version_info[:2] != (3, 13):
+          raise SystemExit(f"Python 3.13 is required, got {sys.version.split()[0]}")
+
+      python_h = Path(sysconfig.get_paths()["include"]) / "Python.h"
+      if not python_h.exists():
+          raise SystemExit(f"Python development headers are required, missing {python_h}")
+      PY
+    - "${COMBO2_PYTHON}" -m pip --version
+    - |
+      if ! command -v gcc >/dev/null 2>&1 && ! command -v cc >/dev/null 2>&1; then
+        echo "Cython extension build requires gcc or cc in PATH."
+        exit 1
+      fi
+    - "${COMBO2_PYTHON}" packaging/build_protected_wheel.py --python "${COMBO2_PYTHON}" --name combo2 --version "${COMBO2_WHEEL_VERSION}" --dist-dir "${COMBO2_DIST_DIR}" ${COMBO2_BUILD_EXTRA_ARGS}
+    - mkdir -p "${COMBO2_PUBLISH_DIR}"
+    - cp -v "${COMBO2_DIST_DIR}"/combo2-*.whl "${COMBO2_PUBLISH_DIR}/"
+  artifacts:
+    name: "combo2-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - dist_protected/*.whl
+    expire_in: 30 days
