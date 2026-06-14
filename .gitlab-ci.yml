@@ -21,19 +21,18 @@ build:
       set -e
 
       if command -v "${COMBO2_BUILD_PYTHON}" >/dev/null 2>&1; then
-        COMBO2_PYTHON="$(command -v "${COMBO2_BUILD_PYTHON}")"
+        COMBO2_BOOTSTRAP_PYTHON="$(command -v "${COMBO2_BUILD_PYTHON}")"
       elif [ -x "${COMBO2_BUILD_PYTHON}" ]; then
-        COMBO2_PYTHON="${COMBO2_BUILD_PYTHON}"
+        COMBO2_BOOTSTRAP_PYTHON="${COMBO2_BUILD_PYTHON}"
       elif command -v python3 >/dev/null 2>&1; then
-        COMBO2_PYTHON="$(command -v python3)"
+        COMBO2_BOOTSTRAP_PYTHON="$(command -v python3)"
       else
         echo "Python 3.13 is required. Install it on the runner or set COMBO2_BUILD_PYTHON to its executable path."
         exit 1
       fi
-      export COMBO2_PYTHON
-      echo "Using Python: ${COMBO2_PYTHON}"
-      "${COMBO2_PYTHON}" --version
-      "${COMBO2_PYTHON}" - <<'PY'
+      echo "Using bootstrap Python: ${COMBO2_BOOTSTRAP_PYTHON}"
+      "${COMBO2_BOOTSTRAP_PYTHON}" --version
+      "${COMBO2_BOOTSTRAP_PYTHON}" - <<'PY'
       import sys
       import sysconfig
       from pathlib import Path
@@ -46,6 +45,15 @@ build:
           raise SystemExit(f"Python development headers are required, missing {python_h}")
       PY
 
+      rm -rf .ci-python
+      if ! "${COMBO2_BOOTSTRAP_PYTHON}" -m venv .ci-python; then
+        echo "Python venv support is required. Install python3.13-venv on the runner."
+        exit 1
+      fi
+      COMBO2_PYTHON="${PWD}/.ci-python/bin/python"
+      export COMBO2_PYTHON
+      echo "Using build venv Python: ${COMBO2_PYTHON}"
+      "${COMBO2_PYTHON}" --version
       "${COMBO2_PYTHON}" -m pip --version
 
       if ! command -v gcc >/dev/null 2>&1 && ! command -v cc >/dev/null 2>&1; then
