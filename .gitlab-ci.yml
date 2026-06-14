@@ -15,7 +15,7 @@ build:
   tags:
     - Ares_short
   only:
-    - main
+    - master
   script:
     - |
       set -e
