@@ -20,60 +20,84 @@ build:
     - |
       set -e
 
-      if command -v "${COMBO2_BUILD_PYTHON}" >/dev/null 2>&1; then
-        COMBO2_BOOTSTRAP_PYTHON="$(command -v "${COMBO2_BUILD_PYTHON}")"
-      elif [ -x "${COMBO2_BUILD_PYTHON}" ]; then
-        COMBO2_BOOTSTRAP_PYTHON="${COMBO2_BUILD_PYTHON}"
-      elif command -v python3 >/dev/null 2>&1; then
-        COMBO2_BOOTSTRAP_PYTHON="$(command -v python3)"
-      else
-        echo "Python 3.13 is required. Install it on the runner or set COMBO2_BUILD_PYTHON to its executable path."
-        exit 1
-      fi
-      echo "Using bootstrap Python: ${COMBO2_BOOTSTRAP_PYTHON}"
-      "${COMBO2_BOOTSTRAP_PYTHON}" --version
-      "${COMBO2_BOOTSTRAP_PYTHON}" - <<'PY'
+      echo "PATH=${PATH}"
+      echo "Requested Python: ${COMBO2_BUILD_PYTHON}"
+      echo "Python 3.13 environment probe:"
+      for candidate in \
+        "${COMBO2_BUILD_PYTHON}" \
+        python3.13 \
+        /usr/local/bin/python3.13 \
+        /usr/bin/python3.13 \
+        /root/.local/share/pdm/python/cpython@3.13.11/bin/python3.13 \
+        /home/gitlab-runner/.local/share/pdm/python/cpython@3.13.11/bin/python3.13
+      do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+          resolved="$(command -v "${candidate}")"
+        elif [ -x "${candidate}" ]; then
+          resolved="${candidate}"
+        else
+          echo "[missing] ${candidate}"
+          continue
+        fi
+
+        echo "[found] ${candidate} -> ${resolved}"
+        "${resolved}" --version || true
+        "${resolved}" - <<'PY' || true
       import sys
       import sysconfig
       from pathlib import Path
 
-      if sys.version_info[:2] != (3, 13):
-          raise SystemExit(f"Python 3.13 is required, got {sys.version.split()[0]}")
+      python_h = Path(sysconfig.get_paths()["include"]) / "Python.h"
+      print(f"version={sys.version.split()[0]}")
+      print(f"executable={sys.executable}")
+      print(f"include={sysconfig.get_paths()['include']}")
+      print(f"python_h={python_h} exists={python_h.exists()}")
+      PY
+        "${resolved}" -m pip --version || true
+        "${resolved}" -m ensurepip --version || true
+      done
+
+      COMBO2_PYTHON=""
+      for candidate in \
+        "${COMBO2_BUILD_PYTHON}" \
+        python3.13 \
+        /usr/local/bin/python3.13 \
+        /usr/bin/python3.13 \
+        /root/.local/share/pdm/python/cpython@3.13.11/bin/python3.13 \
+        /home/gitlab-runner/.local/share/pdm/python/cpython@3.13.11/bin/python3.13
+      do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+          resolved="$(command -v "${candidate}")"
+        elif [ -x "${candidate}" ]; then
+          resolved="${candidate}"
+        else
+          continue
+        fi
+
+        if "${resolved}" - <<'PY' && "${resolved}" -m pip --version >/dev/null 2>&1; then
+      import sys
+      import sysconfig
+      from pathlib import Path
 
       python_h = Path(sysconfig.get_paths()["include"]) / "Python.h"
+      if sys.version_info[:2] != (3, 13):
+          raise SystemExit(1)
       if not python_h.exists():
-          raise SystemExit(f"Python development headers are required, missing {python_h}")
+          raise SystemExit(1)
       PY
-
-      rm -rf .ci-python .ci-build-deps .ci-distutils
-      if "${COMBO2_BOOTSTRAP_PYTHON}" -m venv .ci-python; then
-        COMBO2_PYTHON="${PWD}/.ci-python/bin/python"
-        export COMBO2_PYTHON
-        echo "Using build venv Python: ${COMBO2_PYTHON}"
-      else
-        echo "python3.13 venv is unavailable; falling back to local --target build dependencies."
-        mkdir -p .ci-distutils/distutils
-        cat > .ci-distutils/distutils/__init__.py <<'PY'
-      import importlib
-
-      _distutils = importlib.import_module("setuptools._distutils")
-      globals().update(_distutils.__dict__)
-      __path__ = _distutils.__path__
-      PY
-        export PYTHONPATH="${PWD}/.ci-distutils${PYTHONPATH:+:${PYTHONPATH}}"
-        if ! "${COMBO2_BOOTSTRAP_PYTHON}" -c "import setuptools._distutils"; then
-          echo "Python 3.13 venv and setuptools._distutils are both unavailable."
-          echo "Install python3.13-venv on the runner or set COMBO2_BUILD_PYTHON to a Python 3.13 with working pip."
-          exit 1
+          COMBO2_PYTHON="${resolved}"
+          break
         fi
-        "${COMBO2_BOOTSTRAP_PYTHON}" -m pip --version
-        "${COMBO2_BOOTSTRAP_PYTHON}" -m pip install --target "${PWD}/.ci-build-deps" setuptools==82.0.1 wheel==0.47.0 Cython==3.0.12
-        export PYTHONPATH="${PWD}/.ci-distutils:${PWD}/.ci-build-deps${PYTHONPATH:+:${PYTHONPATH}}"
-        COMBO2_PYTHON="${COMBO2_BOOTSTRAP_PYTHON}"
-        COMBO2_BUILD_EXTRA_ARGS="${COMBO2_BUILD_EXTRA_ARGS} --no-build-isolation"
-        export COMBO2_PYTHON COMBO2_BUILD_EXTRA_ARGS
-        echo "Using bootstrap Python with local build deps: ${COMBO2_PYTHON}"
+      done
+
+      if [ -z "${COMBO2_PYTHON}" ]; then
+        echo "No usable Python 3.13 environment found."
+        echo "Need Python 3.13 with working pip and Python.h. Install/fix python3.13-pip + python3.13-dev, or set COMBO2_BUILD_PYTHON to a working Python 3.13 path."
+        exit 1
       fi
+
+      export COMBO2_PYTHON
+      echo "Using build Python: ${COMBO2_PYTHON}"
       "${COMBO2_PYTHON}" --version
       "${COMBO2_PYTHON}" -m pip --version
 
