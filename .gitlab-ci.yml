@@ -45,14 +45,35 @@ build:
           raise SystemExit(f"Python development headers are required, missing {python_h}")
       PY
 
-      rm -rf .ci-python
-      if ! "${COMBO2_BOOTSTRAP_PYTHON}" -m venv .ci-python; then
-        echo "Python venv support is required. Install python3.13-venv on the runner."
-        exit 1
+      rm -rf .ci-python .ci-build-deps .ci-distutils
+      if "${COMBO2_BOOTSTRAP_PYTHON}" -m venv .ci-python; then
+        COMBO2_PYTHON="${PWD}/.ci-python/bin/python"
+        export COMBO2_PYTHON
+        echo "Using build venv Python: ${COMBO2_PYTHON}"
+      else
+        echo "python3.13 venv is unavailable; falling back to local --target build dependencies."
+        mkdir -p .ci-distutils/distutils
+        cat > .ci-distutils/distutils/__init__.py <<'PY'
+      import importlib
+
+      _distutils = importlib.import_module("setuptools._distutils")
+      globals().update(_distutils.__dict__)
+      __path__ = _distutils.__path__
+      PY
+        export PYTHONPATH="${PWD}/.ci-distutils${PYTHONPATH:+:${PYTHONPATH}}"
+        if ! "${COMBO2_BOOTSTRAP_PYTHON}" -c "import setuptools._distutils"; then
+          echo "Python 3.13 venv and setuptools._distutils are both unavailable."
+          echo "Install python3.13-venv on the runner or set COMBO2_BUILD_PYTHON to a Python 3.13 with working pip."
+          exit 1
+        fi
+        "${COMBO2_BOOTSTRAP_PYTHON}" -m pip --version
+        "${COMBO2_BOOTSTRAP_PYTHON}" -m pip install --target "${PWD}/.ci-build-deps" setuptools==82.0.1 wheel==0.47.0 Cython==3.0.12
+        export PYTHONPATH="${PWD}/.ci-distutils:${PWD}/.ci-build-deps${PYTHONPATH:+:${PYTHONPATH}}"
+        COMBO2_PYTHON="${COMBO2_BOOTSTRAP_PYTHON}"
+        COMBO2_BUILD_EXTRA_ARGS="${COMBO2_BUILD_EXTRA_ARGS} --no-build-isolation"
+        export COMBO2_PYTHON COMBO2_BUILD_EXTRA_ARGS
+        echo "Using bootstrap Python with local build deps: ${COMBO2_PYTHON}"
       fi
-      COMBO2_PYTHON="${PWD}/.ci-python/bin/python"
-      export COMBO2_PYTHON
-      echo "Using build venv Python: ${COMBO2_PYTHON}"
       "${COMBO2_PYTHON}" --version
       "${COMBO2_PYTHON}" -m pip --version
 
