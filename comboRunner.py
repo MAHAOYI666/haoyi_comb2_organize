@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import importlib.machinery
 import os
 import sys
 from pathlib import Path
+
+
+def _has_runtime_module(root: Path, name: str) -> bool:
+    if (root / f"{name}.py").is_file():
+        return True
+    return importlib.machinery.PathFinder.find_spec(name, [str(root)]) is not None
+
+
+def _has_runtime_root(root: Path) -> bool:
+    return _has_runtime_module(root, "runCombo") and _has_runtime_module(root, "config")
 
 
 def _find_repo_root(start: Path, explicit: str | None = None) -> Path:
@@ -19,7 +30,7 @@ def _find_repo_root(start: Path, explicit: str | None = None) -> Path:
 
     for candidate in candidates:
         root = candidate.resolve()
-        if (root / "runCombo.py").is_file() and (root / "config.py").is_file():
+        if _has_runtime_root(root):
             return root
     raise FileNotFoundError(
         "cannot locate comb2_organize root; pass --repo-root or set COMB2_ORGANIZE_ROOT"
