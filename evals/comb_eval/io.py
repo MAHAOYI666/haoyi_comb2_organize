@@ -48,7 +48,7 @@ def read_table(path: str | Path | pd.DataFrame, start: DateLike | None = None, e
     return filter_dates(normalize_date_index(df), start, end)
 
 
-def read_cache_array(path: str | Path, start_ds: str | int, end_ds: str | int, df_type: str):
+def read_cache_array(path: str | Path, start_ds: str | int, end_ds: str | int, df_type: object):
     simbase_root = Path(__file__).resolve().parents[2] / "vendor" / "comb2-simbase"
     if str(simbase_root) not in sys.path:
         sys.path.insert(0, str(simbase_root))

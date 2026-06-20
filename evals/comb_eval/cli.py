@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from .constraints import equalize_short_side, trading_limit_exposure, universe_coverage
@@ -13,9 +14,9 @@ from .report import config_eval_to_text, run_config_evaluation
 from .value_add import netting_return, pool_value_added, value_added
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(prog="comb-eval", description="Local modular alpha evaluation.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     pnl_parser = subparsers.add_parser("pnl", help="Summarize a local pnl file")
     pnl_parser.add_argument("path")
@@ -95,6 +96,11 @@ def main() -> None:
     _add_date_args(eval_parser)
 
     args = parser.parse_args()
+    if args.command is None:
+        parser.print_usage(sys.stderr)
+        print("comb-eval: missing command; run comb-eval -h for available commands", file=sys.stderr)
+        return 2
+
     if args.command == "pnl":
         result = summarize_pnl_with_benchmark(args.path, args.pnlzz500, start=args.start, end=args.end)
         print(output_frame_to_text(result.table))
@@ -150,13 +156,17 @@ def main() -> None:
                 skip_exposure=args.skip_exposure,
             )
             print(config_eval_to_text(result))
-            return
+            return 0
+        if not args.pnl and not args.ic:
+            print("comb-eval eval: missing input; pass --config or at least --pnl/--ic", file=sys.stderr)
+            return 2
         outputs = run_evaluation(args.pnl, args.ic, pnlzz500_path=args.pnlzz500, start=args.start, end=args.end)
         for module, tables in outputs.items():
             print(f"\n[{module}.summary]")
             print(output_frame_to_text(tables["summary"]))
             print(f"\n[{module}.checks]")
             print(output_frame_to_text(tables["checks"]))
+    return 0
 
 
 def _add_date_args(parser: argparse.ArgumentParser) -> None:
@@ -174,4 +184,4 @@ def _parse_df_type(value: str) -> object:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

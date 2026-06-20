@@ -213,7 +213,6 @@ XML：
 <strategy
   start_ds="20200101"
   end_ds="20240628"
-  path="vendor/comb2-pcmaster/examples/alpha_strategy.py"
 />
 ```
 
@@ -221,9 +220,38 @@ XML：
 |---|---:|---|---|
 | `start_ds` | `20160111` | int | 回测开始日期，格式通常是 `YYYYMMDD`。 |
 | `end_ds` | `20200101` | int | 回测结束日期。 |
-| `path` | `vendor/comb2-pcmaster/examples/alpha_strategy.py` | path | 回测策略文件，必须定义 `AlphaStrategy`。 |
+| `path` | 包内 `comb2_pcmaster/default_strategy.py` | path | 回测策略文件，必须定义 `AlphaStrategy`。省略时使用内置默认策略。 |
 
 默认 config 使用内置 `AlphaStrategy`：先对有效 alpha 减去当日截面中位数，再持有调整后为正的 alpha，并按调整后正值归一化生成 long-only 仓位。
+
+自定义 strategy：
+
+如果需要替换默认持仓生成逻辑，可以把 `path` 指向自己的 Python 文件：
+
+```xml
+<strategy
+  start_ds="20200101"
+  end_ds="20240628"
+  path="my_strategy.py"
+/>
+```
+
+`my_strategy.py` 必须定义 `AlphaStrategy`，并实现 `generate_positions(signals, last_hold)`：
+
+```python
+from comb2_pcmaster.strategy import StrategyBase
+
+
+class AlphaStrategy(StrategyBase):
+    def generate_positions(self, signals, last_hold):
+        # signals 是当日 alpha 截面，返回 index 为股票代码、value 为目标权重的 pandas.Series。
+        # last_hold 是上一期持仓，可用于控制换手；不需要时可以忽略。
+        weights = signals.dropna()
+        weights = weights[weights > weights.median()]
+        return weights / weights.sum()
+```
+
+相对路径会按 `config.xml` 所在目录解析；省略 `path` 时使用包内默认 strategy。
 
 ---
 
@@ -263,6 +291,56 @@ class ResearchModel:
 - 默认数据扩展由 `ComboDataLoader` / `ComboTrainDataset` 提供。
 - 指定 `research_loader_path` 后，可通过 `ResearchLoader` 覆盖 `preprocess_feature()`、`preprocess_label()`、`gen_feature()`、`gen_label()`、`process_feature_window()`、`_feature_available_mask()`。
 - 指定 `research_dataset_path` 后，可通过 `ResearchDataset` 覆盖 `_build_validinsts()`、`__getitem__()`。详细职责见本文 `combo.data` 章节。
+
+自定义文件连接示例：
+
+```xml
+<combo>
+  <paths
+    model_path="Model.py"
+    research_loader_path="loader.py"
+    research_dataset_path="dataset.py"
+  />
+</combo>
+```
+
+其中：
+
+| 文件 | 必须定义 | 用途 |
+|---|---|---|
+| `Model.py` | `ResearchModel` | 训练、预测、保存、加载研究模型。 |
+| `loader.py` | `ResearchLoader` | 自定义 feature / label 读取、预处理和预测窗口处理。 |
+| `dataset.py` | `ResearchDataset` | 自定义训练股票池和训练样本格式。 |
+
+最小 `ResearchModel` 接口：
+
+```python
+import torch
+
+
+class ResearchModel:
+    def __init__(self, config: dict):
+        self.config = config
+        self.model = None
+
+    def fit(self, dataset):
+        # dataset 默认返回 (idx, x, y, w)。
+        # 这里训练自己的模型，并把可预测状态保存在 self 上。
+        return self
+
+    def predict(self, x_window: torch.Tensor) -> torch.Tensor:
+        # x_window 默认 shape 是 [ts_days, n_valid_instruments, num_features]。
+        # 返回 shape 应为 [n_valid_instruments]。
+        return torch.zeros(x_window.shape[1], dtype=x_window.dtype)
+
+    def save(self, path_or_buffer):
+        torch.save({"config": self.config}, path_or_buffer)
+
+    def load(self, path_or_buffer):
+        payload = torch.load(path_or_buffer, map_location="cpu")
+        self.config = payload["config"]
+        return self
+```
 
 ---
 
@@ -315,7 +393,7 @@ XML：
 |---|---:|---|---|
 | `snaptime` | `mlp_minimal` | str | 训练快照名；checkpoint 子目录名会使用它。 |
 | `livetrading` | `False` | bool | 是否按 live 模式运行。false 时走历史回测流程。 |
-| `trainDelay` | `1` | int | 训练目标日相对当前回测日的延迟。 |
+| `trainDelay` | `0` | int | 训练目标日相对当前回测日的延迟。 |
 | `retDays` | `1` | int | label 聚合天数，也作为训练 label 的 return horizon。 |
 | `tsDays` | `8` | int | 每个样本的时间窗口长度。 |
 | `load_chunk_days` | `None` | int / None | 构造训练集时每次预取多少天。为 None 时使用 `tsDays`。 |
@@ -439,6 +517,34 @@ batchSize  -> batch_size
 
 注意：不同 `model_path` 的 `ResearchModel` 可以定义自己的配置字段，所以 `combo.model` 不做严格白名单限制。
 
+自定义模型参数示例：
+
+```xml
+<model
+  device="cuda"
+  hidden_size="256"
+  n_layers="3"
+  use_attention="true"
+  lr="0.000001"
+/>
+```
+
+在 `ResearchModel` 中读取：
+
+```python
+class ResearchModel:
+    def __init__(self, config: dict):
+        self.device = config.get("device", "cpu")
+        self.hidden_size = int(config.get("hidden_size", 64))
+        self.n_layers = int(config.get("n_layers", 2))
+        self.use_attention = bool(config.get("use_attention", False))
+        self.lr = float(config.get("lr", 2e-6))
+        self.num_features = int(config["num_features"])
+        self.ts_days = int(config["tsDays"])
+```
+
+`num_features` 和 `tsDays` 不需要在 XML 里手写，框架会根据 data 和 runtime 自动注入。
+
 ---
 
 ## 10. combo.data
@@ -523,6 +629,53 @@ gen_label(ds, ret_days)
 
 覆盖上层组织函数会绕过其内部默认子 hook。例如覆盖 `gen_feature()` 后，默认 `build_raw_feature()` 和 `preprocess_feature()` 不会自动发生，除非你在新实现里显式调用它们。
 
+`loader.py` 最小示例：
+
+```python
+from __future__ import annotations
+
+import torch
+
+from comb2 import ComboDataLoader
+from src.op_utils import cs_zscore, nan_to_num, truncate
+
+
+class ResearchLoader(ComboDataLoader):
+    def preprocess_feature(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
+        feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
+        feature = truncate(feature, -4.0, 4.0)
+        return nan_to_num(feature, 0.0).to(self.dtype)
+
+    def preprocess_label(
+        self,
+        label_values: torch.Tensor,
+        valid_mask: torch.Tensor,
+        ds: int,
+        ret_days: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return super().preprocess_label(label_values, valid_mask, ds, ret_days=ret_days)
+```
+
+`dataset.py` 最小示例：
+
+```python
+from __future__ import annotations
+
+import torch
+
+from comb2 import ComboTrainDataset
+
+
+class ResearchDataset(ComboTrainDataset):
+    def _build_validinsts(self) -> torch.Tensor:
+        # 默认返回训练窗口内至少出现过 base universe 的股票。
+        return super()._build_validinsts()
+
+    def __getitem__(self, idx: int):
+        # 默认返回 (idx, x, y, w)。如果改返回格式，ResearchModel.fit() 也要同步修改。
+        return super().__getitem__(idx)
+```
+
 `ResearchLoader` 返回值约定：
 
 | 接口 | 必须返回 |
@@ -593,9 +746,36 @@ data-pack 文件：
 
 如果内置 `module` 不够用，可以写自己的读取函数：
 
+XML：
+
+```xml
+<item
+  name="alpha.my_factor"
+  module="my_data:load_data"
+  path="my_factor.parquet"
+  role="factor"
+/>
+```
+
+`my_data.py`：
+
 ```python
+import pandas as pd
+import torch
+from pathlib import Path
+
+
 def load_data(item, registry, start_ds: int, end_ds: int):
-    ...
+    config_dir = Path(registry.config_path or ".")
+    path = config_dir / item["path"]
+    frame = pd.read_parquet(path)
+
+    dates = [ds for ds in registry.universe.dates if start_ds <= int(ds) <= end_ds]
+    out = torch.full((len(dates), len(registry.universe.codes)), float("nan"), dtype=torch.float32)
+
+    # 下面是示意：真实实现需要把 frame 对齐到 dates × codes。
+    # 返回值必须和 registry.universe 的日期、股票顺序一致。
+    return out
 ```
 
 必须满足：
@@ -677,7 +857,7 @@ XML：
 self.selection = node.selection_module or DefaultSelectionModule(...)
 ```
 
-普通 XML 使用默认即可。
+普通 XML 使用默认即可。当前 XML 解析不会把字符串自动导入为 selection 对象；如果确实需要自定义训练样本选择逻辑，优先通过 `ResearchDataset` 控制训练股票池和样本返回结构。
 
 ---
 

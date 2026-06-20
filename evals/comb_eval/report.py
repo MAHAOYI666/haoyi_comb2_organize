@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import json
 import math
+import warnings
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
 
 from .exposure import compute_barra_style_exposure
 from .formatting import output_frame_to_text
@@ -465,7 +469,12 @@ def plot_signal_analysis(
 
 
 def _load_organize_config(config_path: str | Path) -> dict[str, Any]:
-    config_module_path = _find_organize_config_module()
+    try:
+        config_module_path = _find_organize_config_module()
+    except FileNotFoundError:
+        config_module = importlib.import_module("config")
+        return config_module.load_config(str(config_path))
+
     config_spec = importlib.util.spec_from_file_location("comb2_organize_config", config_module_path)
     if config_spec is None or config_spec.loader is None:
         raise ImportError(f"unable to load config module: {config_module_path}")
@@ -885,10 +894,11 @@ def _scale_long_only(values: np.ndarray, booksize: float) -> np.ndarray:
 def _row_corr(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     valid = np.isfinite(left) & np.isfinite(right)
     count = valid.sum(axis=1)
-    left_masked = np.where(valid, left, np.nan)
-    right_masked = np.where(valid, right, np.nan)
-    left_mean = np.nanmean(left_masked, axis=1, keepdims=True)
-    right_mean = np.nanmean(right_masked, axis=1, keepdims=True)
+    count_column = count[:, None]
+    left_sum = np.where(valid, left, 0.0).sum(axis=1, keepdims=True)
+    right_sum = np.where(valid, right, 0.0).sum(axis=1, keepdims=True)
+    left_mean = np.divide(left_sum, count_column, out=np.full_like(left_sum, np.nan, dtype=float), where=count_column > 0)
+    right_mean = np.divide(right_sum, count_column, out=np.full_like(right_sum, np.nan, dtype=float), where=count_column > 0)
     left_centered = np.where(valid, left - left_mean, 0.0)
     right_centered = np.where(valid, right - right_mean, 0.0)
     numerator = np.sum(left_centered * right_centered, axis=1)

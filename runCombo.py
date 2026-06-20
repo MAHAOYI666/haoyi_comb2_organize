@@ -207,8 +207,7 @@ def get_backtest_label(ashare_data_path: str, period: str, start_ds: int, end_ds
         end_ds=end_ds,
         df_type=True,
     ).dloc[:]
-    label[np.isnan(label)] = NAN_DTYPE
-    return label
+    return label.mask(np.isnan(label), NAN_DTYPE)
 
 
 def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFrame:
@@ -406,10 +405,26 @@ def get_git_commit() -> str | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        prog="runCombo",
+        description="Run a comb2 experiment from an XML config.",
+        epilog="example: runCombo config.xml",
+    )
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
     return parser.parse_args()
+
+
+def resolve_config_arg(args: argparse.Namespace, prog: str = "runCombo") -> str | None:
+    config_path = args.config_flag or args.config
+    if not config_path:
+        print(f"{prog}: missing config file; pass config.xml or --config config.xml", file=sys.stderr)
+        return None
+    resolved = Path(config_path).expanduser()
+    if not resolved.is_file():
+        print(f"{prog}: config file not found: {config_path}", file=sys.stderr)
+        return None
+    return str(resolved)
 
 
 def install_perf_decorators(monitor: PerfMonitor):
@@ -444,9 +459,11 @@ def install_research_model_decorators(monitor: PerfMonitor, research_model_cls: 
     monitor.patch_method(research_model_cls, "_loss_to_float", "detail_loss_to_cpu")
 
 
-def main():
+def main() -> int:
     args = parse_args()
-    config_path = args.config_flag or args.config
+    config_path = resolve_config_arg(args)
+    if config_path is None:
+        return 2
     organize_config = organize_config_module.load_config(config_path)
     configure_torch_threads(organize_config)
     monitor = PerfMonitor.from_config(organize_config)
@@ -505,7 +522,8 @@ def main():
             runner.alpha_analysis()
     finally:
         monitor.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

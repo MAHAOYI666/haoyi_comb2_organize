@@ -238,16 +238,16 @@ class DailyBacktest:
                     cost = b_value * (1 + self.node.fee_rate)
                     trade_cost += buy_lots * price_per_100_shares * self.node.fee_rate
                     self.cash -= cost
-                    self.node.holdings[stock] += buy_lots * 100
+                    self.node.holdings.loc[stock] = self.node.holdings.loc[stock] + buy_lots * 100
                     tvr_cost += b_value
             elif value_diff < 0:
                 sell_value = -value_diff
-                shares_to_sell = min(self.node.holdings[stock], (sell_value // price_per_100_shares + 1) * 100)
+                shares_to_sell = min(self.node.holdings.loc[stock], (sell_value // price_per_100_shares + 1) * 100)
                 s_value = shares_to_sell * price_per_share
                 proceeds = s_value * (1 - self.node.fee_rate)
                 trade_cost += s_value * self.node.fee_rate
                 self.cash += proceeds
-                self.node.holdings[stock] -= shares_to_sell
+                self.node.holdings.loc[stock] = self.node.holdings.loc[stock] - shares_to_sell
                 tvr_cost += s_value
 
         close_today = self.close_data.loc[date]
@@ -367,7 +367,7 @@ class DailyBacktest:
             df.index = pd.to_datetime(df.index.astype(str), format="%Y%m%d", errors="coerce")
         elif not np.issubdtype(df.index.dtype, np.datetime64):
             df.index = pd.to_datetime(df.index, errors="coerce")
-        df = df[(df.index >= pd.to_datetime(str(sdate))) & (df.index <= pd.to_datetime(str(edate)))]
+        df = df.loc[(df.index >= pd.to_datetime(str(sdate))) & (df.index <= pd.to_datetime(str(edate)))].copy()
         if df.empty:
             empty = pd.DataFrame()
             empty.to_csv(self.pnl_summary_path)
@@ -393,9 +393,9 @@ class DailyBacktest:
         bench_close = bench_data.reindex(df.index)["close"].astype(float).ffill()
         bench_ret = bench_close.pct_change().fillna(0.0)
 
-        df["pnl"] = df["total_asset"].diff().fillna(0.0)
-        df["ret"] = df["pnl"] / booksize
-        df["li_ret"] = df["ret"] - bench_ret
+        pnl = df["total_asset"].diff().fillna(0.0)
+        ret = pnl / booksize
+        df = df.assign(pnl=pnl, ret=ret, li_ret=ret - bench_ret)
 
         rows = []
         labels = []

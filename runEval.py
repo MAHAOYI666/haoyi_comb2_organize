@@ -16,7 +16,11 @@ from comb_eval.report import check_config_outputs, config_eval_to_text, run_conf
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate an existing comb2-organize config output.")
+    parser = argparse.ArgumentParser(
+        prog="runEval",
+        description="Evaluate an existing comb2-organize config output.",
+        epilog="example: runEval config.xml",
+    )
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
     parser.add_argument("--report-dir", help="Directory for eval artifacts; defaults to <output_root>/eval_report")
@@ -41,6 +45,9 @@ def main() -> int:
     config_path = args.config_flag or args.config
     if not config_path:
         print("[EVAL] missing config.xml; pass a positional config or --config", file=sys.stderr)
+        return 2
+    if not Path(config_path).expanduser().is_file():
+        print(f"[EVAL] config file not found: {config_path}", file=sys.stderr)
         return 2
 
     check = check_config_outputs(config_path)
