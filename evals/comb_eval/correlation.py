@@ -91,6 +91,40 @@ def daily_matrix_correlation(
     return pd.DataFrame(rows).set_index("date")
 
 
+def daily_top_overlap(
+    candidate: str | Path | pd.DataFrame,
+    pool: str | Path | pd.DataFrame,
+    start: str | None = None,
+    end: str | None = None,
+    corr_days: int | None = None,
+    min_valid: int = 2,
+    top_pct: float = 10.0,
+) -> pd.DataFrame:
+    if top_pct <= 0 or top_pct > 100:
+        raise ValueError("top_pct must be in (0, 100].")
+    candidate_df = read_matrix(candidate, start=start, end=end)
+    pool_df = read_matrix(pool, start=start, end=end)
+    dates = candidate_df.index.intersection(pool_df.index).sort_values()
+    if corr_days is not None:
+        dates = dates[-corr_days:]
+    columns = candidate_df.columns.intersection(pool_df.columns)
+    rows = []
+    for date in dates:
+        left = candidate_df.loc[date, columns].astype(float)
+        right = pool_df.loc[date, columns].astype(float)
+        valid = left.notna() & right.notna()
+        valid_count = int(valid.sum())
+        if valid_count < min_valid:
+            rows.append({"date": date, "long_overlap": np.nan, "top_n": 0, "n_inst": valid_count})
+            continue
+        top_n = max(1, int(np.ceil(valid_count * float(top_pct) / 100.0)))
+        left_top = set(left[valid].nlargest(top_n).index)
+        right_top = set(right[valid].nlargest(top_n).index)
+        overlap = len(left_top & right_top) / top_n
+        rows.append({"date": date, "long_overlap": float(overlap), "top_n": top_n, "n_inst": valid_count})
+    return pd.DataFrame(rows).set_index("date")
+
+
 def position_correlation(
     candidate: str | Path | pd.DataFrame,
     pool: str | Path | pd.DataFrame,
@@ -98,11 +132,22 @@ def position_correlation(
     end: str | None = None,
     corr_days: int | None = None,
     min_valid: int = 1000,
+    top_pct: float = 10.0,
 ) -> dict[str, float | int | str]:
     daily = daily_matrix_correlation(candidate, pool, start=start, end=end, corr_days=corr_days, min_valid=min_valid)
     valid = daily["corr"].dropna()
     if valid.empty:
         raise ValueError("No overlapping nonzero matrix rows with enough valid instruments.")
+    overlap_daily = daily_top_overlap(
+        candidate,
+        pool,
+        start=start,
+        end=end,
+        corr_days=corr_days,
+        min_valid=min_valid,
+        top_pct=top_pct,
+    )
+    overlap_valid = overlap_daily["long_overlap"].dropna()
     return {
         "avg_corr": float(valid.mean()),
         "max_corr": float(valid.max()),
@@ -110,6 +155,11 @@ def position_correlation(
         "n_days": int(len(valid)),
         "corr_days": int(corr_days) if corr_days is not None else int(len(daily)),
         "min_valid": int(min_valid),
+        "long_top_pct": float(top_pct),
+        "avg_long_overlap": float(overlap_valid.mean()) if not overlap_valid.empty else np.nan,
+        "max_long_overlap": float(overlap_valid.max()) if not overlap_valid.empty else np.nan,
+        "min_long_overlap": float(overlap_valid.min()) if not overlap_valid.empty else np.nan,
+        "n_overlap_days": int(len(overlap_valid)),
         "start": valid.index.min().strftime("%Y%m%d"),
         "end": valid.index.max().strftime("%Y%m%d"),
     }
@@ -122,8 +172,17 @@ def matrix_correlation(
     end: str | None = None,
     corr_days: int | None = None,
     min_valid: int = 2,
+    top_pct: float = 10.0,
 ) -> dict[str, float | int | str]:
-    return position_correlation(candidate, pool, start=start, end=end, corr_days=corr_days, min_valid=min_valid)
+    return position_correlation(
+        candidate,
+        pool,
+        start=start,
+        end=end,
+        corr_days=corr_days,
+        min_valid=min_valid,
+        top_pct=top_pct,
+    )
 
 
 def _pool_name(path: str | Path | pd.DataFrame, idx: int) -> str:

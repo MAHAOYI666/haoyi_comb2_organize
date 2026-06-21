@@ -6,6 +6,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pandas as pd
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,12 +55,78 @@ def test_run_combo_help_and_missing_config():
 def test_run_eval_help_and_missing_config():
     help_proc = run_cli("runEval.py", "-h")
     assert help_proc.returncode == 0
-    assert "Evaluate an existing" in help_proc.stdout
+    assert "Evaluate comb2 signals" in help_proc.stdout
 
     missing_proc = run_cli("runEval.py")
     assert missing_proc.returncode == 2
     assert "missing config.xml" in missing_proc.stderr
     assert "Traceback" not in missing_proc.stderr
+
+
+def test_run_eval_specialized_modes(tmp_path):
+    dates = pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-06"])
+    left = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [1.0, 3.0, 5.0], [2.0, 4.0, 6.0]],
+        index=dates,
+        columns=["000001", "000002", "000003"],
+    )
+    right = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 2.0, 1.0]],
+        index=dates,
+        columns=left.columns,
+    )
+    left_path = tmp_path / "left.parquet"
+    right_path = tmp_path / "right.parquet"
+    left.to_parquet(left_path)
+    right.to_parquet(right_path)
+
+    corr_proc = run_cli("runEval.py", "--corr", str(left_path), str(right_path), "--min-valid", "2", "--top-pct", "50")
+    assert corr_proc.returncode == 0
+    assert "avg_corr" in corr_proc.stdout
+    assert "avg_long_overlap" in corr_proc.stdout
+
+    daily_ic = pd.DataFrame(
+        {
+            "ic": [0.01, 0.02, 0.03],
+            "5dic": [0.02, 0.03, 0.04],
+            "rankic": [0.03, 0.04, 0.05],
+            "percic": [0.04, 0.05, 0.06],
+            "coverage": [1.0, 1.0, 1.0],
+        },
+        index=dates,
+    )
+    daily_ic_path = tmp_path / "daily_ic.csv"
+    daily_ic.to_csv(daily_ic_path)
+    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--input-is-ic", "--normalize-names")
+    assert sim_proc.returncode == 0
+    assert "1d_IC.avg" in sim_proc.stdout
+
+    daily_pnl = pd.DataFrame(
+        {
+            "pnl": [100.0, -50.0, 80.0],
+            "long": [10000.0, 10000.0, 10000.0],
+            "short": [-10000.0, -10000.0, -10000.0],
+            "sh_hld": [20000.0, 20000.0, 20000.0],
+            "sh_trd": [1000.0, 1000.0, 1000.0],
+            "n_long": [2, 2, 2],
+            "n_short": [1, 1, 1],
+            "longonly_pnl": [60.0, 20.0, 40.0],
+        },
+        index=dates,
+    )
+    daily_pnl_path = tmp_path / "daily_pnl.csv"
+    daily_pnl.to_csv(daily_pnl_path)
+    pnl_proc = run_cli("runEval.py", "--pnl", str(daily_pnl_path), "--input-is-pnl")
+    assert pnl_proc.returncode == 0
+    assert "ret_pct" in pnl_proc.stdout
+
+    new_pnl = daily_pnl.copy()
+    new_pnl["longonly_pnl"] = [80.0, 50.0, 90.0]
+    new_pnl_path = tmp_path / "new_daily_pnl.csv"
+    new_pnl.to_csv(new_pnl_path)
+    va_proc = run_cli("runEval.py", "--va", str(daily_pnl_path), str(new_pnl_path), "--weights", "0.1,0.2")
+    assert va_proc.returncode == 0
+    assert "0.10" in va_proc.stdout
 
 
 def test_combo_runner_help_and_missing_config():
