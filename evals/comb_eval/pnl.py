@@ -9,6 +9,16 @@ from .io import read_table
 from .schemas import MetricResult, TRADING_DAYS
 
 
+PERFORMANCE_COLUMNS = (
+    "ret_pct",
+    "longonly_ret_pct",
+    "ir",
+    "longonly_ir",
+    "sharpe",
+    "longonly_sharpe",
+)
+
+
 def sample_ir(values: pd.Series) -> float:
     values = values.dropna().astype(float)
     if len(values) < 2:
@@ -73,6 +83,7 @@ def summarize_pnl(path: str | Path | pd.DataFrame, start: str | None = None, end
     df = normalize_pnl_columns(read_table(path, start=start, end=end))
     rows = [_summarize_pnl_group(period, group) for period, group in period_groups(df, include_all=False)]
     table = pd.DataFrame(rows).set_index("period")
+    table = _drop_empty_periods(table)
     table.loc["ALL"] = _average_all_row(table)
     return MetricResult("pnl", table, {"input": str(path), "start": start, "end": end})
 
@@ -171,12 +182,22 @@ def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int
 
 
 def _average_all_row(table: pd.DataFrame) -> pd.Series:
+    if table.empty:
+        return pd.Series({column: np.nan for column in table.columns}, dtype=float)
     row = table.mean(numeric_only=True)
     if "tdays" in table.columns:
         row["tdays"] = table["tdays"].sum()
     if "days" in table.columns:
         row["days"] = table["days"].sum()
     return row
+
+
+def _drop_empty_periods(table: pd.DataFrame) -> pd.DataFrame:
+    columns = [column for column in PERFORMANCE_COLUMNS if column in table.columns]
+    if not columns:
+        return table
+    has_metric = np.isfinite(table[columns].astype(float)).any(axis=1)
+    return table.loc[has_metric].copy()
 
 
 def _series(df: pd.DataFrame, column: str, default: pd.Series | None = None) -> pd.Series:
