@@ -7,7 +7,7 @@ variables:
   COMBO2_DIST_DIR: dist_protected
   COMBO2_PUBLISH_DIR: /home/shared/data2/codes/factorsimteam/combo/combo2
   COMBO2_BUILD_EXTRA_ARGS: ""
-  COMBO2_WHEEL_VERSION: "0.1.1"
+  COMBO2_WHEEL_VERSION: "0.1.2"
 
 
 build:

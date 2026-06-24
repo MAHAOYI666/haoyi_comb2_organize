@@ -24,7 +24,7 @@ dist_protected/*.whl
 Install the wheel in a Python 3.13 environment:
 
 ```bash
-python -m pip install dist_protected/comb2_organize-0.1.1-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/comb2_organize-0.1.2-cp313-cp313-linux_x86_64.whl
 ```
 
 Run after installation:
