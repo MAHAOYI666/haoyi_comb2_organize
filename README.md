@@ -130,8 +130,8 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 ```bash
 ./runEval.py /path/to/research/config.xml \
-  --label /path/to/label1d.csv --label-is-table \
-  --label-5d /path/to/label5d.csv --label-5d-is-table
+  --label /path/to/vwap30_label1d.csv --label-is-table \
+  --label-5d /path/to/vwap30_label5d.csv --label-5d-is-table
 ```
 
 ## 数据压缩选项

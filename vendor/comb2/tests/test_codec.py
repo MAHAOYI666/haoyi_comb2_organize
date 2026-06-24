@@ -706,7 +706,7 @@ def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
           <item name="factor.pack_a" module="builtin.factor" path="pack_a" role="factor">
             <op name="neut(size)" />
           </item>
-          <item name="label.ret1" module="builtin.label" path="label1d" role="label" />
+          <item name="label.ret1" module="builtin.label" path="vwap30_label1d" role="label" />
         </data-pack>
         """,
         encoding="utf-8",
@@ -719,7 +719,7 @@ def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
           <combo>
             <data>
               <import path="{pack_path.name}" role="factor" />
-              <item name="label.local" module="builtin.label" path="label1d" role="label" />
+              <item name="label.local" module="builtin.label" path="vwap30_label1d" role="label" />
             </data>
           </combo>
         </config>
@@ -734,6 +734,56 @@ def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
     assert loader["data_presets"] == ("barra",)
     assert [item["name"] for item in items] == ["factor.pack_a", "label.local"]
     assert items[0]["ops"][0]["name"] == "neut(size)"
+
+
+def test_config_resolves_builtin_label_to_ashare_cache_daily_label(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <constants cache_path="cache_root" />
+          <combo>
+            <data>
+              <item name="label.local" module="builtin.label" path="my_custom_label" role="label" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    items = loaded["combo"]["loader"]["data_items"]
+
+    assert [item["name"] for item in items] == ["label.local"]
+    assert items[0]["path"] == str((tmp_path / "cache_root" / "AshareCache" / "1d_DailyLabel" / "DailyLabel.my_custom_label").resolve())
+
+
+def test_config_resolves_label1d_with_same_builtin_label_rule(tmp_path) -> None:
+    from config import load_config
+
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <constants cache_path="cache_root" />
+          <combo>
+            <data>
+              <item name="label.local" module="builtin.label" path="label1d" role="label" />
+            </data>
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    items = loaded["combo"]["loader"]["data_items"]
+
+    assert [item["name"] for item in items] == ["label.local"]
+    assert items[0]["path"] == str((tmp_path / "cache_root" / "AshareCache" / "1d_DailyLabel" / "DailyLabel.label1d").resolve())
 
 
 def test_config_import_rejects_full_config(tmp_path) -> None:

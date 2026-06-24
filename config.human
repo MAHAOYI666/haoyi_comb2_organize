@@ -186,7 +186,7 @@ runEval config.xml
         <op name="truncate" min="-4" max="4" />
         <op name="nan_to_num" value="0" />
       </item>
-      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
 
     <defaults
@@ -240,7 +240,7 @@ runEval config.xml
 - 绝对路径保持不变。
 - 相对路径相对 `config.xml` 所在目录解析。
 - `builtin.factor` 的相对 `path` 拼到 `constants.factor_root` 下。
-- `builtin.label path="label1d"` 默认解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.label1d`。
+- `builtin.label` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
 - `constants.cache_path` 会派生出 `AshareCache`，供 label、mask、Barra、回测读取使用。
 
 ## 6. constants
@@ -397,6 +397,8 @@ class ResearchModel:
 | `predict` 返回 | `[n_valid_instruments]` tensor，表示预测 alpha。 |
 | `save/load` | 用于 checkpoint 保存和加载，需能接受文件路径或 file-like buffer。 |
 
+稳定 `predict(x_window)` 只接收 feature 窗口，不额外传入日期、loader 或 dataset。若预测阶段需要日期相关辅助数据，应在 `fit()` 阶段写入模型状态并通过 `save/load` 保留，或在项目自定义流程中显式扩展接口。
+
 `<combo><model>` 是开放字段。字段是否生效，取决于 `ResearchModel(config)` 是否读取它。
 
 ## 10. combo.output
@@ -503,7 +505,7 @@ class ResearchModel:
   base_universe_path=""
 >
   <item name="factor.example_1" module="builtin.factor" path="example_factor_1" role="factor" />
-  <item name="label.default" module="builtin.label" path="label1d" role="label" />
+  <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
 </data>
 ```
 
@@ -533,7 +535,7 @@ class ResearchModel:
 
 ```xml
 <item name="factor.example" module="builtin.factor" path="example_factor" role="factor" display_name="example_factor" />
-<item name="label.default" module="builtin.label" path="label1d" role="label" />
+<item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
 ```
 
 | 属性 | 说明 |
@@ -593,6 +595,7 @@ data-pack 文件只写数据声明，不写完整任务配置：
   <op name="delay" days="1" />
   <op name="ts_mean" window="5" />
   <op name="neut(barra.size, barra.btop)" />
+  <op name="neut(['size', 'beta', 'sizenl'], 0.5)" />
   <op name="cs_zscore" />
   <op name="truncate" min="-4" max="4" />
   <op name="nan_to_num" value="0" />
@@ -608,7 +611,7 @@ data-pack 文件只写数据声明，不写完整任务配置：
 | `nan_to_num` / `fillna` | 缺失和无穷替换为指定值。 |
 | `winsorize_by_quantile` | 分位数 winsorize，参数 `low`、`high`。 |
 | `normalize_by_max_abs` | 按最大绝对值归一化。 |
-| `neut(...)` | 对一个或多个已注册数据做中性化。 |
+| `neut(...)` | 对一个或多个已注册数据做中性化；依赖可逐个写，也可写成列表；末尾数值为扣除比例，默认 `1.0`，也可写成与依赖等长的比例列表。 |
 | `delay` | 日期延迟，参数 `days`/`periods`/`n`。 |
 | `ts_mean` / `ts_avg` | 时间窗口均值，参数 `window`/`days`/`n`。 |
 
@@ -664,6 +667,16 @@ class ResearchLoader(ComboDataLoader):
 | `gen_feature(ds)` | `[N, F]` tensor，`N` 为股票数。 |
 | `gen_label(ds, ret_days)` | `(y, w)`，二者 shape 都是 `[N]`。 |
 | `process_feature_window(feature_window)` | 默认应保持或返回可用于预测的窗口结构。 |
+
+读取 `<combo><data>` 中 `role="aux"` 的数据时，可在 `ResearchLoader` 中使用 `self.registry`：
+
+```python
+self.registry._ensure_range(("aux.example",), ds, ds)
+idx = self.universe.date2idx(ds)
+values = self.registry.get_data("aux.example")[idx]
+```
+
+`get_data(name)` 返回按 universe 对齐的完整矩阵；调用前需先确保目标日期范围已加载。
 
 ### 14.2 ResearchDataset
 
@@ -862,7 +875,7 @@ runEval config.xml --skip-deciles
 runEval config.xml --skip-exposure
 runEval config.xml --report-dir /tmp/eval_report
 runEval config.xml --plot-output /tmp/signal_analysis.png
-runEval config.xml --label label1d.csv --label-is-table --label-5d label5d.csv --label-5d-is-table
+runEval config.xml --label vwap30_label1d.csv --label-is-table --label-5d vwap30_label5d.csv --label-5d-is-table
 ```
 
 ### 19.2 sim: IC 类评估
@@ -877,8 +890,8 @@ runEval --sim alpha.parquet --config config.xml
 
 ```bash
 runEval --sim alpha.parquet \
-  --label label1d.csv --label-is-table \
-  --label-5d label5d.csv --label-5d-is-table
+  --label vwap30_label1d.csv --label-is-table \
+  --label-5d vwap30_label5d.csv --label-5d-is-table
 ```
 
 输入已有 daily IC：
@@ -1029,7 +1042,7 @@ comb-pos-corr pos_a.parquet pos_b.parquet --min-valid 1000
 - `constants.cache_path` 是否指向包含 `AshareCache` 的根目录。
 - `constants.factor_root` 是否包含真实因子目录；若因子在 `ZsimPool` 下，需要把 `ZsimPool` 写进 `factor_root` 或 item path。
 - `<item module="builtin.factor" path="...">` 是否能在 `factor_root` 下找到。
-- label 默认路径是否存在：`AshareCache/1d_DailyLabel/DailyLabel.label1d`。
+- label 默认路径是否存在：`AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d`。
 - `strategy.start_ds/end_ds` 是否落在数据日期范围内。
 
 ### 21.3 模型接入失败

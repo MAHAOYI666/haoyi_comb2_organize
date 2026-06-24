@@ -338,7 +338,7 @@ class ResearchModel:
     >
       <item name="alpha.factor_1" module="builtin.factor" path="/path/to/factor_1" role="factor" />
       <item name="alpha.factor_2" module="builtin.factor" path="/path/to/factor_2" role="factor" />
-      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
   </combo>
 

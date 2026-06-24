@@ -205,7 +205,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert 'hidden_size=' not in config_text
     assert 'fc_size=' not in config_text
     assert 'path="example_factor"' in config_text
-    assert 'path="label1d"' in config_text
+    assert 'path="vwap30_label1d"' in config_text
     root = ET.fromstring(config_text)
     assert root.find("./strategy").get("path") is None
 

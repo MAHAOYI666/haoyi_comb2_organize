@@ -140,7 +140,7 @@
       <item name="alpha.yz_20240704_02" module="builtin.factor" path="yz_20240704_02" role="factor" display_name="yz_20240704_02" />
       <item name="alpha.yz_20240704_03" module="builtin.factor" path="yz_20240704_03" role="factor" display_name="yz_20240704_03" />
       <item name="alpha.yz_20240704_04" module="builtin.factor" path="yz_20240704_04" role="factor" display_name="yz_20240704_04" />
-      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
   </combo>
 

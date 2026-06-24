@@ -341,8 +341,8 @@ CONFIG_TEMPLATE = '''
       <item name="factor.example_factor" module="builtin.factor" path="example_factor" role="factor" display_name="example_factor" />
 
       <!-- Example label resolves under constants.cache_path:
-           data/Cache/AshareCache/1d_DailyLabel/DailyLabel.label1d -->
-      <item name="label.example_label_1d" module="builtin.label" path="label1d" role="label" />
+           data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d -->
+      <item name="label.example_label_1d" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
 
     <defaults

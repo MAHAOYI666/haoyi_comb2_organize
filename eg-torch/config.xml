@@ -74,7 +74,7 @@
       <item name="alpha.alpha3_20251008_03" module="builtin.factor" path="alpha3_20251008_03" role="factor" display_name="alpha3_20251008_03" />
       <item name="alpha.alpha4_20251008_04" module="builtin.factor" path="alpha4_20251008_04" role="factor" display_name="alpha4_20251008_04" />
       <item name="alpha.alpha5_20251008_05" module="builtin.factor" path="alpha5_20251008_05" role="factor" display_name="alpha5_20251008_05" />
-      <item name="label.default" module="builtin.label" path="label1d" role="label" />
+      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
 
     <defaults

@@ -71,8 +71,8 @@ python -m comb_eval.cli eval --config /path/to/config.xml \
 
 ```bash
 python -m comb_eval.cli eval --config /path/to/config.xml \
-  --label /path/to/label1d.csv --label-is-table \
-  --label-5d /path/to/label5d.csv --label-5d-is-table
+  --label /path/to/vwap30_label1d.csv --label-is-table \
+  --label-5d /path/to/vwap30_label5d.csv --label-5d-is-table
 ```
 
 相关性 / value-add：

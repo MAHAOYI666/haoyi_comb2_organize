@@ -41,7 +41,7 @@ def _builtin_factor_item(path: str) -> dict[str, Any]:
     }
 
 
-def _builtin_label_item(path: str = "label1d") -> dict[str, Any]:
+def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
     return {
         "name": "label.default",
         "module": "builtin.label",
@@ -368,7 +368,15 @@ def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     return str(path.resolve())
 
 
-def _resolve_data_item_path(value: str | None, *, module: str, field: str, factor_root: str, base_dir: Path) -> str | None:
+def _resolve_data_item_path(
+    value: str | None,
+    *,
+    module: str,
+    field: str,
+    factor_root: str,
+    ashare_data_path: str | None,
+    base_dir: Path,
+) -> str | None:
     if value is None:
         return None
     path = Path(value).expanduser()
@@ -381,8 +389,10 @@ def _resolve_data_item_path(value: str | None, *, module: str, field: str, facto
         return str((Path(factor_root) / path).resolve())
     if field == "path" and normalized_module == "barra_style":
         return value
-    if field == "path" and normalized_module == "label" and value == "label1d":
-        return value
+    if field == "path" and normalized_module == "label":
+        if ashare_data_path is None:
+            raise ValueError("builtin.label requires combo.loader.ashare_data_path or constants.cache_path")
+        return str((Path(ashare_data_path) / "1d_DailyLabel" / f"DailyLabel.{value}").resolve())
     return str((base_dir / path).resolve())
 
 
@@ -399,6 +409,7 @@ def _resolve_data_pack(
     *,
     base_dir: Path,
     factor_root: str,
+    ashare_data_path: str | None,
     seen_paths: set[tuple[str, tuple[str, ...] | None]],
     presets: list[str],
 ) -> list[dict[str, Any]]:
@@ -428,6 +439,7 @@ def _resolve_data_pack(
             nested,
             base_dir=nested_path.parent,
             factor_root=factor_root,
+            ashare_data_path=ashare_data_path,
             seen_paths=seen_paths,
             presets=nested_presets,
         )
@@ -446,6 +458,7 @@ def _resolve_data_pack(
                 module=module,
                 field=field,
                 factor_root=factor_root,
+                ashare_data_path=ashare_data_path,
                 base_dir=base_dir,
             )
         resolved_items.append(resolved_item)
@@ -496,6 +509,7 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         resolved["combo"].get("data", {"imports": (), "items": ()}),
         base_dir=base_dir,
         factor_root=factor_root,
+        ashare_data_path=resolved["combo"]["loader"].get("ashare_data_path"),
         seen_paths=set(),
         presets=presets,
     )

@@ -662,10 +662,10 @@ def _load_memmap_factor(item: DataItem, registry: DataRegistry, start_ds: int, e
 
 def _load_label(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
     path = item.path
-    if not path or path == "label1d":
+    if not path:
         if not registry.ashare_data_path:
             raise ValueError(f"label data {item.name!r} requires path or registry.ashare_data_path")
-        path = str(Path(registry.ashare_data_path) / "1d_DailyLabel" / "DailyLabel.label1d")
+        path = str(Path(registry.ashare_data_path) / "1d_DailyLabel" / "DailyLabel.vwap30_label1d")
     return _memmap_load_2d(registry, path, start_ds, end_ds, registry.universe.dtype)
 
 
