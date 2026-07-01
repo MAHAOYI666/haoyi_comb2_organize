@@ -449,6 +449,29 @@ def test_config_accepts_research_loader_and_dataset_paths(tmp_path) -> None:
     assert paths["research_dataset_path"] == str(dataset_path.resolve())
 
 
+def test_config_accepts_combo_base_path(tmp_path) -> None:
+    from config import load_config
+
+    combo_base_path = tmp_path / "combo_base.py"
+    combo_base_path.write_text("class ComboBase: pass\n", encoding="utf-8")
+    xml_path = tmp_path / "config.xml"
+    xml_path.write_text(
+        """
+        <config>
+          <combo>
+            <paths model_path="model.py" combo_base_path="combo_base.py" />
+          </combo>
+        </config>
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(xml_path))
+    paths = loaded["combo"]["paths"]
+
+    assert paths["combo_base_path"] == str(combo_base_path.resolve())
+
+
 def test_config_accepts_data_section_roles_and_ops(tmp_path) -> None:
     from config import load_config
 

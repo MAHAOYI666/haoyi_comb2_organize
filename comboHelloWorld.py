@@ -285,6 +285,7 @@ CONFIG_TEMPLATE = '''
       base_dir="."
       output_dir="output"
       model_path="Model.py"
+      combo_base_path=""
       research_loader_path=""
       research_dataset_path=""
       checkpoint_root=""

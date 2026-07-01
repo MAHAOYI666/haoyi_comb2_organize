@@ -129,6 +129,7 @@ runEval config.xml
       base_dir="."
       output_dir="output"
       model_path="Model.py"
+      combo_base_path=""
       research_loader_path=""
       research_dataset_path=""
       checkpoint_root=""
@@ -320,6 +321,7 @@ class AlphaStrategy(StrategyBase):
   base_dir="."
   output_dir="output"
   model_path="Model.py"
+  combo_base_path=""
   research_loader_path=""
   research_dataset_path=""
   checkpoint_root=""
@@ -331,9 +333,135 @@ class AlphaStrategy(StrategyBase):
 | `base_dir` | `.` | 稳定包场景通常不需要修改。 |
 | `output_dir` | `output` | 训练和 alpha 输出目录，通常与 `constants.output_root` 保持一致。 |
 | `model_path` | `Model.py` | research 模型文件，必须定义 `ResearchModel`。 |
+| `combo_base_path` | 空 | 可选运行时扩展文件，必须定义继承 `comb2.ComboBase` 的 `ComboBase`。适合覆写 `isTrainDay()`、`needTrain()` 等训练调度逻辑。 |
 | `research_loader_path` | 空 | 可选 loader 扩展文件，必须定义 `ResearchLoader`。 |
 | `research_dataset_path` | 空 | 可选 dataset 扩展文件，必须定义 `ResearchDataset`。 |
 | `checkpoint_root` | 空 | checkpoint 目录；空值表示不由该字段启用。 |
+
+### 8.1 自定义 ComboBase 训练调度
+
+如果只想改训练日判定，不需要改 vendor 目录。可以在项目目录新增一个 `combo_base.py`，然后在 XML 中接入：
+
+```xml
+<paths
+  model_path="Model.py"
+  combo_base_path="combo_base.py"
+/>
+```
+
+`combo_base.py` 必须定义一个继承 `comb2.ComboBase` 的 `ComboBase` 类。最常见场景是覆写 `isTrainDay(ds)`：
+
+```python
+from __future__ import annotations
+
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        didx = self.loader.date2didx(ds)
+        return didx % 5 == 0
+```
+
+`isTrainDay(ds)` 的输入和语义：
+
+| 项目 | 说明 |
+|---|---|
+| `ds` 类型 | `YYYYMMDD` 格式的整数，例如 `20240628`。 |
+| `ds` 含义 | 这里传入的是训练目标日 `target_ds`，不是当前回测循环日。若设置了 `trainDelay`，框架会先做日期偏移，再把偏移后的 `target_ds` 传进来。 |
+| 返回 `True` | 表示这个 `target_ds` 按你的规则属于训练日。 |
+| 返回 `False` | 表示这个 `target_ds` 按你的规则不属于训练日。 |
+| 最终是否训练 | 还会再经过 `needTrain(ds)` 的 checkpoint 判定；`isTrainDay()` 只负责训练日历规则本身。 |
+
+写 `isTrainDay()` 时最常用的辅助能力：
+
+| 可用对象 / 方法 | 用途 |
+|---|---|
+| `self.loader.date2didx(ds)` | 把 `YYYYMMDD` 转成交易日序号。适合按“每 N 个交易日”写规则。 |
+| `self.loader.didx2date(didx)` | 把交易日序号转回 `YYYYMMDD`。适合向前向后看相邻交易日。 |
+| `self.loader.mask.date` | 全部交易日数组。需要遍历或判断边界时可直接使用。 |
+
+建议优先按“交易日序号”写逻辑，而不是按自然日差值写逻辑。A 股节假日和停牌日会让自然日规则变得不稳定。
+
+接口约定：
+
+| 名称 | 约定 |
+|---|---|
+| 类名 | 必须叫 `ComboBase`。 |
+| 继承关系 | 必须继承 `comb2.ComboBase`。 |
+| `isTrainDay(ds)` | 只控制某个 `target_ds` 是否是训练日。 |
+| `needTrain(ds)` | 如果还要改 checkpoint 命中后的重训判定，可以进一步覆写它。 |
+
+建议：
+
+- 只改训练日规则时，优先覆写 `isTrainDay(ds)`。
+- 只有在你明确需要改变 checkpoint 复用或过期策略时，再覆写 `needTrain(ds)`。
+- 保持方法签名不变，不要改 `ComboBase.__init__` 的输入协议。
+
+常见示例：
+
+1. 每 5 个交易日训练一次
+
+```python
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        return self.loader.date2didx(ds) % 5 == 0
+```
+
+2. 每周最后一个交易日训练一次
+
+```python
+import datetime
+
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        didx = self.loader.date2didx(ds)
+        if didx >= len(self.loader.mask.date) - 1:
+            return True
+        today = datetime.datetime.strptime(str(self.loader.didx2date(didx)), "%Y%m%d")
+        next_day = datetime.datetime.strptime(str(self.loader.didx2date(didx + 1)), "%Y%m%d")
+        return (next_day - today).days > 1
+```
+
+3. 每月最后一个交易日训练一次
+
+```python
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        didx = self.loader.date2didx(ds)
+        if didx >= len(self.loader.mask.date) - 1:
+            return True
+        this_month = str(ds)[4:6]
+        next_month = str(self.loader.didx2date(didx + 1))[4:6]
+        return this_month != next_month
+```
+
+4. 只在白名单日期训练
+
+```python
+from comb2 import ComboBase as BaseComboBase
+
+
+TRAIN_DATES = {
+    20240131,
+    20240229,
+    20240329,
+}
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        return int(ds) in TRAIN_DATES
+```
 
 ## 9. ResearchModel 接口
 

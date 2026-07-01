@@ -295,6 +295,7 @@ class ResearchModel:
   <combo>
     <paths
       model_path="/my_experiment/my_model.py"
+      combo_base_path=""
       output_dir="/my_experiment/output"
       checkpoint_root="/my_experiment/checkpoints"
     />

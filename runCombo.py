@@ -76,6 +76,25 @@ def _load_organize_config_module():
 organize_config_module = _load_organize_config_module()
 
 
+def load_combo_base_class(combo_config: dict) -> type[ComboBase]:
+    combo_base_path = combo_config["paths"].get("combo_base_path")
+    if not combo_base_path:
+        return ComboBase
+    custom_path = Path(combo_base_path).expanduser().resolve()
+    if not custom_path.exists():
+        raise FileNotFoundError(f"combo base file not found: {custom_path}")
+    spec = importlib.util.spec_from_file_location(f"comb2_research_combo_base_{custom_path.stem}", custom_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    if not hasattr(module, "ComboBase"):
+        raise AttributeError(f"{custom_path} must define ComboBase")
+    custom_cls = getattr(module, "ComboBase")
+    if not isinstance(custom_cls, type) or not issubclass(custom_cls, ComboBase):
+        raise TypeError(f"ComboBase in {custom_path} must inherit from comb2.ComboBase")
+    return custom_cls
+
+
 def _parse_positive_int(name: str, value: Any) -> int:
     try:
         parsed = int(value)
@@ -300,6 +319,7 @@ class ExperimentRunner:
         self.monitor = monitor
         self.config_path = str(Path(config_path).expanduser().resolve()) if config_path else None
         self.live_mode = bool(self.combo_config["runtime"].get("livetrading", False))
+        self.combo_base_cls = load_combo_base_class(self.combo_config)
         self.node: Node | None = None
         self.combo: ComboBase | None = None
         self.codes: pd.Index | None = None
@@ -309,7 +329,7 @@ class ExperimentRunner:
     def setup(self):
         self.node = Node(self.combo_config)
         self.node.monitor = self.monitor
-        self.combo = ComboBase(self.node)
+        self.combo = self.combo_base_cls(self.node)
         if self.monitor.enabled:
             install_research_model_decorators(self.monitor, self.combo.research_model_cls)
         self.codes = pd.Index([str(code).zfill(6) for code in IndexMask().code], name="code")

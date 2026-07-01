@@ -201,6 +201,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
 
     config_text = (tmp_path / "config.xml").read_text(encoding="utf-8")
     assert 'model_path="Model.py"' in config_text
+    assert 'combo_base_path=""' in config_text
     assert 'trainDelay="0"' in config_text
     assert 'hidden_size=' not in config_text
     assert 'fc_size=' not in config_text
@@ -216,8 +217,53 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["strategy"]["path"] == DEFAULT_CONFIG["strategy"]["path"]
     assert Path(parsed["strategy"]["path"]).is_file()
     assert parsed["strategy"]["path"].endswith("comb2_pcmaster/default_strategy.py")
+    assert parsed["combo"]["paths"]["combo_base_path"] is None
     assert parsed["combo"]["runtime"]["trainDelay"] == 0
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
+
+
+def test_run_combo_loads_custom_combo_base(tmp_path):
+    combo_base_path = tmp_path / "combo_base.py"
+    combo_base_path.write_text(
+        """
+from __future__ import annotations
+
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        print(f"[CUSTOM-TRAIN-DAY] ds={ds}")
+        return False
+""",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.xml"
+    config_path.write_text(
+        f"""
+<config>
+  <combo>
+    <paths
+      model_path="Model.py"
+      combo_base_path="{combo_base_path}"
+    />
+  </combo>
+</config>
+""",
+        encoding="utf-8",
+    )
+
+    from config import load_config
+    from runCombo import load_combo_base_class
+
+    parsed = load_config(str(config_path))
+    combo_base_cls = load_combo_base_class(parsed["combo"])
+
+    assert combo_base_cls.__name__ == "ComboBase"
+    assert combo_base_cls is not load_combo_base_class({"paths": {"combo_base_path": None}})
+
+    combo = combo_base_cls.__new__(combo_base_cls)
+    assert combo.isTrainDay(20160111) is False
 
     overwrite = run_cli_in(tmp_path, str(REPO_ROOT / "comboHelloWorld.py"), "-y")
     assert overwrite.returncode == 2
