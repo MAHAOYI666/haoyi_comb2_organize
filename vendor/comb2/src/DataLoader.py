@@ -79,7 +79,6 @@ class LoaderConfig:
     ashare_data_path: str | None = None
     data_items: Sequence[_DataItem | dict[str, Any]] = ()
     data_presets: Sequence[str] = ()
-    factor_root: str | None = None
     config_path: str | None = None
     verbose: bool = False
 
@@ -107,7 +106,6 @@ class ComboDataLoader:
             universe=self.universe,
             data_start_ds=self.data_start_ds,
             ashare_data_path=self.config.ashare_data_path,
-            factor_root=self.config.factor_root,
             config_path=self.config.config_path,
             presets=self.config.data_presets,
             verbose=bool(getattr(config, "verbose", False)),
@@ -130,7 +128,8 @@ class ComboDataLoader:
             f"cube_{idx:03d}" for idx in range(self.cube_source.feature_dim)
         )
         self.verbose = bool(getattr(config, "verbose", False))
-        self._feature_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
+        self.current_ti = 150000
+        self._feature_cache: OrderedDict[tuple[int, int], torch.Tensor] = OrderedDict()
         self._feature_cache_size = int(feature_cache_size)
         self._label_cache: OrderedDict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
         self._label_cache_size = int(label_cache_size)
@@ -139,6 +138,14 @@ class ComboDataLoader:
         self.valid_source.monitor = self.monitor
         self.filtered_source.monitor = self.monitor
         self.base_universe_source.monitor = self.monitor
+        self.registry.set_current_ti(self.current_ti)
+
+    def set_current_ti(self, ti: int):
+        ti = int(ti)
+        if ti == self.current_ti:
+            return
+        self.current_ti = ti
+        self._feature_cache.clear()
 
     def date2didx(self, ds: int) -> int:
         didx = self.universe.date2idx(int(ds))
@@ -162,8 +169,7 @@ class ComboDataLoader:
         if self._feature_cache_size == 0:
             self._feature_cache.clear()
             return
-        while len(self._feature_cache) > self._feature_cache_size:
-            self._feature_cache.popitem(last=False)
+        self._cache_trim(self._feature_cache, self._feature_cache_size)
 
     def _cache_get(self, cache: OrderedDict, key):
         cached = cache.get(key)
@@ -176,6 +182,9 @@ class ComboDataLoader:
             return
         cache[key] = value
         cache.move_to_end(key)
+        self._cache_trim(cache, max_size)
+
+    def _cache_trim(self, cache: OrderedDict, max_size: int):
         while len(cache) > max_size:
             cache.popitem(last=False)
 
@@ -210,19 +219,20 @@ class ComboDataLoader:
 
     def gen_feature(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
-        cached = self._cache_get(self._feature_cache, ds)
+        cache_key = (ds, self.current_ti)
+        cached = self._cache_get(self._feature_cache, cache_key)
         if cached is not None:
             return cached
         feature = self._build_feature(ds)
-        self._cache_set(self._feature_cache, ds, feature, self._feature_cache_size)
+        self._cache_set(self._feature_cache, cache_key, feature, self._feature_cache_size)
         return feature
 
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
+        self._sync_monitor_refs()
         stats = LoadStats(request_days=len(days))
         if days:
             stats = self.registry._ensure_range(self.factor_names, min(days), max(days))
-        self._sync_monitor_refs()
         self.cube_source.prefetch_days(days)
         return stats
 

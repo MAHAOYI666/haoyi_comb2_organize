@@ -4,8 +4,24 @@ from collections.abc import Sequence
 import warnings
 
 import numpy as np
-import pandas as pd
 import torch
+
+
+def _resolve_axis(dim: int | None, axis: int | None, *, ndim: int | None = None, default: int | None = None) -> int | None:
+    if axis is not None and dim is not None and int(axis) != int(dim):
+        raise ValueError(f"conflicting dim/axis values: dim={dim}, axis={axis}")
+    resolved = axis if axis is not None else dim
+    if resolved is None:
+        resolved = default
+    if resolved is None:
+        return None
+    resolved = int(resolved)
+    if ndim is not None:
+        if resolved < 0:
+            resolved += ndim
+        if resolved < 0 or resolved >= ndim:
+            raise IndexError(f"axis {resolved} is out of bounds for tensor with ndim={ndim}")
+    return resolved
 
 
 def _default_eps(dtype: torch.dtype) -> float:
@@ -24,45 +40,69 @@ def purify(x: torch.Tensor) -> torch.Tensor:
     return y
 
 
-def rank(x: torch.Tensor, dim: int = 0, pct: bool = False) -> torch.Tensor:
-    axis = dim if dim >= 0 else x.ndim + dim
-    ranked = pd.DataFrame(x.detach().cpu().numpy()).rank(axis=axis, pct=pct, method="first").to_numpy()
+def rank(x: torch.Tensor, dim: int = 0, pct: bool = False, axis: int | None = None) -> torch.Tensor:
+    rank_axis = _resolve_axis(dim, axis, ndim=x.ndim, default=0)
+    moved = np.moveaxis(x.detach().cpu().numpy(), rank_axis, -1)
+    flat = moved.reshape(-1, moved.shape[-1])
+    ranked = np.full_like(flat, np.nan, dtype=np.float64)
+    for idx, row in enumerate(flat):
+        valid = np.isfinite(row)
+        count = int(valid.sum())
+        if count == 0:
+            continue
+        order = np.argsort(row[valid], kind="mergesort")
+        values = np.arange(1, count + 1, dtype=np.float64)
+        if pct:
+            values /= count
+        row_rank = np.empty(count, dtype=np.float64)
+        row_rank[order] = values
+        ranked[idx, valid] = row_rank
+    ranked = ranked.reshape(moved.shape)
+    ranked = np.moveaxis(ranked, -1, rank_axis)
     return torch.as_tensor(ranked, dtype=x.dtype, device=x.device)
 
 
-def perc_long(x: torch.Tensor, percentile: float = 0.5) -> torch.Tensor:
+def perc_long(x: torch.Tensor, percentile: float = 0.5, axis: int = -1) -> torch.Tensor:
+    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
     arr = x.detach().cpu().numpy()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        threshold = np.nanquantile(arr, percentile, axis=1, keepdims=True)
+        threshold = np.nanquantile(arr, percentile, axis=axis, keepdims=True)
     out = arr - threshold
     high = arr > threshold
     low = arr < threshold
-    positive_sum = np.where(high, out, 0.0).sum(axis=1, keepdims=True)
-    low_count = low.sum(axis=1, keepdims=True)
+    positive_sum = np.where(high, out, 0.0).sum(axis=axis, keepdims=True)
+    low_count = low.sum(axis=axis, keepdims=True)
     replacement = np.divide(-positive_sum, low_count, out=np.zeros_like(positive_sum), where=low_count > 0)
     out = np.where(low & (low_count > 0), replacement, out)
     out = np.where(np.isfinite(arr) & np.isfinite(threshold), out, np.nan)
     return torch.as_tensor(out, dtype=x.dtype, device=x.device)
 
 
-def corr(left: torch.Tensor, right: torch.Tensor, dim: int = -1, keepdims: bool = False) -> torch.Tensor:
+def corr(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    dim: int = -1,
+    keepdims: bool = False,
+    axis: int | None = None,
+) -> torch.Tensor:
+    corr_axis = _resolve_axis(dim, axis, ndim=left.ndim, default=-1)
     left = left.to(torch.float32)
     right = right.to(torch.float32)
     valid = torch.isfinite(left) & torch.isfinite(right)
-    count = valid.sum(dim=dim, keepdim=True)
-    left_mean = torch.where(valid, left, torch.nan).nanmean(dim=dim, keepdim=True)
-    right_mean = torch.where(valid, right, torch.nan).nanmean(dim=dim, keepdim=True)
+    count = valid.sum(dim=corr_axis, keepdim=True)
+    left_mean = torch.where(valid, left, torch.nan).nanmean(dim=corr_axis, keepdim=True)
+    right_mean = torch.where(valid, right, torch.nan).nanmean(dim=corr_axis, keepdim=True)
     left_centered = torch.where(valid, left - left_mean, torch.zeros_like(left))
     right_centered = torch.where(valid, right - right_mean, torch.zeros_like(right))
-    numerator = (left_centered * right_centered).sum(dim=dim, keepdim=True)
+    numerator = (left_centered * right_centered).sum(dim=corr_axis, keepdim=True)
     denominator = torch.sqrt(
-        (left_centered * left_centered).sum(dim=dim, keepdim=True)
-        * (right_centered * right_centered).sum(dim=dim, keepdim=True)
+        (left_centered * left_centered).sum(dim=corr_axis, keepdim=True)
+        * (right_centered * right_centered).sum(dim=corr_axis, keepdim=True)
     )
     out = numerator / denominator
     out = torch.where((count >= 2) & (denominator > 0), out, torch.full_like(out, torch.nan))
-    return out if keepdims else out.squeeze(dim)
+    return out if keepdims else out.squeeze(corr_axis)
 
 
 def _nan_masked(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -71,53 +111,55 @@ def _nan_masked(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return safe_x, mask
 
 
-def nanmean(x: torch.Tensor, dim=None, keepdim: bool = False) -> torch.Tensor:
+def nanmean(x: torch.Tensor, dim=None, keepdim: bool = False, axis: int | None = None) -> torch.Tensor:
+    reduce_axis = _resolve_axis(dim, axis, ndim=x.ndim)
     safe_x, mask = _nan_masked(x)
-    count = mask.sum(dim=dim, keepdim=keepdim)
-    total = safe_x.sum(dim=dim, keepdim=keepdim)
+    count = mask.sum(dim=reduce_axis, keepdim=keepdim)
+    total = safe_x.sum(dim=reduce_axis, keepdim=keepdim)
     denom = torch.clamp(count, min=1).to(dtype=x.dtype)
     mean = total / denom
     nan_fill = torch.full_like(mean, torch.nan)
     return torch.where(count > 0, mean, nan_fill)
 
 
-def nanstd(x: torch.Tensor, dim=None, keepdim: bool = False) -> torch.Tensor:
-    mean = nanmean(x, dim=dim, keepdim=True)
+def nanstd(x: torch.Tensor, dim=None, keepdim: bool = False, axis: int | None = None) -> torch.Tensor:
+    reduce_axis = _resolve_axis(dim, axis, ndim=x.ndim)
+    mean = nanmean(x, dim=reduce_axis, keepdim=True)
     diff = x - mean
     diff = torch.where(torch.isnan(x), torch.zeros_like(diff), diff)
-    count = (~torch.isnan(x)).sum(dim=dim, keepdim=True)
+    count = (~torch.isnan(x)).sum(dim=reduce_axis, keepdim=True)
     denom = torch.clamp(count, min=1).to(dtype=x.dtype)
-    var = diff.pow(2).sum(dim=dim, keepdim=True) / denom
+    var = diff.pow(2).sum(dim=reduce_axis, keepdim=True) / denom
     std = torch.sqrt(torch.clamp(var, min=0.0))
-    if not keepdim and dim is not None:
-        std = std.squeeze(dim)
-        count = count.squeeze(dim)
+    if not keepdim and reduce_axis is not None:
+        std = std.squeeze(reduce_axis)
+        count = count.squeeze(reduce_axis)
     nan_fill = torch.full_like(std, torch.nan)
     return torch.where(count > 0, std, nan_fill)
 
 
-def nanmedian(x: torch.Tensor) -> torch.Tensor:
-    valid = x[~torch.isnan(x)]
-    if valid.numel() == 0:
-        return torch.tensor(torch.nan, device=x.device, dtype=x.dtype)
-    return torch.median(valid)
+def nanmedian(x: torch.Tensor, dim: int | None = None, keepdim: bool = False, axis: int | None = None) -> torch.Tensor:
+    reduce_axis = _resolve_axis(dim, axis, ndim=x.ndim)
+    if reduce_axis is None:
+        valid = x[~torch.isnan(x)]
+        if valid.numel() == 0:
+            return torch.tensor(torch.nan, device=x.device, dtype=x.dtype)
+        return torch.median(valid)
+    return torch.nanmedian(x, dim=reduce_axis, keepdim=keepdim).values
 
 
-def zscore(x: torch.Tensor, eps: float | None = None) -> torch.Tensor:
+def zscore(x: torch.Tensor, eps: float | None = None, dim: int | None = None, axis: int | None = None) -> torch.Tensor:
     eps = _default_eps(x.dtype) if eps is None else eps
-    mean = nanmean(x)
-    std = nanstd(x)
-    if (not torch.isfinite(std)) or std <= 0:
-        std = torch.tensor(0.0, device=x.device, dtype=x.dtype)
-    return (x - mean) / (std + eps)
-
-
-def cs_zscore(x: torch.Tensor, eps: float | None = None) -> torch.Tensor:
-    eps = _default_eps(x.dtype) if eps is None else eps
-    mean = nanmean(x, dim=-1, keepdim=True)
-    std = nanstd(x, dim=-1, keepdim=True)
+    reduce_axis = _resolve_axis(dim, axis, ndim=x.ndim)
+    keepdim = reduce_axis is not None
+    mean = nanmean(x, dim=reduce_axis, keepdim=keepdim)
+    std = nanstd(x, dim=reduce_axis, keepdim=keepdim)
     std = torch.where(torch.isfinite(std) & (std > 0), std, torch.zeros_like(std))
     return (x - mean) / (std + eps)
+
+
+def cs_zscore(x: torch.Tensor, eps: float | None = None, axis: int = -1) -> torch.Tensor:
+    return zscore(x, eps=eps, axis=axis)
 
 
 def neut(
@@ -180,21 +222,111 @@ def truncate(x: torch.Tensor, lower: float, upper: float) -> torch.Tensor:
     return torch.clamp(x, lower, upper)
 
 
-def winsorize_by_quantile(x: torch.Tensor, lower_q: float = 0.01, upper_q: float = 0.99) -> torch.Tensor:
-    valid = x[~torch.isnan(x)]
-    if valid.numel() == 0:
-        return x
-    low = torch.quantile(valid, lower_q)
-    high = torch.quantile(valid, upper_q)
-    return torch.clamp(x, low, high)
+def winsorize_by_quantile(
+    x: torch.Tensor,
+    lower_q: float = 0.01,
+    upper_q: float = 0.99,
+    axis: int | None = None,
+) -> torch.Tensor:
+    reduce_axis = _resolve_axis(None, axis, ndim=x.ndim)
+    if reduce_axis is None:
+        valid = x[~torch.isnan(x)]
+        if valid.numel() == 0:
+            return x
+        low = torch.quantile(valid, lower_q)
+        high = torch.quantile(valid, upper_q)
+    else:
+        arr = x.detach().cpu().numpy()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            low = np.nanquantile(arr, lower_q, axis=reduce_axis, keepdims=True)
+            high = np.nanquantile(arr, upper_q, axis=reduce_axis, keepdims=True)
+        low = torch.as_tensor(low, dtype=x.dtype, device=x.device)
+        high = torch.as_tensor(high, dtype=x.dtype, device=x.device)
+    return torch.maximum(torch.minimum(x, high), low)
 
 
-def normalize_by_max_abs(x: torch.Tensor, eps: float | None = None) -> torch.Tensor:
+def normalize_by_max_abs(x: torch.Tensor, eps: float | None = None, axis: int | None = None) -> torch.Tensor:
     eps = _default_eps(x.dtype) if eps is None else eps
-    max_abs = torch.max(torch.abs(x))
-    if (not torch.isfinite(max_abs)) or max_abs <= 0:
+    reduce_axis = _resolve_axis(None, axis, ndim=x.ndim)
+    finite = torch.isfinite(x)
+    safe_abs = torch.where(finite, torch.abs(x), torch.zeros_like(x))
+    max_abs = torch.max(safe_abs) if reduce_axis is None else safe_abs.amax(dim=reduce_axis, keepdim=True)
+    has_finite = finite.any() if reduce_axis is None else finite.any(dim=reduce_axis, keepdim=True)
+    if reduce_axis is None:
+        if (not torch.isfinite(max_abs)) or max_abs <= 0 or (not bool(has_finite)):
+            return x
+        return x / (max_abs + eps)
+    scale_valid = has_finite & torch.isfinite(max_abs) & (max_abs > 0)
+    if not torch.any(scale_valid):
         return x
-    return x / (max_abs + eps)
+    scale = torch.where(scale_valid, max_abs + eps, torch.ones_like(max_abs))
+    out = x / scale
+    return torch.where(scale_valid, out, x)
+
+
+def reduce_last(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
+    if x.shape[axis] == 0:
+        out_shape = list(x.shape)
+        del out_shape[axis]
+        return torch.full(out_shape, torch.nan, dtype=x.dtype, device=x.device)
+    return x.select(axis, x.shape[axis] - 1)
+
+
+def reduce_mean(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    return nanmean(x, axis=axis)
+
+
+def reduce_std(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    return nanstd(x, axis=axis)
+
+
+def reduce_sum(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
+    values = torch.nan_to_num(x, nan=0.0)
+    valid = torch.isfinite(x).any(dim=axis)
+    out = values.sum(dim=axis)
+    out = out.to(x.dtype)
+    out[~valid] = torch.nan
+    return out
+
+
+def _reduce_extreme(x: torch.Tensor, axis: int, fill_value: float, reducer) -> torch.Tensor:
+    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
+    values = torch.where(torch.isnan(x), torch.full_like(x, fill_value), x)
+    out = reducer(values, dim=axis).values
+    out[torch.isinf(out)] = torch.nan
+    return out
+
+
+def reduce_max(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    return _reduce_extreme(x, axis, -torch.inf, torch.max)
+
+
+def reduce_min(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
+    return _reduce_extreme(x, axis, torch.inf, torch.min)
+
+
+def _rolling_reduce(x: torch.Tensor, window: int, axis: int, reducer, name: str) -> torch.Tensor:
+    axis = _resolve_axis(None, axis, ndim=x.ndim, default=0)
+    window = int(window)
+    if window <= 0:
+        raise ValueError(f"{name} window must be positive")
+    moved = torch.movedim(x, axis, 0)
+    out = torch.full_like(moved, torch.nan)
+    for idx in range(moved.shape[0]):
+        lo = max(0, idx - window + 1)
+        out[idx] = reducer(moved[lo : idx + 1], dim=0)
+    return torch.movedim(out, 0, axis)
+
+
+def rolling_mean(x: torch.Tensor, window: int, axis: int = 0) -> torch.Tensor:
+    return _rolling_reduce(x, window, axis, nanmean, "rolling_mean")
+
+
+def rolling_std(x: torch.Tensor, window: int, axis: int = 0) -> torch.Tensor:
+    return _rolling_reduce(x, window, axis, nanstd, "rolling_std")
 
 
 def to_bool_mask(x: torch.Tensor) -> torch.Tensor:

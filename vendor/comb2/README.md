@@ -42,6 +42,10 @@ researcher-facing configuration.
 
 不需要了解框架内部的训练调度、数据缓存或回测实现细节。
 
+补充说明：
+- `processed_feature_cache` 作用于最终预处理后的单日 feature。
+- 3D `builtin.factorsim` 原始分钟矩阵不会长期保留在 reader 的内存 cache 中；区间预取会直接聚合成 2D 结果后写入 registry。
+
 ## 1. 推荐目录组织
 
 建议不要把自己的实验直接写进 `comb2` 包内部，而是在外部单独建一个实验目录，例如：
@@ -307,6 +311,7 @@ class ResearchModel:
 
     <runtime
       snaptime="exp_demo"
+      snap_ti="150000"
       livetrading="false"
       trainDelay="1"
       retDays="1"
@@ -327,7 +332,6 @@ class ResearchModel:
       bagging_freq="1"
       min_data_in_leaf="100"
       num_threads="-1"
-      seed="42"
     />
 
     <data
@@ -337,8 +341,8 @@ class ResearchModel:
       valid_path="/path/to/valid"
       filtered_path="/path/to/filtered"
     >
-      <item name="alpha.factor_1" module="builtin.factor" path="/path/to/factor_1" role="factor" />
-      <item name="alpha.factor_2" module="builtin.factor" path="/path/to/factor_2" role="factor" />
+      <item name="alpha.factor_1" module="builtin.factorsim" path="/path/to/factor_1" role="factor" />
+      <item name="alpha.factor_2" module="builtin.factorsim" path="/path/to/factor_2" role="factor" />
       <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
     </data>
   </combo>
@@ -357,6 +361,7 @@ class ResearchModel:
 
 说明：
 - XML 中未填写的字段会回退到框架默认值
+- `runtime.snaptime` 是实验/checkpoint 名；`runtime.snap_ti` 是默认数据时点
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`
 - 多个因子通过多个 `<data><item role="factor" ... /></data>` 声明

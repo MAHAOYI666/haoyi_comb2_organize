@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import sys
 from pathlib import Path
 
@@ -19,12 +18,10 @@ from comb_eval.correlation import matrix_correlation
 from comb_eval.exposure import DEFAULT_ASHARE_CACHE_PATH, compute_barra_style_exposure
 from comb_eval.formatting import output_dict_to_lines, output_frame_to_text
 from comb_eval.ic import summarize_ic
-from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
+from comb_eval.io import read_matrix, read_table
 from comb_eval.pnl import summarize_pnl_with_benchmark
 from comb_eval.report import (
     PNL_KEY_COLUMNS,
-    calculate_daily_ic_from_signal,
-    calculate_daily_pnl_from_signal,
     check_config_outputs,
     config_eval_to_text,
     run_config_evaluation,
@@ -34,14 +31,12 @@ from comb_eval.report import (
 TRADING_DAYS = 250
 DEFAULT_VA_WEIGHTS = "0.01,0.02,0.03,0.05,0.08,0.1,0.15,0.2"
 
-organize_config_module = importlib.import_module("config")
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="runEval",
-        description="Evaluate comb2 signals, PnL, correlation, exposure, and config outputs.",
-        epilog="examples: runEval config.xml | runEval --sim alpha.parquet --config config.xml | runEval --corr pos_a.parquet pos_b.parquet",
+        description="Evaluate comb2 config outputs or local parquet/csv artifacts.",
+        epilog="examples: runEval config.xml | runEval --sim daily_ic.parquet | runEval --corr pos_a.parquet pos_b.parquet",
     )
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
@@ -49,36 +44,34 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--overall", action="store_true", help="Run the full config evaluation; default when no mode is given")
     mode.add_argument("--corr", nargs=2, metavar=("LEFT", "RIGHT"), help="Summarize daily matrix correlation for two parquet/csv matrices")
-    mode.add_argument("--sim", metavar="PATH", help="Summarize signal IC; input is a signal matrix unless --input-is-ic is set")
-    mode.add_argument("--pnl", metavar="PATH", help="Summarize PnL; input is a signal matrix unless --input-is-pnl is set")
+    mode.add_argument("--sim", metavar="PATH", help="Summarize an existing daily IC parquet/csv table")
+    mode.add_argument("--pnl", metavar="PATH", help="Summarize an existing daily PnL parquet/csv table")
     mode.add_argument("--exposure", metavar="PATH", help="Summarize Barra style exposure for a signal matrix")
-    mode.add_argument("--va", nargs=2, metavar=("BASE", "NEW"), help="Summarize value-add for base/new PnL files or signal matrices")
+    mode.add_argument("--va", nargs=2, metavar=("BASE", "NEW"), help="Summarize value-add for two daily PnL parquet/csv tables")
 
-    parser.add_argument("--report-dir", help="Directory for eval artifacts; defaults to <output_root>/eval_report")
-    parser.add_argument("--plot-output", help="Path for the signal analysis long image")
+    parser.add_argument("--report-dir", help="For overall mode, directory for eval artifacts; defaults to <output_root>/eval_report")
+    parser.add_argument("--plot-output", help="For overall mode, path for the signal analysis long image")
     parser.add_argument("--pnlzz500", help="Optional benchmark pnl path")
-    parser.add_argument("--label", "--label-1d", dest="label", help="1d forward-return label path for PNL/IC/decile calculation")
-    parser.add_argument("--label-5d", help="5d forward-return label path for IC calculation")
-    parser.add_argument("--label-is-table", "--label-1d-is-table", dest="label_is_table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
-    parser.add_argument("--label-5d-is-table", action="store_true", help="Read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
-    parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
-    parser.add_argument("--booksize", type=float, help="Booksize for signal-to-PnL evaluation")
-    parser.add_argument("--tradecost-ratio", type=float, help="Cost multiplier; cost = tradevalue * 0.003 * ratio")
-    parser.add_argument("--input-is-ic", action="store_true", help="For --sim, treat PATH as an existing daily IC table")
-    parser.add_argument("--input-is-pnl", action="store_true", help="For --pnl, treat PATH as an existing daily PnL table")
-    parser.add_argument("--normalize-names", action="store_true", help="For --sim --input-is-ic, map ic/5dic to 1d_IC/5d_IC names")
-    parser.add_argument("--corr-days", type=int, help="For --corr, use only the most recent N overlapping dates")
+    parser.add_argument("--label", "--label-1d", dest="label", help="For overall mode, 1d forward-return label path for PNL/IC/decile calculation")
+    parser.add_argument("--label-5d", help="For overall mode, 5d forward-return label path for IC calculation")
+    parser.add_argument("--label-is-table", "--label-1d-is-table", dest="label_is_table", action="store_true", help="For overall mode, read --label as csv/tsv/parquet instead of Memmaper2 cache")
+    parser.add_argument("--label-5d-is-table", action="store_true", help="For overall mode, read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
+    parser.add_argument("--label-df-type", default="true", help="For overall mode, df_type passed to Memmaper2.load for label paths")
+    parser.add_argument("--booksize", type=float, help="For overall/va mode, booksize for generated evaluation metrics")
+    parser.add_argument("--tradecost-ratio", type=float, help="For overall mode, cost multiplier; cost = tradevalue * 0.003 * ratio")
+    parser.add_argument("--normalize-names", action="store_true", help="For --sim, map ic/5dic to 1d_IC/5d_IC names")
+    parser.add_argument("--corr-days", type=int, default=240, help="For --corr, use only the most recent N overlapping dates; default 240")
     parser.add_argument("--min-valid", type=int, default=1000, help="For --corr, minimum nonzero overlapping instruments per day")
     parser.add_argument("--top-pct", type=float, default=10.0, help="For --corr, long-holding overlap top percentage; default 10")
-    parser.add_argument("--ashare-cache-path", help="For --exposure, AshareCache root; defaults to --config or built-in default")
+    parser.add_argument("--ashare-cache-path", help="For --exposure, AshareCache root; defaults to the built-in default")
     parser.add_argument("--exposure-mode", type=int, choices=(0, 1), default=0, help="For --exposure, 0=cross-sectional correlation, 1=beta")
-    parser.add_argument("--column", default="longonly_pnl", help="For --va, PnL column to compare; signal inputs are converted to daily PnL first")
-    parser.add_argument("--weights", default=DEFAULT_VA_WEIGHTS, help="For --va, comma-separated new-signal blend weights")
-    parser.add_argument("--output", help="Optional path for mode-specific generated table, such as daily IC, daily PnL, exposure, or VA csv")
+    parser.add_argument("--column", default="longonly_pnl", help="For --va, PnL column to compare")
+    parser.add_argument("--weights", default=DEFAULT_VA_WEIGHTS, help="For --va, comma-separated new-pnl blend weights")
+    parser.add_argument("--output", help="Optional path for mode-specific generated table, such as exposure or VA csv")
     parser.add_argument("--summary-output", help="Optional path to write the formatted summary text")
     parser.add_argument("--blended-output", help="For --va, optional path to write blended and incremental daily series")
-    parser.add_argument("--skip-deciles", action="store_true", help="Skip 10-group backtests")
-    parser.add_argument("--skip-exposure", action="store_true", help="Skip Barra exposure analysis")
+    parser.add_argument("--skip-deciles", action="store_true", help="For overall mode, skip 10-group backtests")
+    parser.add_argument("--skip-exposure", action="store_true", help="For overall mode, skip Barra exposure analysis")
     parser.add_argument("--start", help="Start date, e.g. 20160101")
     parser.add_argument("--end", help="End date, e.g. 20240101")
     return parser.parse_args()
@@ -148,6 +141,7 @@ def run_overall(args: argparse.Namespace) -> int:
 
 
 def run_corr(args: argparse.Namespace) -> int:
+    _reject_config_for_single_mode(args, "--corr")
     result = matrix_correlation(
         args.corr[0],
         args.corr[1],
@@ -164,31 +158,9 @@ def run_corr(args: argparse.Namespace) -> int:
 
 
 def run_sim(args: argparse.Namespace) -> int:
-    if args.input_is_ic:
-        daily_ic = read_table(args.sim, start=args.start, end=args.end)
-        normalize_names = args.normalize_names
-    else:
-        config = _load_optional_config(args)
-        signal = read_matrix(args.sim, start=args.start, end=args.end)
-        label_1d_path = _resolve_label_path(args, config, label_5d=False)
-        label_5d_path = _resolve_label_path(args, config, label_5d=True)
-        label_1d = _read_label_for_signal(
-            signal,
-            label_1d_path,
-            is_table=args.label_is_table,
-            df_type=_parse_df_type(args.label_df_type),
-        )
-        label_5d = _read_label_for_signal(
-            signal,
-            label_5d_path,
-            is_table=args.label_5d_is_table,
-            df_type=_parse_df_type(args.label_df_type),
-        )
-        daily_ic = calculate_daily_ic_from_signal(signal, label_1d, label_5d)
-        normalize_names = True
-        _write_frame_if_requested(daily_ic, args.output)
-
-    result = summarize_ic(daily_ic, start=args.start, end=args.end, normalize_names=normalize_names)
+    _reject_config_for_single_mode(args, "--sim")
+    daily_ic = read_table(args.sim, start=args.start, end=args.end)
+    result = summarize_ic(daily_ic, start=args.start, end=args.end, normalize_names=args.normalize_names)
     text = output_frame_to_text(result.table)
     print(text)
     _write_text_if_requested(text, args.summary_output)
@@ -196,26 +168,8 @@ def run_sim(args: argparse.Namespace) -> int:
 
 
 def run_pnl(args: argparse.Namespace) -> int:
-    if args.input_is_pnl:
-        daily_pnl = read_table(args.pnl, start=args.start, end=args.end)
-    else:
-        config = _load_optional_config(args)
-        signal = read_matrix(args.pnl, start=args.start, end=args.end)
-        label_path = _resolve_label_path(args, config, label_5d=False)
-        label = _read_label_for_signal(
-            signal,
-            label_path,
-            is_table=args.label_is_table,
-            df_type=_parse_df_type(args.label_df_type),
-        )
-        daily_pnl = calculate_daily_pnl_from_signal(
-            signal,
-            label,
-            booksize=_resolve_booksize(args, config),
-            tradecost_ratio=_resolve_tradecost_ratio(args, config, default=1.0),
-        )
-        _write_frame_if_requested(daily_pnl, args.output)
-
+    _reject_config_for_single_mode(args, "--pnl")
+    daily_pnl = read_table(args.pnl, start=args.start, end=args.end)
     result = summarize_pnl_with_benchmark(daily_pnl, args.pnlzz500, start=args.start, end=args.end)
     text = output_frame_to_text(_select_columns(result.table, PNL_KEY_COLUMNS))
     print(text)
@@ -224,14 +178,14 @@ def run_pnl(args: argparse.Namespace) -> int:
 
 
 def run_exposure(args: argparse.Namespace) -> int:
-    config = _load_optional_config(args)
+    _reject_config_for_single_mode(args, "--exposure")
     signal = read_matrix(args.exposure, start=args.start, end=args.end)
     exposure = compute_barra_style_exposure(
         signal,
         start_ds=int(args.start) if args.start is not None else None,
         end_ds=int(args.end) if args.end is not None else None,
         mode=args.exposure_mode,
-        ashare_cache_path=_resolve_ashare_cache_path(args, config),
+        ashare_cache_path=_resolve_ashare_cache_path(args),
     )
     _write_frame_if_requested(exposure, args.output)
     summary = summarize_exposure(exposure)
@@ -242,11 +196,10 @@ def run_exposure(args: argparse.Namespace) -> int:
 
 
 def run_va(args: argparse.Namespace) -> int:
-    config = _load_optional_config(args)
-    booksize = _resolve_booksize(args, config)
-    tradecost_ratio = _resolve_tradecost_ratio(args, config, default=0.0)
-    base = _read_va_series(args.va[0], args, config, booksize=booksize, tradecost_ratio=tradecost_ratio)
-    new = _read_va_series(args.va[1], args, config, booksize=booksize, tradecost_ratio=tradecost_ratio)
+    _reject_config_for_single_mode(args, "--va")
+    booksize = _resolve_booksize(args)
+    base = _read_va_series(args.va[0], args)
+    new = _read_va_series(args.va[1], args)
     aligned = pd.concat([base.rename("base"), new.rename("new")], axis=1, join="inner").dropna()
     if aligned.empty:
         raise ValueError("No overlapping non-NaN observations for value-add calculation.")
@@ -261,75 +214,24 @@ def run_va(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_optional_config(args: argparse.Namespace) -> dict | None:
-    config_path = args.config_flag or args.config
-    if not config_path:
-        return None
-    path = Path(config_path).expanduser()
-    if not path.is_file():
-        raise FileNotFoundError(f"config file not found: {config_path}")
-    return organize_config_module.load_config(str(path))
+def _reject_config_for_single_mode(args: argparse.Namespace, mode_flag: str) -> None:
+    if args.config_flag or args.config:
+        raise ValueError(f"{mode_flag} is a single-item mode; pass direct parquet/csv files instead of config.xml")
 
 
-def _resolve_label_path(args: argparse.Namespace, config: dict | None, *, label_5d: bool) -> Path:
-    raw = args.label_5d if label_5d else args.label
-    if raw:
-        return Path(raw).expanduser()
-    if config is None:
-        flag = "--label-5d" if label_5d else "--label"
-        raise ValueError(f"{flag} is required unless --config supplies combo.loader.ashare_data_path")
-    cache_root = Path(config["combo"]["loader"]["ashare_data_path"]).expanduser()
-    suffix = "5d" if label_5d else "1d"
-    return cache_root / "1d_DailyLabel" / f"DailyLabel.vwap30_label{suffix}"
-
-
-def _read_label_for_signal(signal: pd.DataFrame, path: Path, *, is_table: bool, df_type: object) -> pd.DataFrame:
-    if is_table:
-        return read_matrix(path)
-    normalized_signal = normalize_date_index(signal)
-    start_ds = normalized_signal.index.min().strftime("%Y%m%d")
-    end_ds = normalized_signal.index.max().strftime("%Y%m%d")
-    data = read_cache_array(path, start_ds, end_ds, df_type)
-    if isinstance(data, pd.DataFrame):
-        label = normalize_date_index(data).astype(float)
-        label.columns = label.columns.astype(str).str.zfill(6)
-        return label
-    return pd.DataFrame(data, index=normalized_signal.index[: len(data)], columns=normalized_signal.columns[: data.shape[1]]).astype(float)
-
-
-def _resolve_booksize(args: argparse.Namespace, config: dict | None) -> float:
+def _resolve_booksize(args: argparse.Namespace) -> float:
     if args.booksize is not None:
         return float(args.booksize)
-    if config is not None:
-        return float(config.get("backtest", {}).get("cash", 1e7))
     return 1e7
 
 
-def _resolve_tradecost_ratio(args: argparse.Namespace, config: dict | None, *, default: float) -> float:
-    if args.tradecost_ratio is not None:
-        return float(args.tradecost_ratio)
-    if config is not None:
-        fee_rate = float(config.get("backtest", {}).get("fee_rate", 0.0))
-        return fee_rate / 0.003 if fee_rate else 0.0
-    return float(default)
-
-
-def _resolve_ashare_cache_path(args: argparse.Namespace, config: dict | None) -> str | Path:
+def _resolve_ashare_cache_path(args: argparse.Namespace) -> str | Path:
     if args.ashare_cache_path:
         return Path(args.ashare_cache_path).expanduser()
-    if config is not None:
-        return Path(config["combo"]["loader"]["ashare_data_path"]).expanduser()
     return DEFAULT_ASHARE_CACHE_PATH
 
 
-def _read_va_series(
-    path: str,
-    args: argparse.Namespace,
-    config: dict | None,
-    *,
-    booksize: float,
-    tradecost_ratio: float,
-) -> pd.Series:
+def _read_va_series(path: str, args: argparse.Namespace) -> pd.Series:
     table = read_table(path, start=args.start, end=args.end)
     if args.column in table.columns:
         return table[args.column].astype(float)
@@ -337,24 +239,7 @@ def _read_va_series(
         return table["longonly_pnl"].astype(float)
     if "pnl" in table.columns:
         return table["pnl"].astype(float)
-
-    label_path = _resolve_label_path(args, config, label_5d=False)
-    signal = read_matrix(path, start=args.start, end=args.end)
-    label = _read_label_for_signal(
-        signal,
-        label_path,
-        is_table=args.label_is_table,
-        df_type=_parse_df_type(args.label_df_type),
-    )
-    daily_pnl = calculate_daily_pnl_from_signal(
-        signal,
-        label,
-        booksize=booksize,
-        tradecost_ratio=tradecost_ratio,
-    )
-    if args.column in daily_pnl.columns:
-        return daily_pnl[args.column].astype(float)
-    raise ValueError(f"column not found after signal-to-pnl conversion: {args.column}")
+    raise ValueError(f"column not found in daily pnl table: {args.column}")
 
 
 def _parse_weights(value: str) -> list[float]:

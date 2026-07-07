@@ -31,7 +31,7 @@ def _default_strategy_path() -> str:
 def _builtin_factor_item(path: str) -> dict[str, Any]:
     return {
         "name": f"alpha.{path}",
-        "module": "builtin.factor",
+        "module": "builtin.factorsim",
         "path": path,
         "role": "factor",
         "mode": "read_dump",
@@ -67,12 +67,11 @@ DEFAULT_FACTOR_PATHS = (
 
 
 DEFAULT_CONFIG = {
-    "constants": {
-        "cache_path": "data/Cache",
-        "factor_root": "data/Factor/FactorData",
-        "output_root": str(COMB2_ROOT / "output"),
-        "checkpoint_root": None,
-    },
+        "constants": {
+            "cache_path": "data/Cache",
+            "output_root": str(COMB2_ROOT / "output"),
+            "checkpoint_root": None,
+        },
     "strategy": {
         "start_ds": 20160111,
         "end_ds": 20200101,
@@ -95,6 +94,9 @@ DEFAULT_CONFIG = {
         },
         "runtime": {
             "snaptime": "mlp_minimal",
+            "snap_ti": None,
+            "seed": None,
+            "deterministic": False,
             "livetrading": False,
             "trainDelay": 0,
             "retDays": 1,
@@ -127,7 +129,6 @@ DEFAULT_CONFIG = {
             "base_universe_path": None,
             "data_items": (),
             "data_presets": (),
-            "factor_root": None,
             "config_path": None,
         },
         "defaults": {
@@ -166,7 +167,6 @@ DTYPE_MAP = {
 
 PATH_FIELDS = {
     ("constants", "cache_path"),
-    ("constants", "factor_root"),
     ("constants", "output_root"),
     ("constants", "checkpoint_root"),
     ("strategy", "path"),
@@ -375,7 +375,6 @@ def _resolve_data_item_path(
     *,
     module: str,
     field: str,
-    factor_root: str,
     ashare_data_path: str | None,
     base_dir: Path,
 ) -> str | None:
@@ -387,8 +386,6 @@ def _resolve_data_item_path(
         normalized_module = normalized_module.removeprefix("builtin.")
     if path.is_absolute():
         return str(path.resolve())
-    if field == "path" and normalized_module == "factor":
-        return str((Path(factor_root) / path).resolve())
     if field == "path" and normalized_module == "barra_style":
         return value
     if field == "path" and normalized_module == "label":
@@ -410,7 +407,6 @@ def _resolve_data_pack(
     parsed: dict[str, Any],
     *,
     base_dir: Path,
-    factor_root: str,
     ashare_data_path: str | None,
     seen_paths: set[tuple[str, tuple[str, ...] | None]],
     presets: list[str],
@@ -440,7 +436,6 @@ def _resolve_data_pack(
         nested_items = _resolve_data_pack(
             nested,
             base_dir=nested_path.parent,
-            factor_root=factor_root,
             ashare_data_path=ashare_data_path,
             seen_paths=seen_paths,
             presets=nested_presets,
@@ -459,7 +454,6 @@ def _resolve_data_pack(
                 resolved_item.get(field),
                 module=module,
                 field=field,
-                factor_root=factor_root,
                 ashare_data_path=ashare_data_path,
                 base_dir=base_dir,
             )
@@ -505,12 +499,10 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
 
-    factor_root = resolved["constants"]["factor_root"]
     presets: list[str] = list(resolved["combo"].get("data", {}).get("presets", ()))
     data_items = _resolve_data_pack(
         resolved["combo"].get("data", {"imports": (), "items": ()}),
         base_dir=base_dir,
-        factor_root=factor_root,
         ashare_data_path=resolved["combo"]["loader"].get("ashare_data_path"),
         seen_paths=set(),
         presets=presets,
@@ -522,7 +514,6 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     }
     resolved["combo"]["loader"]["data_items"] = tuple(data_items)
     resolved["combo"]["loader"]["data_presets"] = tuple(presets)
-    resolved["combo"]["loader"]["factor_root"] = factor_root
     resolved["combo"]["loader"]["config_path"] = str(base_dir.resolve())
     return resolved
 

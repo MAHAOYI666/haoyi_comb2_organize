@@ -44,7 +44,7 @@ def main() -> int:
     matrix_corr_parser = subparsers.add_parser("matrix-corr", help="Compute position/trade matrix correlation")
     matrix_corr_parser.add_argument("candidate")
     matrix_corr_parser.add_argument("pool")
-    matrix_corr_parser.add_argument("--corr-days", type=int, help="Use only the most recent N overlapping days")
+    matrix_corr_parser.add_argument("--corr-days", type=int, default=240, help="Use only the most recent N overlapping days; default 240")
     matrix_corr_parser.add_argument("--min-valid", type=int, default=2, help="Minimum nonzero overlapping instruments per day")
     _add_date_args(matrix_corr_parser)
 

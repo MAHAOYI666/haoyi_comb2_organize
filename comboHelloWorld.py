@@ -270,7 +270,6 @@ CONFIG_TEMPLATE = '''
 <config>
   <constants
     cache_path="data/Cache"
-    factor_root="data/Factor/FactorData"
     output_root="output"
     checkpoint_root=""
   />
@@ -325,7 +324,6 @@ CONFIG_TEMPLATE = '''
       scheduler_gamma="0.5"
       grad_clip="10.0"
       early_stopping_patience="5"
-      seed="42"
     />
 
     <data
@@ -337,9 +335,8 @@ CONFIG_TEMPLATE = '''
       filtered_path=""
       base_universe_path=""
     >
-      <!-- Example factor resolves under constants.factor_root:
-           data/Factor/FactorData/example_factor -->
-      <item name="factor.example_factor" module="builtin.factor" path="example_factor" role="factor" display_name="example_factor" />
+      <!-- Example factor path can be absolute, or relative to constants.cache_path/AshareCache -->
+      <item name="factor.example_factor" module="builtin.factorsim" path="example_factor" role="factor" display_name="example_factor" />
 
       <!-- Example label resolves under constants.cache_path:
            data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d -->

@@ -6,6 +6,7 @@ import datetime
 import gc
 import importlib.util
 import os
+import random
 import re
 import shutil
 import sys
@@ -15,6 +16,7 @@ from io import BytesIO
 from typing import Any
 
 import torch
+import numpy as np
 
 from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig, nan_to_num
 from .selection import DefaultSelectionModule
@@ -38,11 +40,15 @@ class ComboBase:
         self.tsDays = node.tsDays
         self.load_chunk_days = node.load_chunk_days
         self.processed_feature_cache = bool(node.processed_feature_cache)
+        self.snap_ti = getattr(node, "snap_ti", None)
+        self.seed = getattr(node, "seed", None)
+        self.deterministic = bool(getattr(node, "deterministic", False))
         self.model_smooth_rate = node.model_smooth_rate
         self.model_keep_num = node.model_keep_num
         self.select_days = node.select_days
         self.max_train_days = int(node.max_train_days)
         self.checkpoint_root = node.checkpoint_root
+        self._set_random_seed()
         self.modelDir = os.path.join(self.checkpoint_root, self.snaptime) if self.checkpoint_root else None
         if self.modelDir:
             os.makedirs(self.modelDir, exist_ok=True)
@@ -61,6 +67,8 @@ class ComboBase:
         )
 
         self.loader = self.research_loader_cls(node.loader_config)
+        if self.snap_ti is not None:
+            self.loader.set_current_ti(int(self.snap_ti))
         self.loader.set_processed_feature_cache_enabled(self.processed_feature_cache)
         self.loader.monitor = getattr(node, "monitor", None)
         self.buffer = ComboBuffer(
@@ -80,6 +88,23 @@ class ComboBase:
         self.reset_buffer = True
         self.alpha_history = node.alpha_history
         self.research_model_cls = self._load_research_model_class(self.model_path)
+
+    def _set_random_seed(self):
+        if self.seed == "":
+            self.seed = None
+        if self.seed is None:
+            return
+        self.seed = int(self.seed)
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.seed)
+            torch.cuda.manual_seed_all(self.seed)
+        if self.deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            torch.use_deterministic_algorithms(True)
 
     def _release_torch_cache(self, tag: str):
         gc.collect()
@@ -134,6 +159,9 @@ class ComboBase:
         return cls
 
     def Combine(self, di, ti=None):
+        if ti is not None:
+            self.loader.set_current_ti(int(ti))
+            self.reset_buffer = True
         if self.livetrading:
             return self.CombineLive(di, ti)
         return self.CombineHist(di, ti)
@@ -299,6 +327,10 @@ class ComboBase:
             self._release_torch_cache("after_old_model_replace")
 
         self.reset_buffer = True
+        if self.processed_feature_cache:
+            self.loader.set_processed_feature_cache_max_days(
+                plan.ndays + int(self.retDays) + int(self.trainDelay)
+            )
         print(
             f"[TRAIN] ds={ds} target_ds={plan.target_ds} "
             f"loading_days={plan.loading_days} raw_ndays={plan.raw_ndays} ndays={plan.ndays} tsDays={self.tsDays}"
@@ -348,24 +380,15 @@ class ComboBase:
         target_ds = self._prev_date(ds, self.trainDelay)
         train_day = self.isTrainDay(target_ds)
         if not self.modelDir:
-            print(f"[TRAIN-CHECK] ds={ds} target_ds={target_ds} checkpoint=disabled train_day={train_day} -> {train_day}")
             return train_day
         model_day = self.LoadCheckpointModel(self.modelDir, target_ds)
         if model_day is False:
-            print(f"[TRAIN-CHECK] ds={ds} target_ds={target_ds} model_day=None train_day={train_day} -> {train_day}")
             return train_day
         if model_day == target_ds:
-            print(f"[TRAIN-CHECK] ds={ds} target_ds={target_ds} model_day={model_day} exact_match=True -> False")
             return False
         model_didx = self.loader.date2didx(model_day)
         target_didx = self.loader.date2didx(target_ds)
-        outdated = target_didx - model_didx > 30
-        decision = outdated
-        print(
-            f"[TRAIN-CHECK] ds={ds} target_ds={target_ds} model_day={model_day} "
-            f"train_day={train_day} outdated={outdated} -> {decision}"
-        )
-        return decision
+        return target_didx - model_didx > 30
 
     def isTrainDay(self, ds: int) -> bool:
         didx = self.loader.date2didx(ds)

@@ -13,15 +13,14 @@ Main types:
 | `Universe` | Shared axis metadata: `dates`, `codes`, `dtype`, `date2idx()`, `idx2date()`, `code2idx()`. |
 | `DataItem` | One declared data source from config: `name`, `module`, `path`, `role`, `ops`, `params`. |
 | `OpSpec` | One data item op declaration. |
-| `DataRegistry` | Maintains all data tensors, module cache, raw/processed load state, and `get_data(name)`. |
+| `DataRegistry` | Maintains processed data tensors, module cache, load state, and `get_data(name)`. |
 
 Data cache model:
 
 ```text
-raw_cache[name]          # aligned raw [T, N]
 processed_cache[name]    # aligned processed [T, N]
-raw_loaded[name]         # loaded date bitmap
 processed_loaded[name]   # processed date bitmap
+module_cache[...]        # reader objects / module-local helpers
 ```
 
 Data load flow:
@@ -31,11 +30,9 @@ DataRegistry._ensure_range(names, start_ds, end_ds)
   -> _ensure_processed_range(name, start_ds, end_ds)
      -> resolve op requirements: dependencies and lookback
      -> _ensure_processed_range(dep, ...)
-     -> _ensure_raw_range(name, raw_start_ds, end_ds)
-        -> module function(item, registry, start_ds, end_ds)
-        -> validate returned shape [R, N]
-        -> write raw_cache
-     -> _apply_ops(item, raw_window, lo_idx, hi_idx)
+     -> module function(item, registry, start_ds, end_ds)
+     -> validate returned shape [R, N]
+     -> _apply_ops(item, loaded_window, lo_idx, hi_idx)
      -> write processed_cache
 
 DataRegistry.get_data(name)
@@ -46,7 +43,7 @@ Supported built-in modules:
 
 | Module | Responsibility |
 |---|---|
-| `builtin.factor` | Read Memmaper2 factor data. |
+| `builtin.factorsim` | Read factor or AshareCache data. 2-D sources enter the registry directly; 3-D sources enter the item ops pipeline as cube-like tensors after `nbar` bar-window selection. |
 | `builtin.label` | Read DailyLabel data. |
 | `builtin.alpha_parquet` | Read alpha parquet and align columns to `Universe.codes`. |
 | `builtin.barra_style` | Read Barra CNE5 style exposure data. |
@@ -55,14 +52,15 @@ Supported item ops:
 
 | Op | Responsibility |
 |---|---|
-| `cs_zscore` / `zscore` | Cross-sectional zscore per date. |
+| `cs_zscore` / `zscore` | Zscore on the requested axis. |
+| `rank` | Rank on the requested axis; optional `pct` keeps percentile rank semantics. |
+| `last` / `mean` / `std` / `sum` / `max` / `min` | Axis reducers. These remove the named axis and are how cube pipelines aggregate into final `[date, code]` panels. |
 | `truncate` | Clamp by `min` and `max`. |
 | `nan_to_num` / `fillna` | Fill NaN/inf with `value`. |
-| `winsorize_by_quantile` | Row-wise quantile winsorization. |
-| `normalize_by_max_abs` | Row-wise max-abs normalization. |
+| `winsorize_by_quantile` | Quantile winsorization on the requested axis. |
+| `normalize_by_max_abs` | Max-abs normalization on the requested axis. |
+| `rolling_mean` / `rolling_std` | Rolling ops over an approved axis, defaulting to `date`. |
 | `neut(name, ..., ratio)` | Neutralize against one or more data dependencies; optional final `ratio` defaults to `1.0` and may be a per-dependency ratio array. |
-| `delay(n)` | Shift data by `n` trading days. |
-| `ts_mean(n)` / `ts_avg(n)` | Rolling mean over `n` trading days. |
 
 ## ComboDataLoader
 
@@ -98,6 +96,11 @@ ComboDataLoader.gen_feature(ds)
   -> write feature cache
   -> return [N, F]
 ```
+
+Feature cache note:
+
+- `feature cache` here means the final post-processed daily feature tensor keyed by `(ds, current_ti)`.
+- It does not imply a persistent cache of raw 3-D minute cubes loaded from `builtin.factorsim`.
 
 Label flow:
 

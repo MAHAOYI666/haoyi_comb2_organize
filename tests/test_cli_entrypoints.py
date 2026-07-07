@@ -55,7 +55,7 @@ def test_run_combo_help_and_missing_config():
 def test_run_eval_help_and_missing_config():
     help_proc = run_cli("runEval.py", "-h")
     assert help_proc.returncode == 0
-    assert "Evaluate comb2 signals" in help_proc.stdout
+    assert "Evaluate comb2 config outputs or local parquet/csv artifacts" in help_proc.stdout
 
     missing_proc = run_cli("runEval.py")
     assert missing_proc.returncode == 2
@@ -97,7 +97,7 @@ def test_run_eval_specialized_modes(tmp_path):
     )
     daily_ic_path = tmp_path / "daily_ic.csv"
     daily_ic.to_csv(daily_ic_path)
-    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--input-is-ic", "--normalize-names")
+    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--normalize-names")
     assert sim_proc.returncode == 0
     assert "1d_IC.avg" in sim_proc.stdout
 
@@ -116,7 +116,7 @@ def test_run_eval_specialized_modes(tmp_path):
     )
     daily_pnl_path = tmp_path / "daily_pnl.csv"
     daily_pnl.to_csv(daily_pnl_path)
-    pnl_proc = run_cli("runEval.py", "--pnl", str(daily_pnl_path), "--input-is-pnl")
+    pnl_proc = run_cli("runEval.py", "--pnl", str(daily_pnl_path))
     assert pnl_proc.returncode == 0
     assert "ret_pct" in pnl_proc.stdout
 
@@ -127,6 +127,40 @@ def test_run_eval_specialized_modes(tmp_path):
     va_proc = run_cli("runEval.py", "--va", str(daily_pnl_path), str(new_pnl_path), "--weights", "0.1,0.2")
     assert va_proc.returncode == 0
     assert "0.10" in va_proc.stdout
+
+
+def test_run_eval_single_modes_reject_config(tmp_path):
+    daily_ic = pd.DataFrame(
+        {"ic": [0.01], "5dic": [0.02], "rankic": [0.03], "percic": [0.04], "coverage": [1.0]},
+        index=pd.to_datetime(["2020-01-02"]),
+    )
+    daily_ic_path = tmp_path / "daily_ic.parquet"
+    daily_ic.to_parquet(daily_ic_path)
+    config_path = tmp_path / "config.xml"
+    config_path.write_text("<config />\n", encoding="utf-8")
+
+    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--config", str(config_path))
+    assert sim_proc.returncode == 2
+    assert "single-item mode" in sim_proc.stderr
+
+
+def test_run_eval_corr_defaults_to_last_240_days(tmp_path):
+    dates = pd.date_range("2020-01-01", periods=300, freq="B")
+    columns = ["000001", "000002", "000003"]
+    left = pd.DataFrame([[1.0, 2.0, 3.0]] * len(dates), index=dates, columns=columns)
+    right = left.copy()
+    right.iloc[:60] = [3.0, 2.0, 1.0]
+
+    left_path = tmp_path / "left_300.parquet"
+    right_path = tmp_path / "right_300.parquet"
+    left.to_parquet(left_path)
+    right.to_parquet(right_path)
+
+    corr_proc = run_cli("runEval.py", "--corr", str(left_path), str(right_path), "--min-valid", "2")
+    assert corr_proc.returncode == 0
+    assert "corr_days: 240" in corr_proc.stdout
+    assert "n_days: 240" in corr_proc.stdout
+    assert "avg_corr: 1.00" in corr_proc.stdout
 
 
 def test_combo_runner_help_and_missing_config():

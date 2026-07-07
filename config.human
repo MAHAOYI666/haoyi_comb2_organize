@@ -114,7 +114,6 @@ runEval config.xml
 <config>
   <constants
     cache_path="data/Cache"
-    factor_root="data/Factor/FactorData"
     output_root="output"
     checkpoint_root=""
   />
@@ -143,6 +142,8 @@ runEval config.xml
 
     <runtime
       snaptime="mlp_minimal"
+      snap_ti=""
+      seed="42"
       livetrading="false"
       trainDelay="0"
       retDays="1"
@@ -169,7 +170,6 @@ runEval config.xml
       scheduler_gamma="0.5"
       grad_clip="10.0"
       early_stopping_patience="5"
-      seed="42"
     />
 
     <data
@@ -181,8 +181,8 @@ runEval config.xml
       filtered_path=""
       base_universe_path=""
     >
-      <item name="factor.example_1" module="builtin.factor" path="example_factor_1" role="factor" display_name="example_factor_1" />
-      <item name="factor.example_2" module="builtin.factor" path="example_factor_2" role="factor" display_name="example_factor_2">
+      <item name="factor.example_1" module="builtin.factorsim" path="example_factor_1" role="factor" display_name="example_factor_1" />
+      <item name="factor.example_2" module="builtin.factorsim" path="example_factor_2" role="factor" display_name="example_factor_2">
         <op name="cs_zscore" />
         <op name="truncate" min="-4" max="4" />
         <op name="nan_to_num" value="0" />
@@ -239,8 +239,8 @@ runEval config.xml
 路径规则：
 
 - 绝对路径保持不变。
-- 相对路径相对 `config.xml` 所在目录解析。
-- `builtin.factor` 的相对 `path` 拼到 `constants.factor_root` 下。
+- 相对路径相对 `config.xml` 或 data-pack 文件所在目录解析。
+- `builtin.factorsim` 不再使用隐式 factor root；普通 factor pool 请写绝对路径，或写相对当前 XML/data-pack 的路径。
 - `builtin.label` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
 - `constants.cache_path` 会派生出 `AshareCache`，供 label、mask、Barra、回测读取使用。
 
@@ -249,7 +249,6 @@ runEval config.xml
 ```xml
 <constants
   cache_path="data/Cache"
-  factor_root="data/Factor/FactorData"
   output_root="output"
   checkpoint_root=""
 />
@@ -258,7 +257,6 @@ runEval config.xml
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `cache_path` | `data/Cache` | 行情、mask、label 等缓存根目录。运行时会使用其下的 `AshareCache`。 |
-| `factor_root` | `data/Factor/FactorData` | 内置 factor 的相对路径根目录。因子在 `ZsimPool` 下时应把 `ZsimPool` 写进这里或写进 item path。 |
 | `output_root` | `output` | alpha、日志、回测、评估报告的默认输出根目录。 |
 | `checkpoint_root` | 空 | checkpoint 根目录。空值表示不通过 constants 统一派生 checkpoint。 |
 
@@ -550,7 +548,9 @@ class ResearchModel:
 ```xml
 <runtime
   snaptime="mlp_minimal"
+  snap_ti=""
   livetrading="false"
+  deterministic="false"
   trainDelay="0"
   retDays="1"
   tsDays="8"
@@ -569,6 +569,9 @@ class ResearchModel:
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `snaptime` | `mlp_minimal` | 训练快照名，checkpoint 子目录会使用它。 |
+| `snap_ti` | 空 | 默认数据时点；空值时使用该数据频率最后一个可用时点。对 3D `builtin.factorsim` 数据会影响日内切片位置。 |
+| `seed` | 空 | 运行级随机种子；会用于 `random`、`numpy`、`torch`，并在有 CUDA 时同步设置 CUDA seed。 |
+| `deterministic` | `false` | 是否开启 PyTorch deterministic 模式。开启后通常更可复现，但可能变慢，且部分算子可能报 deterministic 限制。 |
 | `livetrading` | `false` | `false` 为历史训练/回测流程。 |
 | `trainDelay` | `0` | 训练目标相对当前日期的延迟。 |
 | `retDays` | `1` | 训练 label 的收益 horizon。 |
@@ -582,6 +585,11 @@ class ResearchModel:
 | `select_days` | `100` | 训练样本选择窗口参数。普通用户通常保持默认。 |
 | `max_train_days` | `2000` | 每次训练最多加载的训练日数。 |
 | `verbose` | `false` | 是否打印更详细进度。 |
+
+补充说明：
+
+- `snap_ti` 是默认时点上下文。若调用方在运行时显式传入 `ti`，运行时 `ti` 会覆盖默认 `snap_ti`。
+- `snap_ti` / 运行时 `ti` 目前主要影响 3D `builtin.factorsim` 数据在某个交易日内截取到哪个时点，以及 `nbar` 选窗后的可见 `bar` 轴范围。
 
 常用调优：
 
@@ -608,7 +616,6 @@ class ResearchModel:
   scheduler_gamma="0.5"
   grad_clip="10.0"
   early_stopping_patience="5"
-  seed="42"
 />
 ```
 
@@ -627,12 +634,13 @@ class ResearchModel:
   dtype="float16"
   compression="none"
   data_start_ds="20160101"
+  data_offset="1024"
   ashare_data_path=""
   valid_path=""
   filtered_path=""
   base_universe_path=""
 >
-  <item name="factor.example_1" module="builtin.factor" path="example_factor_1" role="factor" />
+  <item name="factor.example_1" module="builtin.factorsim" path="example_factor_1" role="factor" />
   <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
 </data>
 ```
@@ -644,6 +652,7 @@ class ResearchModel:
 | `dtype` | `float16` | loader 输出 dtype。 |
 | `compression` | `none` | 内部特征缓存压缩：`none`、`fp4`、`fp8`。 |
 | `data_start_ds` | `20160101` | 数据业务起点。 |
+| `data_offset` | `1024` | 交易日轴起始偏移；会在构建 universe 时跳过更早的 mask/date 数据。通常保持默认，只有明确知道需要更早历史或更小 universe 起点时再改。 |
 | `ashare_data_path` | 空 | AshareCache 根目录；空值时从 `constants.cache_path` 派生。 |
 | `valid_path` | 空 | valid mask 路径；空值时从 AshareCache 派生。 |
 | `filtered_path` | 空 | filtered mask 路径；空值时从 AshareCache 派生。 |
@@ -662,8 +671,22 @@ class ResearchModel:
 ### 13.2 item
 
 ```xml
-<item name="factor.example" module="builtin.factor" path="example_factor" role="factor" display_name="example_factor" />
+<item name="factor.example" module="builtin.factorsim" path="example_factor" role="factor" display_name="example_factor" />
 <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+```
+
+3D `builtin.factorsim` 示例：
+
+```xml
+<item
+  name="factor.grid_close_mean_5"
+  module="builtin.factorsim"
+  path="1m_Grid1mBar/Grid1mBar.close"
+  role="factor"
+  nbar="5"
+>
+  <op name="mean" axis="bar" />
+</item>
 ```
 
 | 属性 | 说明 |
@@ -678,12 +701,33 @@ class ResearchModel:
 
 | module | 用途 |
 |---|---|
-| `builtin.factor` | 从 `constants.factor_root` 下读取因子。 |
+| `builtin.factorsim` | 读取 factor 或 AshareCache 数据；绝对路径直读，相对路径相对当前 XML/data-pack 文件。 |
 | `builtin.label` | 从 AshareCache label 路径读取 label。 |
 | `builtin.alpha_parquet` | 读取本地 alpha parquet 矩阵。 |
 | `builtin.barra_style` | 读取 Barra 风格因子。 |
 
 当前只支持一个训练 label。多个 factor 会按 item 顺序组成 feature。
+
+`builtin.factorsim` 补充约定：
+
+- 2D 数据源：直接按日读取，不接受 `nbar`、`freq` 这些参数。
+- 3D 数据源：可以声明 `nbar`，也可以只声明 `freq`。`nbar` 只负责在后续 `<op>` 执行前，把 `bar` 轴裁成最后 `nbar` 个位置；不负责聚合。
+- 如果 3D 数据源没有显式写 `nbar`，系统会根据 `freq` 给出该频率的默认全量 `bar` 数。
+- 3D 数据的可见时点仍由运行时 `ti` 决定；若未显式传入，则使用 `snap_ti`，再否则使用默认最后可用时点。
+- 所有聚合都通过 `<op>` 表达，例如 `mean(axis="bar")`、`last(axis="bar")`。
+
+实测时间轴说明：
+
+- 当前本机 `AshareCache/1m_Grid1mBar/Grid1mBar.close` 按天实际可读出 `239` 个时点：
+  上午 `09:30:00` 到 `11:30:00` 共 `121` 个，下午 `13:01:00` 到 `15:00:00` 共 `118` 个。
+- 当前本机 `AshareCache/5m_Intv5mBar/Intv5mBar.close` 按天实际可读出 `49` 个时点，不是 `48` 个：
+  上午从 `09:30:00` 到 `11:30:00` 共 `25` 个，下午从 `13:05:00` 到 `14:55:00` 共 `23` 个，外加收盘时点 `15:00:00`。
+- 也就是说，5 分钟序列在这套数据里包含最后一个单独的 `15:00:00` 时点。
+
+常用下标示例：
+
+- `1m`：`0 -> 093000`，`120 -> 113000`，`121 -> 130100`，`238 -> 150000`
+- `5m`：`0 -> 093000`，`24 -> 113000`，`25 -> 130500`，`48 -> 150000`
 
 ### 13.3 import
 
@@ -709,8 +753,8 @@ data-pack 文件只写数据声明，不写完整任务配置：
 
 ```xml
 <data-pack>
-  <item name="factor.turn20" module="builtin.factor" path="turn20" role="factor" />
-  <item name="factor.size" module="builtin.factor" path="size" role="aux" />
+  <item name="factor.turn20" module="builtin.factorsim" path="turn20" role="factor" />
+  <item name="factor.size" module="builtin.factorsim" path="size" role="aux" />
 </data-pack>
 ```
 
@@ -719,9 +763,8 @@ data-pack 文件只写数据声明，不写完整任务配置：
 `<op>` 是 item 级预处理，写在对应 `<item>` 下：
 
 ```xml
-<item name="factor.example" module="builtin.factor" path="example_factor" role="factor">
-  <op name="delay" days="1" />
-  <op name="ts_mean" window="5" />
+<item name="factor.example" module="builtin.factorsim" path="example_factor" role="factor">
+  <op name="rolling_mean" window="5" />
   <op name="neut(barra.size, barra.btop)" />
   <op name="neut(['size', 'beta', 'sizenl'], 0.5)" />
   <op name="cs_zscore" />
@@ -735,13 +778,28 @@ data-pack 文件只写数据声明，不写完整任务配置：
 | op | 说明 |
 |---|---|
 | `cs_zscore` / `zscore` | 截面 z-score。 |
+| `rank` | 排名，可选 `axis`、`pct`。 |
+| `last` | 沿指定轴取最后一个位置；必须显式给 `axis`。 |
+| `mean` | 沿指定轴求均值；必须显式给 `axis`。 |
+| `std` | 沿指定轴求标准差；必须显式给 `axis`。 |
+| `sum` | 沿指定轴求和；必须显式给 `axis`。 |
+| `max` | 沿指定轴取最大值；必须显式给 `axis`。 |
+| `min` | 沿指定轴取最小值；必须显式给 `axis`。 |
 | `truncate` | 截断到 `min`/`max`。 |
 | `nan_to_num` / `fillna` | 缺失和无穷替换为指定值。 |
-| `winsorize_by_quantile` | 分位数 winsorize，参数 `low`、`high`。 |
-| `normalize_by_max_abs` | 按最大绝对值归一化。 |
+| `winsorize_by_quantile` | 分位数 winsorize，参数 `low`、`high`，可选 `axis`。 |
+| `normalize_by_max_abs` | 按最大绝对值归一化，可选 `axis`。 |
+| `rolling_mean` | 滚动均值，参数 `window`，默认作用在 `date` 轴；可选 `axis`。 |
+| `rolling_std` | 滚动标准差，参数 `window`，默认作用在 `date` 轴；可选 `axis`。 |
 | `neut(...)` | 对一个或多个已注册数据做中性化；依赖可逐个写，也可写成列表；末尾数值为扣除比例，默认 `1.0`，也可写成与依赖等长的比例列表。 |
-| `delay` | 日期延迟，参数 `days`/`periods`/`n`。 |
-| `ts_mean` / `ts_avg` | 时间窗口均值，参数 `window`/`days`/`n`。 |
+
+其中轴语义统一用命名轴：
+
+- `axis="date"`
+- `axis="bar"`
+- `axis="code"`
+
+对于 3D cube item，系统会先应用 `nbar` 选窗，再按 `<op>` 顺序执行。最终 pipeline 必须收敛成 `[date, code]` 才能进入 `processed_cache`。
 
 如果只需要改 item 级处理，优先用 `<op>`。如果要改完整 feature/label 生成逻辑，再接入 `ResearchLoader`。
 
@@ -870,7 +928,7 @@ def load_data(item, registry, start_ds: int, end_ds: int):
 | shape | `[R, N]`，`R` 是日期数，`N` 是股票数。 |
 | 缺失值 | 用 `NaN`。 |
 | 对齐 | 日期和股票顺序必须对齐 `registry.universe.dates` / `registry.universe.codes`。 |
-| 预处理 | delay、rolling、neutralize 等建议写在 `<op>` 或 `ResearchLoader`。 |
+| 预处理 | rolling、neutralize 等建议写在 `<op>` 或 `ResearchLoader`。 |
 
 ## 16. backtest
 
@@ -1063,6 +1121,8 @@ runEval --pnl output/backtest/daily_pnl.csv --input-is-pnl --pnlzz500 pnlzz500.t
 runEval --corr pos_a.parquet pos_b.parquet
 ```
 
+默认只看最近 240 个重叠交易日。
+
 常用参数：
 
 ```bash
@@ -1168,8 +1228,7 @@ comb-pos-corr pos_a.parquet pos_b.parquet --min-valid 1000
 检查：
 
 - `constants.cache_path` 是否指向包含 `AshareCache` 的根目录。
-- `constants.factor_root` 是否包含真实因子目录；若因子在 `ZsimPool` 下，需要把 `ZsimPool` 写进 `factor_root` 或 item path。
-- `<item module="builtin.factor" path="...">` 是否能在 `factor_root` 下找到。
+- `<item module="builtin.factorsim" path="...">` 的绝对路径是否存在，或相对路径是否能相对当前 XML/data-pack 文件找到。
 - label 默认路径是否存在：`AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d`。
 - `strategy.start_ds/end_ds` 是否落在数据日期范围内。
 

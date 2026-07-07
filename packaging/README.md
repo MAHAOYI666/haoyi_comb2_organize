@@ -24,8 +24,12 @@ dist_protected/*.whl
 Install the wheel in a Python 3.13 environment:
 
 ```bash
-python -m pip install dist_protected/comb2_organize-0.1.3-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-<version>-cp313-cp313-linux_x86_64.whl
 ```
+
+Exact release version and current install target are tracked in `../RELEASE.md`.
+
+The published distribution name is `Combo2`; wheel filenames are normalized to lowercase by packaging rules.
 
 Run after installation:
 
@@ -40,7 +44,7 @@ The numpy pin follows `../aresium/pdm.lock`; pandas and pyarrow follow the
 Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
 `python3.13` is not on `PATH`, pass an absolute path with `--python`.
 
-The resulting wheel contains all local comb2_organize runtime code. Third-party
+The resulting wheel contains all local Combo2 runtime code. Third-party
 packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
 psutil, and Plotly are not bundled into the wheel; they are declared in the
 wheel metadata so `pip install` can resolve and install them for the target

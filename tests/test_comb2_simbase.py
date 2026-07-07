@@ -98,7 +98,6 @@ def test_memmaper2_reads_real_local_cache():
     assert frame.shape[1] == len(IndexMask().code)
     assert "000001" in frame.columns
 
-
 @pytest.mark.skipif(not (REAL_CACHE / "AshareCache").exists(), reason="local AshareCache is unavailable")
 def test_local_benchmark_returns_match_manual_index_weight_formula():
     dates = [20200102, 20200103, 20200106]
