@@ -5,18 +5,24 @@ references, and install targets.
 
 ## Current Release
 
-- Version: `0.1.5`
-- Release date: `2026-07-08`
+- Version: `0.1.6`
+- Release date: `2026-07-09`
 - Package name: `Combo2`
-- Protected wheel: `dist_protected/combo2-0.1.5-cp313-cp313-linux_x86_64.whl`
+- Protected wheel: `dist_protected/combo2-0.1.6-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `Combo2 0.1.5`
+- Installed target in this workspace: `python3` (`Python 3.13.11`), package `Combo2 0.1.6`
 
 Install the current wheel:
 
 ```bash
-python -m pip install dist_protected/combo2-0.1.5-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-0.1.6-cp313-cp313-linux_x86_64.whl
 ```
+
+## 0.1.6
+
+Changes:
+
+- Changed the local ZZ500 benchmark helper from adjusted `pre_close` to raw `real_pre_close` so benchmark plots and summaries follow a price-index style series instead of a reinvested total-return style series.
 
 ## 0.1.5
 

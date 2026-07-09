@@ -106,8 +106,8 @@ def test_local_benchmark_returns_match_manual_index_weight_formula():
 
     weights = Memmaper2(REAL_CACHE / "AshareCache" / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
     close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    preclose = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    stock_ret = close / preclose - 1.0
+    prev_close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.real_pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    stock_ret = close / prev_close - 1.0
 
     for row_idx in (1, 2):
         w = weights.iloc[row_idx].to_numpy(dtype=float)
@@ -118,3 +118,25 @@ def test_local_benchmark_returns_match_manual_index_weight_formula():
 
     series = benchmark_returns_from_cache(REAL_CACHE, dates)
     np.testing.assert_allclose(series.to_numpy(), returns)
+
+
+@pytest.mark.skipif(not (REAL_CACHE / "AshareCache").exists(), reason="local AshareCache is unavailable")
+def test_local_benchmark_uses_raw_previous_close_instead_of_adjusted_previous_close():
+    dates = [20150602, 20150603, 20150604]
+    bench = load_index_benchmark(REAL_CACHE, dates[0], dates[-1], ts_code="000905.SH")
+    actual = bench["close"].pct_change().fillna(0.0).to_numpy()
+
+    weights = Memmaper2(REAL_CACHE / "AshareCache" / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    preclose = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+
+    adjusted = []
+    for row_idx in range(len(dates)):
+        w = weights.iloc[row_idx].to_numpy(dtype=float)
+        r = (close.iloc[row_idx].to_numpy(dtype=float) / preclose.iloc[row_idx].to_numpy(dtype=float)) - 1.0
+        valid = np.isfinite(w) & np.isfinite(r) & (w != 0)
+        denom = np.sum(w[valid])
+        adjusted.append(np.sum(w[valid] * r[valid]) / denom if denom != 0 else np.nan)
+    adjusted = np.asarray(adjusted, dtype=float)
+
+    assert not np.allclose(actual[1:], adjusted[1:])

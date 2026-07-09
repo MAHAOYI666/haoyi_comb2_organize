@@ -23,20 +23,21 @@ def load_index_benchmark(
     root = ashare_cache_path(cache_path)
     weight_path = root / "1d_IndexWeight" / f"IndexWeight.{ts_code}"
     close_path = root / "1d_DailyKline" / "DailyKline.close"
-    preclose_path = root / "1d_DailyKline" / "DailyKline.pre_close"
-    for path in (weight_path, close_path, preclose_path):
+    prev_close_path = root / "1d_DailyKline" / "DailyKline.real_pre_close"
+    for path in (weight_path, close_path, prev_close_path):
         if not path.exists():
             raise FileNotFoundError(f"benchmark cache path not found: {path}")
 
     weights = Memmaper2(str(weight_path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].astype(float)
     close = Memmaper2(str(close_path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].astype(float)
-    preclose = Memmaper2(str(preclose_path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].astype(float)
-    common = weights.columns.intersection(close.columns).intersection(preclose.columns)
+    prev_close = Memmaper2(str(prev_close_path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].astype(float)
+    common = weights.columns.intersection(close.columns).intersection(prev_close.columns)
     if common.empty:
         raise ValueError(f"benchmark cache has no common stock columns for {ts_code}")
 
     weights = weights.loc[:, common].reindex(close.index)
-    stock_ret = close.loc[:, common] / preclose.loc[:, common] - 1.0
+    # Use the raw previous close so the benchmark matches a price-index style series.
+    stock_ret = close.loc[:, common] / prev_close.loc[:, common] - 1.0
     valid = np.isfinite(stock_ret.to_numpy(dtype=float)) & np.isfinite(weights.to_numpy(dtype=float)) & (weights.to_numpy(dtype=float) != 0)
     weighted = weights.to_numpy(dtype=float)
     returns = stock_ret.to_numpy(dtype=float)
