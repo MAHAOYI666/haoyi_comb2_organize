@@ -54,16 +54,17 @@ class FP4Codec:
 
     def _quantize(self, x: torch.Tensor) -> torch.Tensor:
         x32 = x.to(dtype=torch.float32)
-        if not torch.isfinite(x32).all().item():
-            raise ValueError("FP4Codec input must be finite; call nan_to_num before encode")
+        finite = torch.isfinite(x32)
 
         values = self.fp4_sorted
-        pos = torch.searchsorted(values, x32)
+        safe = torch.where(finite, x32, torch.zeros_like(x32))
+        pos = torch.searchsorted(values, safe)
         pos = pos.clamp(min=1, max=14)
         left = values[pos - 1]
         right = values[pos]
-        use_right = (x32 - left).abs() > (right - x32).abs()
-        return torch.where(use_right, pos, pos - 1).to(torch.uint8)
+        use_right = (safe - left).abs() > (right - safe).abs()
+        codes = torch.where(use_right, pos, pos - 1).to(torch.uint8)
+        return torch.where(finite, codes, torch.full_like(codes, FP4_RESERVED_CODE))
 
     def encode_into(self, buf: torch.Tensor, meta: CodecMeta, idx, x: torch.Tensor) -> None:
         validate_input_device(x, meta, "FP4Codec")

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 import os
 import time
-from typing import Any, Iterable, Protocol, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -14,40 +14,142 @@ from torch.utils.data import Dataset
 
 from .codec import Codec, PassthroughCodec, build_codec
 from .DataRegistry import (
+    BAR_COUNT_BY_FREQ,
+    CANONICAL_BAR_TIMES,
     DataItem as _DataItem,
     DataRegistry as _DataRegistry,
+    FREQ_ORDER,
     LoadStats,
     MASK,
     Universe,
     _coerce_data_item,
     _maybe_section,
     _require_memmaper2_cls,
+    item_freq,
 )
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, to_bool_mask, truncate, winsorize_by_quantile
 
 from vendor.perf_monitor import print_progress
 
 
-class FeatureSource(Protocol):
-    feature_dim: int
+@dataclass(frozen=True)
+class FeatureGroups(MappingABC):
+    data: dict[str, torch.Tensor]
+    freqs: tuple[str, ...] | None = None
 
-    def load_day(self, ds: int) -> torch.Tensor:
-        ...
+    def __post_init__(self):
+        normalized = {str(freq): tensor for freq, tensor in self.data.items()}
+        object.__setattr__(self, "data", normalized)
+        if self.freqs is None:
+            ordered = tuple(freq for freq in FREQ_ORDER if freq in normalized)
+            object.__setattr__(self, "freqs", ordered)
+        else:
+            freqs = tuple(str(freq) for freq in self.freqs)
+            missing = [freq for freq in freqs if freq not in normalized]
+            if missing:
+                raise KeyError(f"FeatureGroups freqs missing data: {missing}")
+            object.__setattr__(self, "freqs", freqs)
 
-    def prefetch_days(self, days: Sequence[int]):
-        ...
+    def __getitem__(self, freq: str) -> torch.Tensor:
+        return self.data[str(freq)]
+
+    def __contains__(self, freq: str) -> bool:
+        return str(freq) in self.data
+
+    def __iter__(self):
+        return iter(self.freqs)
+
+    def __len__(self) -> int:
+        return len(self.freqs)
+
+    def keys(self):
+        return self.freqs
+
+    def items(self):
+        for freq in self.freqs:
+            yield freq, self.data[freq]
+
+    def values(self):
+        for freq in self.freqs:
+            yield self.data[freq]
+
+    def to(self, device=None, dtype=None, non_blocking: bool = False) -> "FeatureGroups":
+        converted: dict[str, torch.Tensor] = {}
+        for freq, tensor in self.items():
+            if device is None and dtype is None:
+                converted[freq] = tensor
+                continue
+            kwargs: dict[str, Any] = {"non_blocking": non_blocking}
+            if device is not None:
+                kwargs["device"] = device
+            if dtype is not None:
+                kwargs["dtype"] = dtype
+            converted[freq] = tensor.to(**kwargs)
+        return FeatureGroups(converted, self.freqs)
+
+    def select_stocks(self, indices: torch.Tensor | Sequence[int]) -> "FeatureGroups":
+        selected: dict[str, torch.Tensor] = {}
+        for freq, tensor in self.items():
+            idx = indices
+            if isinstance(idx, torch.Tensor) and idx.device != tensor.device:
+                idx = idx.to(tensor.device)
+            stock_dim = self._stock_dim(freq, tensor)
+            selected[freq] = tensor.index_select(stock_dim, torch.as_tensor(idx, dtype=torch.long, device=tensor.device))
+        return FeatureGroups(selected, self.freqs)
+
+    def stock_count(self) -> int:
+        if not self.freqs:
+            return 0
+        freq = self.freqs[0]
+        tensor = self.data[freq]
+        return int(tensor.shape[self._stock_dim(freq, tensor)])
+
+    @staticmethod
+    def _stock_dim(freq: str, tensor: torch.Tensor) -> int:
+        if freq == "1d":
+            if tensor.ndim == 2:
+                return 0
+            if tensor.ndim == 3:
+                return 1
+        else:
+            if tensor.ndim == 3:
+                return 0
+            if tensor.ndim == 4:
+                return 1
+        raise ValueError(f"cannot infer stock dimension for freq={freq!r}, shape={tuple(tensor.shape)}")
+
+    @classmethod
+    def stack(cls, values: Sequence["FeatureGroups"], dim: int = 0) -> "FeatureGroups":
+        if not values:
+            raise ValueError("cannot stack empty FeatureGroups")
+        freqs = values[0].freqs
+        return cls(
+            {freq: torch.stack([value[freq] for value in values], dim=dim) for freq in freqs},
+            freqs,
+        )
 
 
-class EmptyCubeSource:
-    def __init__(self, feature_dim: int = 0, dtype: torch.dtype | None = None):
-        self.feature_dim = feature_dim
-        self.dtype = dtype or torch.float16
+class GroupCodec:
+    def __init__(self, codec: Codec, freqs: Sequence[str]):
+        self.codec = codec
+        self.freqs = tuple(freqs)
 
-    def load_day(self, ds: int) -> torch.Tensor:
-        return torch.zeros((len(MASK.code), self.feature_dim), dtype=self.dtype)
+    def allocate(self, shapes: Mapping[str, tuple[int, ...]], *, device="cpu", logical_dtype=None):
+        storage = {}
+        meta = {}
+        for freq in self.freqs:
+            storage[freq], meta[freq] = self.codec.allocate(shapes[freq], device=device, logical_dtype=logical_dtype)
+        return storage, meta
 
-    def prefetch_days(self, days: Sequence[int]):
-        return None
+    def encode_into(self, storage: Mapping[str, torch.Tensor], meta: Mapping[str, Any], idx, value: FeatureGroups) -> None:
+        for freq in self.freqs:
+            self.codec.encode_into(storage[freq], meta[freq], idx, value[freq])
+
+    def decode(self, storage: Mapping[str, torch.Tensor], meta: Mapping[str, Any], idx, out_dtype=None) -> FeatureGroups:
+        return FeatureGroups(
+            {freq: self.codec.decode(storage[freq], meta[freq], idx, out_dtype=out_dtype) for freq in self.freqs},
+            self.freqs,
+        )
 
 
 class MemmapMaskSource:
@@ -91,10 +193,11 @@ def _build_loader_data_items(config: LoaderConfig) -> tuple[_DataItem, ...]:
 
 
 class ComboDataLoader:
-    def __init__(self, config: LoaderConfig, cube_source: FeatureSource | None = None, feature_cache_size: int = 2500, label_cache_size: int = 2500):
+    def __init__(self, config: LoaderConfig, label_cache_size: int = 2500):
         self.config = config
         self.dtype = self.config.dtype
         self.codec = build_codec(self.config.compression, self.dtype)
+        self.group_codec: GroupCodec | None = None
         self.mask = MASK
         self.data_offset = max(0, int(self.config.data_offset))
         self.universe = Universe.from_mask(self.mask, self.dtype, data_offset=self.data_offset)
@@ -117,21 +220,26 @@ class ComboDataLoader:
         self.label_name = label_names[0] if label_names else None
         if not self.factor_names:
             raise ValueError("at least one role='factor' data item is required")
-        self.cube_source = cube_source or EmptyCubeSource(dtype=self.dtype)
+
+        self.factor_names_by_freq = {
+            freq: tuple(name for name in self.factor_names if item_freq(self.registry.items[name]) == freq)
+            for freq in FREQ_ORDER
+        }
+        self.freqs = tuple(freq for freq in FREQ_ORDER if self.factor_names_by_freq[freq])
+        self.num_features_by_freq = {freq: len(self.factor_names_by_freq[freq]) for freq in self.freqs}
+        self.num_features = sum(self.num_features_by_freq.values())
+        self.feature_names_by_freq = {
+            freq: tuple(str(self.registry.items[name].params.get("display_name", name)) for name in self.factor_names_by_freq[freq])
+            for freq in self.freqs
+        }
+        self.feature_names = tuple(name for freq in self.freqs for name in self.feature_names_by_freq[freq])
         self.valid_source = MemmapMaskSource(self.config.valid_path)
         self.filtered_source = MemmapMaskSource(self.config.filtered_path)
         self.base_universe_source = MemmapMaskSource(self.config.base_universe_path)
         self.monitor = None
-        self.num_features = len(self.factor_names) + self.cube_source.feature_dim
-        factor_display_names = tuple(str(self.registry.items[name].params.get("display_name", name)) for name in self.factor_names)
-        self.feature_names = factor_display_names + tuple(
-            f"cube_{idx:03d}" for idx in range(self.cube_source.feature_dim)
-        )
         self.verbose = bool(getattr(config, "verbose", False))
         self.current_ti = 150000
-        self._feature_cache: OrderedDict[tuple[int, int], torch.Tensor] = OrderedDict()
-        self._feature_cache_size = int(feature_cache_size)
-        self._label_cache: OrderedDict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
+        self._label_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
         self._label_cache_size = int(label_cache_size)
 
     def _sync_monitor_refs(self):
@@ -141,11 +249,7 @@ class ComboDataLoader:
         self.registry.set_current_ti(self.current_ti)
 
     def set_current_ti(self, ti: int):
-        ti = int(ti)
-        if ti == self.current_ti:
-            return
-        self.current_ti = ti
-        self._feature_cache.clear()
+        self.current_ti = int(ti)
 
     def date2didx(self, ds: int) -> int:
         didx = self.universe.date2idx(int(ds))
@@ -159,73 +263,73 @@ class ComboDataLoader:
         aligned = self.didx2date(self.date2didx(ds))
         return max(aligned, self.data_start_ds)
 
-    def set_processed_feature_cache_enabled(self, enabled: bool):
-        if not enabled:
-            self._feature_cache_size = 0
-            self._feature_cache.clear()
+    def _label_cache_get(self, key: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor] | None:
+        return self._label_cache.get(key)
 
-    def set_processed_feature_cache_max_days(self, days: int):
-        self._feature_cache_size = max(0, int(days))
-        if self._feature_cache_size == 0:
-            self._feature_cache.clear()
+    def _label_cache_set(self, key: tuple[int, int], value: tuple[torch.Tensor, torch.Tensor]) -> None:
+        if self._label_cache_size <= 0:
             return
-        self._cache_trim(self._feature_cache, self._feature_cache_size)
+        self._label_cache[key] = value
+        while len(self._label_cache) > self._label_cache_size:
+            oldest = next(iter(self._label_cache))
+            del self._label_cache[oldest]
 
-    def _cache_get(self, cache: OrderedDict, key):
-        cached = cache.get(key)
-        if cached is not None:
-            cache.move_to_end(key)
-        return cached
+    def feature_group_shapes(self, inst_count: int) -> dict[str, tuple[int, ...]]:
+        shapes: dict[str, tuple[int, ...]] = {}
+        for freq in self.freqs:
+            feature_count = self.num_features_by_freq[freq]
+            if freq == "1d":
+                shapes[freq] = (int(inst_count), feature_count)
+            else:
+                shapes[freq] = (int(inst_count), BAR_COUNT_BY_FREQ[freq], feature_count)
+        return shapes
 
-    def _cache_set(self, cache: OrderedDict, key, value, max_size: int):
-        if max_size <= 0:
-            return
-        cache[key] = value
-        cache.move_to_end(key)
-        self._cache_trim(cache, max_size)
+    def _group_codec(self) -> GroupCodec:
+        if self.group_codec is None:
+            self.group_codec = GroupCodec(self.codec, self.freqs)
+        return self.group_codec
 
-    def _cache_trim(self, cache: OrderedDict, max_size: int):
-        while len(cache) > max_size:
-            cache.popitem(last=False)
-
-    def build_raw_feature(self, ds: int) -> torch.Tensor:
+    def build_raw_feature(self, ds: int) -> FeatureGroups:
         self._sync_monitor_refs()
         with _maybe_section(self.monitor, "gen_feature.feature_load", ds, level="full"):
             self.registry._ensure_range(self.factor_names, ds, ds)
             idx = self.universe.date2idx(ds)
-            factor = torch.stack(
-                [self.registry.get_data(name)[idx].to(torch.float32) for name in self.factor_names],
-                dim=-1,
-            )
-        with _maybe_section(self.monitor, "gen_feature.cube_load", ds, level="full"):
-            cube = self.cube_source.load_day(ds).to(torch.float32)
-        if cube.shape[1] == 0:
-            feature = factor
-        else:
-            feature = torch.cat([factor, cube], dim=-1)
-        feature[torch.isinf(feature)] = torch.nan
-        return feature
+            groups: dict[str, torch.Tensor] = {}
+            for freq in self.freqs:
+                tensors = [self.registry.get_data(name)[idx].to(torch.float32) for name in self.factor_names_by_freq[freq]]
+                if freq == "1d":
+                    group = torch.stack(tensors, dim=-1)
+                else:
+                    group = torch.stack([tensor.transpose(0, 1) for tensor in tensors], dim=-1)
+                group[torch.isinf(group)] = torch.nan
+                groups[freq] = group
+        return FeatureGroups(groups, self.freqs)
 
-    def preprocess_feature(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
-        with _maybe_section(self.monitor, "gen_feature.cs_zscore", ds, level="full"):
+    def preprocess_daily_features(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
+        with _maybe_section(self.monitor, "gen_feature.1d_cs_zscore", ds, level="full"):
             feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
-        with _maybe_section(self.monitor, "gen_feature.truncate_nan_to_num", ds, level="full"):
+        with _maybe_section(self.monitor, "gen_feature.1d_truncate_nan_to_num", ds, level="full"):
             feature = truncate(feature, -4.0, 4.0)
             feature = nan_to_num(feature, 0.0)
         return feature.to(self.dtype)
 
-    def _build_feature(self, ds: int) -> torch.Tensor:
-        return self.preprocess_feature(self.build_raw_feature(ds), ds)
+    def preprocess_feature_group(self, freq: str, feature: torch.Tensor, ds: int) -> torch.Tensor:
+        if freq == "1d":
+            return self.preprocess_daily_features(feature, ds)
+        return feature.to(self.dtype)
 
-    def gen_feature(self, ds: int) -> torch.Tensor:
+    def preprocess_features(self, features: FeatureGroups, ds: int) -> FeatureGroups:
+        return FeatureGroups(
+            {freq: self.preprocess_feature_group(freq, feature, ds) for freq, feature in features.items()},
+            features.freqs,
+        )
+
+    def _build_feature(self, ds: int) -> FeatureGroups:
+        return self.preprocess_features(self.build_raw_feature(ds), ds)
+
+    def gen_feature(self, ds: int) -> FeatureGroups:
         ds = self.align_date(ds)
-        cache_key = (ds, self.current_ti)
-        cached = self._cache_get(self._feature_cache, cache_key)
-        if cached is not None:
-            return cached
-        feature = self._build_feature(ds)
-        self._cache_set(self._feature_cache, cache_key, feature, self._feature_cache_size)
-        return feature
+        return self._build_feature(ds)
 
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
@@ -233,7 +337,6 @@ class ComboDataLoader:
         stats = LoadStats(request_days=len(days))
         if days:
             stats = self.registry._ensure_range(self.factor_names, min(days), max(days))
-        self.cube_source.prefetch_days(days)
         return stats
 
     def prefetch_labels(self, days: Sequence[int], ret_days: int = 1):
@@ -287,7 +390,7 @@ class ComboDataLoader:
             raise ValueError("gen_label requires one role='label' data item")
         ds = self.align_date(ds)
         cache_key = (ds, int(ret_days))
-        cached = self._cache_get(self._label_cache, cache_key)
+        cached = self._label_cache_get(cache_key)
         if cached is not None:
             return cached
 
@@ -312,19 +415,43 @@ class ComboDataLoader:
         with _maybe_section(self.monitor, "gen_label.valid_mask", ds, level="full"):
             valid_mask = self.gen_valid_mask(self.didx2date(start_didx)) & (~torch.isnan(cret))
         label = self.preprocess_label(cret, valid_mask, ds, ret_days=ret_days)
-        self._cache_set(self._label_cache, cache_key, label, self._label_cache_size)
+        self._label_cache_set(cache_key, label)
         return label
 
-    def _feature_available_mask(self, feature_window: torch.Tensor) -> torch.Tensor:
-        per_day_available = torch.isnan(feature_window).sum(dim=-1) == 0
-        return per_day_available.to(torch.float32).mean(dim=0) > 0
+    def _feature_available_mask(self, feature_window: FeatureGroups) -> torch.Tensor:
+        return torch.ones(feature_window.stock_count(), dtype=torch.bool)
 
-    def process_feature_window(self, feature_window: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _mask_window_tail_by_ti(self, feature_window: FeatureGroups) -> FeatureGroups:
+        if self.current_ti >= 150000:
+            return feature_window
+        masked: dict[str, torch.Tensor] = {}
+        for freq, tensor in feature_window.items():
+            if freq == "1d":
+                masked[freq] = tensor
+                continue
+            future_mask = torch.as_tensor(
+                np.asarray(CANONICAL_BAR_TIMES[freq], dtype=np.int64) > int(self.current_ti),
+                dtype=torch.bool,
+                device=tensor.device,
+            )
+            if not future_mask.any().item():
+                masked[freq] = tensor
+                continue
+            cur = tensor.clone()
+            cur[-1, :, future_mask, :] = torch.nan
+            masked[freq] = cur
+        return FeatureGroups(masked, feature_window.freqs)
+
+    def transform_feature_window(self, feature_window: FeatureGroups, *, stage: str) -> FeatureGroups:
+        feature_window = self._mask_window_tail_by_ti(feature_window)
+        return feature_window.to(dtype=self.dtype)
+
+    def process_feature_window(self, feature_window: FeatureGroups) -> tuple[FeatureGroups, torch.Tensor]:
+        feature_window = self.transform_feature_window(feature_window, stage="predict")
         available_mask = self._feature_available_mask(feature_window)
-        feature_window = nan_to_num(feature_window, 0.0).to(self.dtype)
-        return feature_window[:, available_mask], available_mask
+        return feature_window.select_stocks(torch.where(available_mask)[0]), available_mask
 
-    def load_feature_window(self, end_ds: int, ts_days: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def load_feature_window(self, end_ds: int, ts_days: int) -> tuple[FeatureGroups, torch.Tensor]:
         end_didx = self.date2didx(end_ds)
         start_didx = max(self.data_start_didx, end_didx - ts_days + 1)
         days = [self.didx2date(didx) for didx in range(start_didx, end_didx + 1)]
@@ -332,9 +459,10 @@ class ComboDataLoader:
         if not features:
             raise ValueError("no feature data loaded")
         if len(features) < ts_days:
-            pad = [torch.full_like(features[0], torch.nan) for _ in range(ts_days - len(features))]
+            pad_data = {freq: torch.full_like(features[0][freq], torch.nan) for freq in features[0].freqs}
+            pad = [FeatureGroups(pad_data, features[0].freqs) for _ in range(ts_days - len(features))]
             features = pad + features
-        return self.process_feature_window(torch.stack(features, dim=0))
+        return self.process_feature_window(FeatureGroups.stack(features, dim=0))
 
 
 class ComboTrainDataset(Dataset):
@@ -347,22 +475,19 @@ class ComboTrainDataset(Dataset):
         ts_days: int,
         validinsts: torch.Tensor | None = None,
         load_chunk_days: int | None = None,
-        processed_feature_cache: bool = False,
         codec: Codec | None = None,
     ):
         self.loader = loader
         self.codec = codec or PassthroughCodec(loader.dtype)
+        self.group_codec = GroupCodec(self.codec, loader.freqs)
         self.end_ds = loader.align_date(end_ds)
         self.ndays = int(ndays)
         self.x_delay = int(x_delay)
         self.ts_days = int(ts_days)
         self.load_chunk_days = int(load_chunk_days or self.ts_days)
-        self.feat_size = loader.num_features
         self.end_didx = loader.date2didx(self.end_ds)
         self.start_didx = max(loader.data_start_didx + self.x_delay - 1, self.end_didx - self.ndays + 1)
         self.ndays = self.end_didx - self.start_didx + 1
-        if processed_feature_cache:
-            loader.set_processed_feature_cache_max_days(max(loader._feature_cache_size, self.ndays))
 
         monitor = getattr(loader, "monitor", None)
         instsz = len(MASK.code)
@@ -376,8 +501,12 @@ class ComboTrainDataset(Dataset):
             self.validinsts = torch.arange(instsz)
             self.numValidinsts = instsz
         with _maybe_section(monitor, "dataset_init.alloc_xyw", self.end_ds, level="full"):
-            self.X, self.X_meta = self.codec.allocate(
-                (self.ndays, self.numValidinsts, self.feat_size),
+            group_shapes = {
+                freq: (self.ndays, *shape)
+                for freq, shape in loader.feature_group_shapes(self.numValidinsts).items()
+            }
+            self.X, self.X_meta = self.group_codec.allocate(
+                group_shapes,
                 device="cpu",
                 logical_dtype=loader.dtype,
             )
@@ -418,14 +547,9 @@ class ComboTrainDataset(Dataset):
                     feature_didx = label_didx - self.x_delay + 1
                     label_ds = loader.didx2date(label_didx)
                     feature_ds = loader.didx2date(feature_didx)
-                    x = loader.gen_feature(feature_ds)
+                    x = loader.gen_feature(feature_ds).select_stocks(self.validinsts)
                     y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                    self.codec.encode_into(
-                        self.X,
-                        self.X_meta,
-                        offset,
-                        torch.nan_to_num(x[self.validinsts], nan=0.0),
-                    )
+                    self.group_codec.encode_into(self.X, self.X_meta, offset, x)
                     self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
                     self.W[offset] = w[self.validinsts].to(loader.dtype)
                     loaded_days += 1
@@ -442,7 +566,8 @@ class ComboTrainDataset(Dataset):
         return max(0, self.ndays - self.ts_days + 1)
 
     def __getitem__(self, idx: int):
-        x = self.codec.decode(self.X, self.X_meta, slice(idx, idx + self.ts_days), out_dtype=self.loader.dtype)
+        x = self.group_codec.decode(self.X, self.X_meta, slice(idx, idx + self.ts_days), out_dtype=self.loader.dtype)
+        x = self.loader.transform_feature_window(x, stage="train")
         y = self.Y[idx + self.ts_days - 1]
         w = self.W[idx + self.ts_days - 1]
         return idx, x, y, w
@@ -451,30 +576,32 @@ class ComboTrainDataset(Dataset):
 class ComboBuffer:
     def __init__(
         self,
-        feat_size: int,
+        group_shapes: Mapping[str, tuple[int, ...]],
         keepdays: int,
-        instsz: int | None = None,
         dtype: torch.dtype | None = None,
         codec: Codec | None = None,
+        freqs: Sequence[str] | None = None,
     ):
-        self.feat_size = feat_size
-        self.keepdays = keepdays
-        self.instsz = instsz or len(MASK.code)
+        self.group_shapes = dict(group_shapes)
+        self.keepdays = int(keepdays)
         self.dtype = dtype or torch.float16
         self.codec = codec or PassthroughCodec(self.dtype)
-        self.buffer, self.meta = self.codec.allocate(
-            (keepdays, self.instsz, feat_size),
+        self.freqs = tuple(freqs or self.group_shapes.keys())
+        self.group_codec = GroupCodec(self.codec, self.freqs)
+        storage_shapes = {freq: (self.keepdays, *self.group_shapes[freq]) for freq in self.freqs}
+        self.buffer, self.meta = self.group_codec.allocate(
+            storage_shapes,
             device="cpu",
             logical_dtype=self.dtype,
         )
         self.start_didx = -1
 
-    def append(self, x: torch.Tensor, didx: int):
+    def append(self, x: FeatureGroups, didx: int):
         if self.start_didx < 0:
             self.start_didx = didx
         pos = (didx - self.start_didx) % self.keepdays
-        self.codec.encode_into(self.buffer, self.meta, pos, x)
+        self.group_codec.encode_into(self.buffer, self.meta, pos, x)
 
-    def get(self, didx_list: Iterable[int]) -> torch.Tensor:
+    def get(self, didx_list: Iterable[int]) -> FeatureGroups:
         pos_list = [int((didx - self.start_didx) % self.keepdays) for didx in didx_list]
-        return self.codec.decode(self.buffer, self.meta, pos_list, out_dtype=self.dtype)
+        return self.group_codec.decode(self.buffer, self.meta, pos_list, out_dtype=self.dtype)

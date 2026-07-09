@@ -5,22 +5,36 @@ references, and install targets.
 
 ## Current Release
 
-- Version: `0.1.4`
-- Release date: `2026-07-07`
+- Version: `0.1.5`
+- Release date: `2026-07-08`
 - Package name: `Combo2`
-- Protected wheel: `dist_protected/combo2-0.1.4-cp313-cp313-linux_x86_64.whl`
+- Protected wheel: `dist_protected/combo2-0.1.5-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `Combo2 0.1.4`
+- Installed target in this workspace: `python3` (`Python 3.13.11`), package `Combo2 0.1.5`
 
 Install the current wheel:
 
 ```bash
-python -m pip install dist_protected/combo2-0.1.4-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-0.1.5-cp313-cp313-linux_x86_64.whl
 ```
 
-Current local build artifacts also include:
+## 0.1.5
 
-- `dist_protected_combo2_014/combo2-0.1.4-cp313-cp313-linux_x86_64.whl`
+Changes:
+
+- Refactored feature data around explicit frequency groups: supported `freq` values are `1d`, `5m`, and `1m`; missing `freq` defaults to `1d`; labels only support `1d`.
+- Preserved intraday cube factors end-to-end: `1d` data stays `[date, code]`, `5m` data stays `[date, 49, code]`, and `1m` data stays `[date, 239, code]` with strict canonical bar validation.
+- Added `FeatureGroups` and `GroupCodec`, exposed `FeatureGroups` from `comb2`, and changed `ComboDataLoader`, `ComboTrainDataset`, `ComboBuffer`, and `ComboBase` to pass grouped tensors to `ResearchModel`.
+- Injected `freqs` and `num_features_by_freq` into model config while retaining `num_features` as the total feature count.
+- Extended `DataRegistry.get_data(name, start_ds, end_ds)` as the public range-loading reader for declared factor, label, and aux items.
+- Removed `processed_feature_cache` from runtime config and training flow; grouped feature tensors are encoded directly through the configured codec.
+- Removed `nbar`, reducer ops, and reducer helper functions from the data-layer interface. Item ops are limited to the explicit whitelist: `cs_zscore`, `zscore`, `rank`, `truncate`, `nan_to_num`, `fillna`, `winsorize_by_quantile`, `normalize_by_max_abs`, `rolling_mean`, `rolling_std`, and `neut`.
+- Limited `neut` to `1d` data and kept rolling ops on the date axis.
+- Changed current-time handling so `current_ti` masks only future intraday bars on the final day of train/predict windows; historical days remain complete.
+- Updated FP4 codec handling so non-finite values use the reserved code instead of failing during quantization.
+- Removed the `runAblationByZero.py` CLI and its CLI tests.
+- Updated `comboHelloWorld`, `eg-lgbm`, `eg-torch`, root docs, package docs, architecture docs, and `config.human` to document `FeatureGroups`, cube/freq rules, and researcher override hooks.
+- Added and updated tests for cube feature groups, grouped codec behavior, config validation, fixed bar counts, future-bar masking, and public exports.
 
 ## 0.1.4
 

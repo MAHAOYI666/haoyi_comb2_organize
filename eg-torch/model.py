@@ -89,7 +89,7 @@ class ResearchModel:
         self.config = config
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 8))
-        self.num_features = int(config.get("num_features", 1))
+        self.num_features = int(config.get("num_features_by_freq", {}).get("1d", config.get("num_features", 1)))
         self.device = torch.device(config.get("device", "cpu"))
         self.hidden_size = int(config.get("hidden_size", 64))
         self.fc_size = int(config.get("fc_size", self.hidden_size))
@@ -147,7 +147,7 @@ class ResearchModel:
         optimizer.zero_grad(set_to_none=True)
 
     def _forward_batch(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        return self.model(x["1d"])
 
     def _compute_loss(self, pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         return self.loss_fn(pred, y, w)
@@ -227,10 +227,11 @@ class ResearchModel:
     def predict(self, x_window: torch.Tensor) -> torch.Tensor:
         if self.model is None:
             raise ValueError("model is not fitted")
-        if x_window.dim() != 3:
-            raise ValueError(f"expected 3D feature tensor, got shape={tuple(x_window.shape)}")
+        x_1d = x_window["1d"]
+        if x_1d.dim() != 3:
+            raise ValueError(f"expected 3D 1d feature tensor, got shape={tuple(x_1d.shape)}")
         self.model.eval()
-        x = x_window.unsqueeze(0).to(self.device, dtype=torch.float32)
+        x = x_1d.unsqueeze(0).to(self.device, dtype=torch.float32)
         pred = self.model(x).squeeze(0)
         return pred.detach().cpu().to(dtype=self.dtype)
 

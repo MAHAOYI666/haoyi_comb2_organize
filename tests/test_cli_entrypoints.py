@@ -174,17 +174,6 @@ def test_combo_runner_help_and_missing_config():
     assert "Traceback" not in missing_proc.stderr
 
 
-def test_ablation_help_and_missing_config():
-    help_proc = run_cli("runAblationByZero.py", "-h")
-    assert help_proc.returncode == 0
-    assert "zero-ablation" in help_proc.stdout
-
-    missing_proc = run_cli("runAblationByZero.py")
-    assert missing_proc.returncode == 2
-    assert "missing config file" in missing_proc.stderr
-    assert "Traceback" not in missing_proc.stderr
-
-
 def test_pos_corr_help_and_missing_inputs():
     help_proc = run_cli("runPosCorr.py", "-h")
     assert help_proc.returncode == 0

@@ -9,8 +9,8 @@ import torch
 import random
 
 from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
-from src.DataLoader import ComboDataLoader, LoaderConfig
-from src.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
+from src.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig
+from src.DataRegistry import CANONICAL_BAR_TIMES, DataItem, DataRegistry, OpSpec, Universe
 from src.op_utils import cs_zscore, nan_to_num, nanmean, nanstd, normalize_by_max_abs, rank, truncate, winsorize_by_quantile
 
 
@@ -559,7 +559,7 @@ def test_config_accepts_data_section_roles_and_ops(tmp_path) -> None:
                 <op name="neut(barra.size, barra.btop)" />
                 <op name="cs_zscore" />
               </item>
-              <item name="label.ret1" module="builtin.label" role="label" />
+              <item name="label.ret1" module="builtin.factorsim" role="label" />
             </data>
           </combo>
         </config>
@@ -627,17 +627,6 @@ def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch
         date = (20200101,)
         code = tuple(f"{idx + 1:06d}" for idx in range(30))
 
-    class FakeCubeSource:
-        feature_dim = 1
-
-        def load_day(self, ds: int) -> torch.Tensor:
-            cube = torch.arange(30, dtype=torch.float32).unsqueeze(-1)
-            cube[1, 0] = torch.nan
-            return cube
-
-        def prefetch_days(self, days):
-            return None
-
     monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
     factor_values = torch.zeros((1, 30), dtype=torch.float32)
     factor_values[0, 0] = torch.nan
@@ -655,8 +644,7 @@ def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch
                     params={"values": factor_values},
                 ),
             ),
-        ),
-        cube_source=FakeCubeSource(),
+        )
     )
 
     def load_tensor(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
@@ -665,14 +653,14 @@ def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch
     loader.registry.modules["test.tensor"] = load_tensor
     feature = loader._build_feature(20200101)
 
-    raw_feature = torch.cat([factor_values[0].unsqueeze(-1), FakeCubeSource().load_day(20200101)], dim=-1)
+    raw_feature = factor_values[0].unsqueeze(-1)
     expected = cs_zscore(raw_feature.transpose(0, 1)).transpose(0, 1)
     expected = nan_to_num(truncate(expected, -4.0, 4.0), 0.0)
 
-    assert torch.allclose(feature, expected, atol=1e-6)
-    assert feature[0, 0].item() == 0.0
-    assert feature[1, 1].item() == 0.0
-    assert feature[-1, 0].item() == 4.0
+    assert feature.freqs == ("1d",)
+    assert torch.allclose(feature["1d"], expected, atol=1e-6)
+    assert feature["1d"][0, 0].item() == 0.0
+    assert feature["1d"][-1, 0].item() == 4.0
 
 
 def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypatch) -> None:
@@ -683,7 +671,7 @@ def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypat
         code = ("000001", "000002", "000003")
 
     class RankLoader(ComboDataLoader):
-        def preprocess_feature(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
+        def preprocess_daily_features(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
             finite = torch.isfinite(feature)
             filled = torch.nan_to_num(feature, nan=-float("inf"))
             rank = torch.argsort(torch.argsort(filled, dim=0), dim=0).to(torch.float32)
@@ -712,7 +700,9 @@ def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypat
 
     loader.registry.modules["test.tensor"] = load_tensor
 
-    assert torch.equal(loader.gen_feature(20200101), torch.tensor([[2.0], [0.0], [1.0]]))
+    feature = loader.gen_feature(20200101)
+    assert feature.freqs == ("1d",)
+    assert torch.equal(feature["1d"], torch.tensor([[2.0], [0.0], [1.0]]))
 
 
 def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeypatch) -> None:
@@ -724,29 +714,20 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
         code = ("000001", "000002", "000003")
 
     class IdentityPreprocessLoader(ComboDataLoader):
-        def preprocess_feature(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
+        def preprocess_feature_group(self, freq: str, feature: torch.Tensor, ds: int) -> torch.Tensor:
             return feature.to(self.dtype)
 
     monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
 
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
     dates = np.array([20200101, 20200102, 20200103])
-    times = np.array([93000, 93100, 93200])
+    times = np.array(CANONICAL_BAR_TIMES["1m"], dtype=np.int64)
     columns = np.array(["000002", "000001", "000003"], dtype=object)
-    data = np.array(
-        [
-            [10.0, 1.0, 100.0],
-            [30.0, 3.0, 300.0],
-            [50.0, 5.0, 500.0],
-            [20.0, 2.0, 200.0],
-            [40.0, 4.0, 400.0],
-            [60.0, 6.0, 600.0],
-            [30.0, 3.0, 300.0],
-            [50.0, 5.0, 500.0],
-            [70.0, 7.0, 700.0],
-        ],
-        dtype=np.float64,
-    )
+    rows = []
+    for date_idx in range(len(dates)):
+        for bar_idx in range(len(times)):
+            rows.append([10_000 * date_idx + bar_idx + 10.0, 10_000 * date_idx + bar_idx + 1.0, 10_000 * date_idx + bar_idx + 100.0])
+    data = np.asarray(rows, dtype=np.float64)
     _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
 
     xml_path = tmp_path / "config.xml"
@@ -754,20 +735,19 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
         """
         <config>
           <constants cache_path="cache_root" />
-          <combo>
-            <data dtype="float32" data_start_ds="20200101" data_offset="0">
-              <item
-                name="alpha.minute_mean"
-                module="builtin.factorsim"
-                path="cache_root/AshareCache/1m_Grid1mBar/Grid1mBar.close"
-                role="factor"
-                nbar="2"
-              >
-                <op name="mean" axis="bar" />
-                <op name="rolling_mean" window="2" axis="date" />
-              </item>
-            </data>
-          </combo>
+              <combo>
+                <data dtype="float32" data_start_ds="20200101" data_offset="0">
+                  <item
+                    name="alpha.minute_cube"
+                    module="builtin.factorsim"
+                    path="cache_root/AshareCache/1m_Grid1mBar/Grid1mBar.close"
+                    role="factor"
+                    freq="1m"
+                  >
+                    <op name="rolling_mean" window="2" axis="date" />
+                  </item>
+                </data>
+              </combo>
         </config>
         """,
         encoding="utf-8",
@@ -785,9 +765,11 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
     loader.set_current_ti(93200)
     second = loader.gen_feature(20200102)
 
-    assert first.shape == (3, 1)
-    assert torch.equal(first[:, 0], torch.tensor([2.5, 25.0, 250.0]))
-    assert torch.equal(second[:, 0], torch.tensor([4.5, 45.0, 450.0]))
+    assert first.freqs == ("1m",)
+    assert first["1m"].shape == (3, len(times), 1)
+    expected_first_bar = torch.tensor([(1.0 + 10001.0) / 2.0, (10.0 + 10010.0) / 2.0, (100.0 + 10100.0) / 2.0])
+    assert torch.equal(first["1m"][:, 0, 0], expected_first_bar)
+    assert torch.equal(first["1m"], second["1m"])
 
 
 def test_date_rolling_reloads_raw_lookback_after_processed_cache_hit() -> None:
@@ -796,13 +778,10 @@ def test_date_rolling_reloads_raw_lookback_after_processed_cache_hit() -> None:
         [
             DataItem(
                 name="alpha.roll",
-                module="test.tensor3d",
+                module="test.tensor",
                 role="factor",
-                ops=(
-                    OpSpec("mean", {"axis": "bar"}),
-                    OpSpec("rolling_mean", {"window": 2, "axis": "date"}),
-                ),
-                params={"nbar": 2},
+                ops=(OpSpec("rolling_mean", {"window": 2, "axis": "date"}),),
+                params={"values": torch.tensor([[1.0, 10.0], [3.0, 30.0], [5.0, 50.0]], dtype=torch.float32)},
             )
         ],
         universe=universe,
@@ -811,30 +790,26 @@ def test_date_rolling_reloads_raw_lookback_after_processed_cache_hit() -> None:
         config_path=None,
     )
 
-    raw_by_date = {
-        20200101: torch.tensor([[1.0, 10.0], [3.0, 30.0]], dtype=torch.float32),
-        20200102: torch.tensor([[2.0, 20.0], [4.0, 40.0]], dtype=torch.float32),
-        20200103: torch.tensor([[100.0, 1000.0], [300.0, 3000.0]], dtype=torch.float32),
-    }
     load_calls = []
 
-    def load_tensor3d(item: DataItem, current_registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
-        del item, current_registry
+    def load_tensor(item: DataItem, current_registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        del current_registry
         load_calls.append((start_ds, end_ds))
-        dates = [ds for ds in universe.dates if start_ds <= ds <= end_ds]
-        return torch.stack([raw_by_date[ds] for ds in dates], dim=0)
+        lo = universe.date2idx(start_ds)
+        hi = universe.date2idx(end_ds)
+        return item.params["values"][lo : hi + 1]
 
-    registry.modules["test.tensor3d"] = load_tensor3d
+    registry.modules["test.tensor"] = load_tensor
 
     registry._ensure_range(("alpha.roll",), 20200102, 20200102)
     assert load_calls == [(20200101, 20200102)]
     assert registry.processed_loaded["alpha.roll"].tolist() == [False, True, False]
-    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.5, 25.0]))
+    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.0, 20.0]))
 
     registry._ensure_range(("alpha.roll",), 20200103, 20200103)
     assert load_calls == [(20200101, 20200102), (20200102, 20200103)]
-    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.5, 25.0]))
-    assert torch.equal(registry.get_data("alpha.roll")[2], torch.tensor([101.5, 1015.0]))
+    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.0, 20.0]))
+    assert torch.equal(registry.get_data("alpha.roll")[2], torch.tensor([4.0, 40.0]))
 
 
 def test_op_utils_axis_aware_transforms() -> None:
@@ -1005,7 +980,7 @@ def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
           <item name="factor.pack_a" module="builtin.factorsim" path="pack_a" role="factor">
             <op name="neut(size)" />
           </item>
-          <item name="label.ret1" module="builtin.label" path="vwap30_label1d" role="label" />
+          <item name="label.ret1" module="builtin.factorsim" path="vwap30_label1d" role="label" />
         </data-pack>
         """,
         encoding="utf-8",
@@ -1018,7 +993,7 @@ def test_config_import_can_filter_roles_from_data_pack(tmp_path) -> None:
           <combo>
             <data>
               <import path="{pack_path.name}" role="factor" />
-              <item name="label.local" module="builtin.label" path="vwap30_label1d" role="label" />
+              <item name="label.local" module="builtin.factorsim" path="vwap30_label1d" role="label" />
             </data>
           </combo>
         </config>
@@ -1045,7 +1020,7 @@ def test_config_resolves_builtin_label_to_ashare_cache_daily_label(tmp_path) -> 
           <constants cache_path="cache_root" />
           <combo>
             <data>
-              <item name="label.local" module="builtin.label" path="my_custom_label" role="label" />
+              <item name="label.local" module="builtin.factorsim" path="my_custom_label" role="label" />
             </data>
           </combo>
         </config>
@@ -1070,7 +1045,7 @@ def test_config_resolves_label1d_with_same_builtin_label_rule(tmp_path) -> None:
           <constants cache_path="cache_root" />
           <combo>
             <data>
-              <item name="label.local" module="builtin.label" path="label1d" role="label" />
+              <item name="label.local" module="builtin.factorsim" path="label1d" role="label" />
             </data>
           </combo>
         </config>
@@ -1495,7 +1470,7 @@ def test_data_registry_positional_axis_respects_current_tensor_rank() -> None:
     assert torch.equal(registry.get_data("alpha.axis"), rank(values, dim=None, axis=1))
 
 
-def test_data_registry_rank_and_code_axis_reductions_are_exposed() -> None:
+def test_data_registry_rank_is_whitelisted_and_reducers_are_rejected() -> None:
     values = torch.tensor(
         [
             [1.0, 10.0, 100.0],
@@ -1513,21 +1488,7 @@ def test_data_registry_rank_and_code_axis_reductions_are_exposed() -> None:
                 role="factor",
                 ops=(OpSpec("rank", {"axis": 0}),),
                 params={"values": values},
-            ),
-            DataItem(
-                name="alpha.mean",
-                module="test.tensor",
-                role="factor",
-                ops=(OpSpec("mean", {"axis": "code"}),),
-                params={"values": values},
-            ),
-            DataItem(
-                name="alpha.std",
-                module="test.tensor",
-                role="factor",
-                ops=(OpSpec("std", {"axis": "code"}),),
-                params={"values": values},
-            ),
+            )
         ]
     )
 
@@ -1538,10 +1499,30 @@ def test_data_registry_rank_and_code_axis_reductions_are_exposed() -> None:
     expected_rank = rank(values, axis=0)
 
     assert torch.equal(rank_data, expected_rank)
-    with pytest.raises(ValueError, match="pipeline must end as \\[date, code\\]"):
-        registry._ensure_range(("alpha.mean",), 20200101, 20200106)
-    with pytest.raises(ValueError, match="pipeline must end as \\[date, code\\]"):
-        registry._ensure_range(("alpha.std",), 20200101, 20200106)
+    with pytest.raises(ValueError, match="unsupported data op: mean"):
+        _fake_registry(
+            [
+                DataItem(
+                    name="alpha.mean",
+                    module="test.tensor",
+                    role="factor",
+                    ops=(OpSpec("mean", {"axis": "code"}),),
+                    params={"values": values},
+                )
+            ]
+        )
+    with pytest.raises(ValueError, match="unsupported data op: std"):
+        _fake_registry(
+            [
+                DataItem(
+                    name="alpha.std",
+                    module="test.tensor",
+                    role="factor",
+                    ops=(OpSpec("std", {"axis": "code"}),),
+                    params={"values": values},
+                )
+            ]
+        )
 
 
 def test_data_registry_neut_resolves_data_dependencies_and_aliases() -> None:
@@ -1603,12 +1584,16 @@ def test_data_registry_builtin_factorsim_2d_direct_load(tmp_path) -> None:
     assert torch.equal(loaded[3], torch.tensor([9.0, 10.0, 11.0]))
 
 
-def test_data_registry_builtin_factorsim_3d_uses_nbar_then_ops_pipeline(tmp_path) -> None:
+def test_data_registry_builtin_factorsim_3d_preserves_cube_by_freq(tmp_path) -> None:
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
-    data = np.arange(24, dtype=np.float64).reshape(8, 3)
     dates = np.array([20200102, 20200103])
-    times = np.array([93000, 93100, 93200, 93300])
-    columns = np.array(["000001", "000002", "000003"], dtype=object)
+    times = np.array(CANONICAL_BAR_TIMES["1m"], dtype=np.int64)
+    columns = np.array(["000002", "000001", "000003"], dtype=object)
+    rows = []
+    for date_idx in range(len(dates)):
+        for bar_idx in range(len(times)):
+            rows.append([10_000 * date_idx + bar_idx + 10.0, 10_000 * date_idx + bar_idx + 1.0, 10_000 * date_idx + bar_idx + 100.0])
+    data = np.asarray(rows, dtype=np.float64)
     _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
 
     universe = Universe(dates=(20200102, 20200103), codes=("000001", "000002", "000003"), dtype=torch.float32)
@@ -1619,46 +1604,6 @@ def test_data_registry_builtin_factorsim_3d_uses_nbar_then_ops_pipeline(tmp_path
                 module="builtin.factorsim",
                 path=str(cache_dir),
                 role="factor",
-                ops=(OpSpec("mean", {"axis": "bar"}),),
-                params={"nbar": 2},
-            )
-        ],
-        universe=universe,
-        data_start_ds=20200102,
-        ashare_data_path=str(tmp_path / "cache_root" / "AshareCache"),
-        config_path=None,
-    )
-
-    registry.set_current_ti(93100)
-    registry._ensure_range(("alpha.base",), 20200102, 20200103)
-    loaded = registry.get_data("alpha.base").clone()
-    assert torch.equal(loaded[0], torch.tensor([1.5, 2.5, 3.5]))
-    assert torch.equal(loaded[1], torch.tensor([13.5, 14.5, 15.5]))
-
-    registry.set_current_ti(93300)
-    registry._ensure_range(("alpha.base",), 20200102, 20200103)
-    loaded = registry.get_data("alpha.base")
-    assert torch.equal(loaded[0], torch.tensor([7.5, 8.5, 9.5]))
-    assert torch.equal(loaded[1], torch.tensor([19.5, 20.5, 21.5]))
-
-
-def test_data_registry_builtin_factorsim_3d_uses_freq_to_fill_default_nbar(tmp_path) -> None:
-    cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
-    data = np.arange(24, dtype=np.float64).reshape(8, 3)
-    dates = np.array([20200102, 20200103])
-    times = np.array([93000, 93100, 93200, 93300])
-    columns = np.array(["000001", "000002", "000003"], dtype=object)
-    _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
-
-    universe = Universe(dates=(20200102, 20200103), codes=("000001", "000002", "000003"), dtype=torch.float32)
-    registry = DataRegistry(
-        [
-            DataItem(
-                name="alpha.base",
-                module="builtin.factorsim",
-                path=str(cache_dir),
-                role="factor",
-                ops=(OpSpec("mean", {"axis": "bar"}),),
                 params={"freq": "1m"},
             )
         ],
@@ -1668,52 +1613,15 @@ def test_data_registry_builtin_factorsim_3d_uses_freq_to_fill_default_nbar(tmp_p
         config_path=None,
     )
 
-    registry.set_current_ti(93100)
     registry._ensure_range(("alpha.base",), 20200102, 20200103)
     loaded = registry.get_data("alpha.base")
 
-    assert torch.equal(loaded[0], torch.tensor([1.5, 2.5, 3.5]))
-    assert torch.equal(loaded[1], torch.tensor([13.5, 14.5, 15.5]))
+    assert loaded.shape == (2, len(times), 3)
+    assert torch.equal(loaded[0, 0], torch.tensor([1.0, 10.0, 100.0]))
+    assert torch.equal(loaded[1, -1], torch.tensor([10_000.0 + len(times), 10_000.0 + len(times) + 9.0, 10_000.0 + len(times) + 99.0]))
 
 
-def test_factorsim_reader_3d_uses_source_time_axis_for_ti(tmp_path) -> None:
-    from src.DataRegistry import FactorsimReader
-
-    cache_dir = tmp_path / "cache_root" / "AshareCache" / "5m_Intv5mBar" / "Intv5mBar.close"
-    times = np.array([93000, 93500, 94000, 94500, 95000, 95500, 100000, 100500, 101000])
-    data = np.repeat(np.arange(len(times), dtype=np.float64).reshape(-1, 1), 3, axis=1)
-    dates = np.array([20200102])
-    columns = np.array(["000001", "000002", "000003"], dtype=object)
-    _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
-
-    reader = FactorsimReader(str(cache_dir))
-    universe = Universe(dates=(20200102,), codes=("000001", "000002", "000003"), dtype=torch.float32)
-
-    cube = reader.load_cube(20200102, 20200102, dtype=torch.float32, ti=100000, nbar=1, universe=universe)
-
-    assert cube.shape == (1, 1, 3)
-    assert torch.equal(cube[0, 0], torch.tensor([6.0, 6.0, 6.0]))
-
-
-def test_factorsim_reader_3d_reindexes_columns_to_universe(tmp_path) -> None:
-    from src.DataRegistry import FactorsimReader
-
-    cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
-    data = np.array([[1.0, 2.0, 3.0]])
-    dates = np.array([20200102])
-    times = np.array([93000])
-    columns = np.array(["000002", "000001", "000003"], dtype=object)
-    _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
-
-    reader = FactorsimReader(str(cache_dir))
-    universe = Universe(dates=(20200102,), codes=("000001", "000002", "000003"), dtype=torch.float32)
-
-    cube = reader.load_cube(20200102, 20200102, dtype=torch.float32, ti=93000, nbar=1, universe=universe)
-
-    assert torch.equal(cube[0, 0], torch.tensor([2.0, 1.0, 3.0]))
-
-
-def test_data_registry_fails_when_3d_pipeline_does_not_end_as_date_code(tmp_path) -> None:
+def test_data_registry_builtin_factorsim_3d_requires_canonical_time_axis(tmp_path) -> None:
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
     data = np.arange(24, dtype=np.float64).reshape(8, 3)
     dates = np.array([20200102, 20200103])
@@ -1725,12 +1633,11 @@ def test_data_registry_fails_when_3d_pipeline_does_not_end_as_date_code(tmp_path
     registry = DataRegistry(
         [
             DataItem(
-                name="alpha.bad",
+                name="alpha.base",
                 module="builtin.factorsim",
                 path=str(cache_dir),
                 role="factor",
-                ops=(OpSpec("cs_zscore", {"axis": "code"}),),
-                params={"nbar": 2},
+                params={"freq": "1m"},
             )
         ],
         universe=universe,
@@ -1739,8 +1646,84 @@ def test_data_registry_fails_when_3d_pipeline_does_not_end_as_date_code(tmp_path
         config_path=None,
     )
 
-    with pytest.raises(ValueError, match="pipeline must end as \\[date, code\\]"):
-        registry._ensure_range(("alpha.bad",), 20200102, 20200103)
+    with pytest.raises(ValueError, match="time axis does not match canonical 1m"):
+        registry._ensure_range(("alpha.base",), 20200102, 20200103)
+
+
+def test_factorsim_reader_3d_loads_full_canonical_cube(tmp_path) -> None:
+    from src.DataRegistry import FactorsimReader
+
+    cache_dir = tmp_path / "cache_root" / "AshareCache" / "5m_Intv5mBar" / "Intv5mBar.close"
+    times = np.array(CANONICAL_BAR_TIMES["5m"], dtype=np.int64)
+    data = np.repeat(np.arange(len(times), dtype=np.float64).reshape(-1, 1), 3, axis=1)
+    dates = np.array([20200102])
+    columns = np.array(["000001", "000002", "000003"], dtype=object)
+    _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
+
+    reader = FactorsimReader(str(cache_dir))
+    universe = Universe(dates=(20200102,), codes=("000001", "000002", "000003"), dtype=torch.float32)
+
+    cube = reader.load_intraday(20200102, 20200102, dtype=torch.float32, freq="5m", universe=universe)
+
+    bar_idx = list(CANONICAL_BAR_TIMES["5m"]).index(100000)
+    assert cube.shape == (1, len(times), 3)
+    assert torch.equal(cube[0, bar_idx], torch.tensor([float(bar_idx)] * 3))
+
+
+def test_factorsim_reader_3d_reindexes_columns_to_universe(tmp_path) -> None:
+    from src.DataRegistry import FactorsimReader
+
+    cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
+    dates = np.array([20200102])
+    times = np.array(CANONICAL_BAR_TIMES["1m"], dtype=np.int64)
+    data = np.asarray([[float(idx + 1), float(idx + 101), float(idx + 201)] for idx in range(len(times))], dtype=np.float64)
+    columns = np.array(["000002", "000001", "000003"], dtype=object)
+    _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
+
+    reader = FactorsimReader(str(cache_dir))
+    universe = Universe(dates=(20200102,), codes=("000001", "000002", "000003"), dtype=torch.float32)
+
+    cube = reader.load_intraday(20200102, 20200102, dtype=torch.float32, freq="1m", universe=universe)
+
+    assert torch.equal(cube[0, 0], torch.tensor([101.0, 1.0, 201.0]))
+
+
+def test_data_registry_rejects_nbar_and_reducer_ops_for_3d_items(tmp_path) -> None:
+    cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
+    universe = Universe(dates=(20200102, 20200103), codes=("000001", "000002", "000003"), dtype=torch.float32)
+    common = {
+        "universe": universe,
+        "data_start_ds": 20200102,
+        "ashare_data_path": str(tmp_path / "cache_root" / "AshareCache"),
+        "config_path": None,
+    }
+    with pytest.raises(ValueError, match="nbar"):
+        DataRegistry(
+            [
+                DataItem(
+                    name="alpha.bad_nbar",
+                    module="builtin.factorsim",
+                    path=str(cache_dir),
+                    role="factor",
+                    params={"freq": "1m", "nbar": 2},
+                )
+            ],
+            **common,
+        )
+    with pytest.raises(ValueError, match="unsupported data op: mean"):
+        DataRegistry(
+            [
+                DataItem(
+                    name="alpha.bad_mean",
+                    module="builtin.factorsim",
+                    path=str(cache_dir),
+                    role="factor",
+                    ops=(OpSpec("mean", {"axis": "bar"}),),
+                    params={"freq": "1m"},
+                )
+            ],
+            **common,
+        )
 
 
 def test_data_registry_fails_when_3d_source_has_neither_nbar_nor_freq(tmp_path) -> None:
@@ -1759,7 +1742,6 @@ def test_data_registry_fails_when_3d_source_has_neither_nbar_nor_freq(tmp_path) 
                 module="builtin.factorsim",
                 path=str(cache_dir),
                 role="factor",
-                ops=(OpSpec("mean", {"axis": "bar"}),),
                 params={},
             )
         ],
@@ -1769,7 +1751,7 @@ def test_data_registry_fails_when_3d_source_has_neither_nbar_nor_freq(tmp_path) 
         config_path=None,
     )
 
-    with pytest.raises(ValueError, match="requires nbar or freq"):
+    with pytest.raises(ValueError, match="must be 2D"):
         registry._ensure_range(("alpha.bad",), 20200102, 20200103)
 
 
@@ -1790,30 +1772,14 @@ def test_factorsim_reader_3d_does_not_keep_source_cache(tmp_path) -> None:
     assert not hasattr(reader, "source_cache")
 
 
-def test_combo_data_loader_current_ti_changes_feature_cache(monkeypatch) -> None:
+def test_combo_data_loader_current_ti_masks_only_window_tail(monkeypatch) -> None:
     from src import DataLoader as data_loader_module
 
     class FakeMask:
-        date = (20200101,)
+        date = (20200101, 20200102)
         code = ("000001", "000002", "000003")
 
     monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
-
-    class TiAwareRegistry:
-        def __init__(self):
-            self.current_ti = 150000
-            self.items = {"alpha.raw": DataItem(name="alpha.raw", module="test.tensor", role="factor", params={})}
-
-        def set_current_ti(self, ti: int):
-            self.current_ti = int(ti)
-
-        def _ensure_range(self, names, start_ds, end_ds):
-            return None
-
-        def get_data(self, name):
-            if self.current_ti == 150000:
-                return torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32)
-            return torch.tensor([[3.0, 1.0, 2.0]], dtype=torch.float32)
 
     loader = ComboDataLoader(
         LoaderConfig(
@@ -1822,23 +1788,50 @@ def test_combo_data_loader_current_ti_changes_feature_cache(monkeypatch) -> None
             data_offset=0,
             data_items=(
                 DataItem(
-                    name="alpha.raw",
-                    module="test.tensor",
+                    name="alpha.daily",
+                    module="test.daily",
                     role="factor",
                     params={},
+                ),
+                DataItem(
+                    name="alpha.m5",
+                    module="test.m5",
+                    role="factor",
+                    params={"freq": "5m"},
                 ),
             ),
         )
     )
-    loader.registry = TiAwareRegistry()
-    loader.factor_names = ("alpha.raw",)
-    loader.num_features = 1
 
-    first = loader.gen_feature(20200101)
-    loader.set_current_ti(103000)
-    second = loader.gen_feature(20200101)
+    def load_daily(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        del item
+        lo = registry.universe.date2idx(start_ds)
+        hi = registry.universe.date2idx(end_ds)
+        return torch.ones((hi - lo + 1, len(registry.universe.codes)), dtype=torch.float32)
 
-    assert not torch.equal(first, second)
+    def load_m5(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+        del item
+        lo = registry.universe.date2idx(start_ds)
+        hi = registry.universe.date2idx(end_ds)
+        rows = hi - lo + 1
+        values = torch.arange(rows * len(CANONICAL_BAR_TIMES["5m"]) * len(registry.universe.codes), dtype=torch.float32)
+        return values.reshape(rows, len(CANONICAL_BAR_TIMES["5m"]), len(registry.universe.codes))
+
+    loader.registry.modules["test.daily"] = load_daily
+    loader.registry.modules["test.m5"] = load_m5
+
+    first = loader.gen_feature(20200102)
+    loader.set_current_ti(100000)
+    second = loader.gen_feature(20200102)
+    assert torch.equal(first["5m"], second["5m"])
+
+    window = FeatureGroups.stack([first, second], dim=0)
+    masked = loader.transform_feature_window(window, stage="train")
+    future_mask = torch.as_tensor(np.asarray(CANONICAL_BAR_TIMES["5m"]) > 100000)
+    assert torch.isfinite(masked["5m"][0]).all()
+    assert torch.isnan(masked["5m"][-1, :, future_mask, :]).all()
+    assert torch.isfinite(masked["5m"][-1, :, ~future_mask, :]).all()
+    assert torch.isfinite(masked["1d"]).all()
 
 
 def test_combo_data_loader_prefetch_syncs_current_ti_before_registry_load(monkeypatch) -> None:
@@ -1902,14 +1895,16 @@ def test_combo_base_sets_random_seed_from_model_config(monkeypatch) -> None:
         def __init__(self, config):
             self.dtype = torch.float32
             self.num_features = 1
+            self.freqs = ("1d",)
+            self.num_features_by_freq = {"1d": 1}
             self.mask = type("M", (), {"code": ("000001",)})()
             self.codec = PassthroughCodec(torch.float32)
 
         def set_current_ti(self, ti: int):
             return None
 
-        def set_processed_feature_cache_enabled(self, enabled: bool):
-            return None
+        def feature_group_shapes(self, inst_count: int):
+            return {"1d": (int(inst_count), 1)}
 
     class DummyCombo(ComboBase):
         def _load_research_model_class(self, model_path: str):
@@ -1931,12 +1926,11 @@ def test_combo_base_sets_random_seed_from_model_config(monkeypatch) -> None:
                 "snap_ti": None,
                 "seed": 42,
                 "deterministic": False,
-                "livetrading": False,
+            "livetrading": False,
             "trainDelay": 0,
             "retDays": 1,
             "tsDays": 2,
             "load_chunk_days": None,
-            "processed_feature_cache": False,
             "model_smooth_rate": 0.7,
             "model_keep_num": 0,
             "select_days": 10,
@@ -1962,14 +1956,16 @@ def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> N
         def __init__(self, config):
             self.dtype = torch.float32
             self.num_features = 1
+            self.freqs = ("1d",)
+            self.num_features_by_freq = {"1d": 1}
             self.mask = type("M", (), {"code": ("000001",), "date": tuple(range(20200101, 20200180))})()
             self.codec = PassthroughCodec(torch.float32)
 
         def set_current_ti(self, ti: int):
             return None
 
-        def set_processed_feature_cache_enabled(self, enabled: bool):
-            return None
+        def feature_group_shapes(self, inst_count: int):
+            return {"1d": (int(inst_count), 1)}
 
         def date2didx(self, ds: int):
             return int(ds) - 20200101
@@ -1999,7 +1995,6 @@ def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> N
             "retDays": 1,
             "tsDays": 2,
             "load_chunk_days": None,
-            "processed_feature_cache": False,
             "model_smooth_rate": 0.7,
             "model_keep_num": 1,
             "select_days": 10,
@@ -2025,74 +2020,84 @@ def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> N
     assert combo.needTrain(20200150) is True
 
 
-def test_combo_base_sizes_processed_feature_cache_to_train_window_plus_delay(monkeypatch) -> None:
+def test_transform_feature_window_hook_applies_to_train_and_predict(monkeypatch) -> None:
+    from src import DataLoader as data_loader_module
     from src.ComboBase import ComboBase
-    from src.selection import SelectionPlan
+    from src.DataLoader import ComboTrainDataset
 
-    cache_sizes = []
-    dataset_kwargs = []
+    class FakeMask:
+        date = (20200101, 20200102, 20200103)
+        code = ("000001", "000002")
 
-    class DummyLoader:
+    class HookLoader(ComboDataLoader):
         def __init__(self, config):
-            self.dtype = torch.float32
-            self.num_features = 1
-            self.mask = type("M", (), {"code": ("000001",), "date": (20200101,)})()
-            self.codec = PassthroughCodec(torch.float32)
+            super().__init__(config)
+            self.transform_calls = []
 
-        def set_current_ti(self, ti: int):
-            return None
+        def preprocess_feature_group(self, freq: str, feature: torch.Tensor, ds: int) -> torch.Tensor:
+            return torch.nan_to_num(feature, nan=0.0).to(self.dtype)
 
-        def set_processed_feature_cache_enabled(self, enabled: bool):
-            return None
+        def transform_feature_window(self, feature_window: FeatureGroups, *, stage: str) -> FeatureGroups:
+            self.transform_calls.append((stage, tuple(feature_window["1d"].shape)))
+            bump = 10.0 if stage == "train" else 20.0
+            return FeatureGroups({freq: value.to(self.dtype) + bump for freq, value in feature_window.items()}, feature_window.freqs)
 
-        def set_processed_feature_cache_max_days(self, days: int):
-            cache_sizes.append(int(days))
-
-    class DummyDataset:
-        validinsts = torch.tensor([0], dtype=torch.long)
-        numValidinsts = 1
-
-        def __init__(self, *args, **kwargs):
-            dataset_kwargs.append(kwargs)
-
-        def __len__(self):
-            return 1
-
-    class DummyResearchModel:
+    class DummyModel:
         def __init__(self, config):
             self.config = config
 
-        def fit(self, dataset):
+        def predict(self, x_window):
+            return x_window["1d"][-1, :, 0]
+
+        def save(self, path_or_buffer):
             return None
 
-    class DummySelection:
-        def build_train_plan(self, ds, loader, context):
-            return SelectionPlan(
-                target_ds=20200131,
-                target_didx=30,
-                loading_days=31,
-                raw_ndays=21,
-                ndays=20,
-            )
-
-        def before_fit(self, dataset, plan):
-            return None
-
-        def after_fit(self, model, plan):
-            return None
+        def load(self, path_or_buffer):
+            return self
 
     class DummyCombo(ComboBase):
         def _load_research_model_class(self, model_path: str):
-            return DummyResearchModel
+            return DummyModel
 
         def _load_optional_research_class(self, path, *, class_name, base_cls, default_cls):
-            if class_name == "ResearchLoader":
-                return DummyLoader
-            if class_name == "ResearchDataset":
-                return DummyDataset
-            return default_cls
+            return HookLoader if class_name == "ResearchLoader" else default_cls
 
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(data_loader_module, "MASK", FakeMask())
+
+    loader_config = LoaderConfig(
+        dtype=torch.float32,
+        data_start_ds=20200101,
+        data_offset=0,
+        data_items=(
+            DataItem(name="alpha.raw", module="test.tensor", role="factor", params={}),
+            DataItem(name="label.raw", module="test.tensor", role="label", params={}),
+        ),
+    )
+    loader = HookLoader(loader_config)
+    dates = (20200101, 20200102, 20200103)
+    values = {
+        "alpha.raw": {
+            20200101: torch.tensor([1.0, 2.0], dtype=torch.float32),
+            20200102: torch.tensor([2.0, 3.0], dtype=torch.float32),
+            20200103: torch.tensor([4.0, 5.0], dtype=torch.float32),
+        },
+        "label.raw": {
+            20200101: torch.tensor([0.1, 0.2], dtype=torch.float32),
+            20200102: torch.tensor([0.2, 0.3], dtype=torch.float32),
+            20200103: torch.tensor([0.3, 0.4], dtype=torch.float32),
+        },
+    }
+
+    def load_tensor(item, registry, start_ds, end_ds):
+        selected = [values[item.name][ds] for ds in dates if start_ds <= ds <= end_ds]
+        return torch.stack(selected, dim=0)
+
+    loader.registry.modules["test.tensor"] = load_tensor
+
+    dataset = ComboTrainDataset(loader, end_ds=20200103, ndays=3, x_delay=1, ts_days=2)
+    _, train_x, _, _ = dataset[0]
+    assert loader.transform_calls == [("train", (2, 2, 1))]
+    assert train_x["1d"][0, 1, 0].item() == 12.0
 
     node = type(
         "Node",
@@ -2106,30 +2111,28 @@ def test_combo_base_sizes_processed_feature_cache_to_train_window_plus_delay(mon
             "seed": None,
             "deterministic": False,
             "livetrading": False,
-            "trainDelay": 3,
-            "retDays": 7,
+            "trainDelay": 0,
+            "retDays": 1,
             "tsDays": 2,
             "load_chunk_days": None,
-            "processed_feature_cache": True,
             "model_smooth_rate": 1.0,
             "model_keep_num": 0,
             "select_days": 10,
             "max_train_days": 20,
             "checkpoint_root": "",
-            "selection_module": DummySelection(),
+            "selection_module": None,
             "alpha_history": {},
-            "loader_config": LoaderConfig(
-                dtype=torch.float32,
-                data_start_ds=20200101,
-                data_items=(DataItem(name="alpha.raw", module="test.tensor", role="factor", params={}),),
-            ),
+            "loader_config": loader_config,
             "model_config": {},
+            "monitor": None,
+            "alpha": torch.zeros(2, dtype=torch.float32),
         },
     )()
 
     combo = DummyCombo(node)
-    combo.Train(20200203)
+    combo.loader.registry.modules["test.tensor"] = load_tensor
+    combo.model = DummyModel(combo._model_config())
+    combo.GenComboPos(20200103)
 
-    assert cache_sizes == [30]
-    assert dataset_kwargs[0]["ndays"] == 20
-    assert dataset_kwargs[0]["processed_feature_cache"] is True
+    assert combo.loader.transform_calls == [("predict", (2, 2, 1))]
+    assert torch.isclose(combo.node.alpha[1], torch.tensor(25.0))

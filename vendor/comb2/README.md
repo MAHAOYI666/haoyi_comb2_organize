@@ -36,15 +36,16 @@ researcher-facing configuration.
 
 本文档面向研究员，说明如何在 `comb2` 框架中接入自己的模型并完成训练、预测与回测。
 
-目标是让你只关注两件事：
+目标是让你只关注三件事：
 - 写好自己的 `ResearchModel`
 - 在实验目录里准备好模型文件和 XML 配置
+- 如需改数据预处理或训练样本，再接入 `ResearchLoader` / `ResearchDataset`
 
 不需要了解框架内部的训练调度、数据缓存或回测实现细节。
 
 补充说明：
-- `processed_feature_cache` 作用于最终预处理后的单日 feature。
-- 3D `builtin.factorsim` 原始分钟矩阵不会长期保留在 reader 的内存 cache 中；区间预取会直接聚合成 2D 结果后写入 registry。
+- 3D `builtin.factorsim` 日内数据必须声明 `freq="5m"` 或 `freq="1m"`，框架会保持 cube 维度，不在数据层降维。
+- 更完整的配置和 hook 契约见 `../../config.human`。
 
 ## 1. 推荐目录组织
 
@@ -111,6 +112,8 @@ class ResearchModel:
 {
     "dtype": ...,
     "tsDays": ...,
+    "freqs": ...,
+    "num_features_by_freq": ...,
     "num_features": ...,
     "device": ...,
     "hidden_size": ...,
@@ -157,7 +160,7 @@ _, x, y, w = dataset[idx]
 ```
 
 这意味着单个样本通常至少包含：
-- `x`：特征窗口
+- `x`：特征窗口，类型是按频率分组的 `FeatureGroups`
 - `y`：标签
 - `w`：样本权重
 
@@ -185,7 +188,15 @@ def fit(self, dataset):
 
 ### 4.2 predict(x_window)
 
-`predict(x_window)` 的输入是某一天对应的特征窗口。
+`predict(x_window)` 的输入是某一天对应的特征窗口，类型是 `FeatureGroups`，不是单个 concat tensor。
+
+常见 shape：
+
+- `x_window["1d"]`: `[tsDays, stock, feature]`
+- `x_window["5m"]`: `[tsDays, stock, 49, feature]`
+- `x_window["1m"]`: `[tsDays, stock, 239, feature]`
+
+如果 config 没有声明某个频率的 factor，对应 key 不会存在。模型应使用 `config["freqs"]` 或 `if "5m" in x_window` 判断。
 
 你需要返回该日所有股票的预测结果，要求：
 - 返回结果长度与当日股票数一致
@@ -247,6 +258,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from comb2 import FeatureGroups
 
 
 class ResearchModel:
@@ -256,14 +268,15 @@ class ResearchModel:
         self.device = config.get("device", "cpu")
         self.lr = float(config.get("lr", 1e-3))
         self.epochs = int(config.get("epochs", 10))
+        self.freqs = tuple(config.get("freqs", ("1d",)))
+        self.num_features_by_freq = dict(config.get("num_features_by_freq", {"1d": 1}))
         self.model = None
 
     def fit(self, dataset):
         return self
 
-    def predict(self, x_window):
-        num_instruments = x_window.shape[-2] if x_window.dim() >= 2 else 0
-        pred = torch.zeros(num_instruments, dtype=self.dtype)
+    def predict(self, x_window: FeatureGroups):
+        pred = torch.zeros(x_window.stock_count(), dtype=self.dtype)
         return pred
 
     def save(self, path_or_buffer):
@@ -343,7 +356,7 @@ class ResearchModel:
     >
       <item name="alpha.factor_1" module="builtin.factorsim" path="/path/to/factor_1" role="factor" />
       <item name="alpha.factor_2" module="builtin.factorsim" path="/path/to/factor_2" role="factor" />
-      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+      <item name="label.default" path="vwap30_label1d" role="label" />
     </data>
   </combo>
 
@@ -365,6 +378,8 @@ class ResearchModel:
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`
 - 多个因子通过多个 `<data><item role="factor" ... /></data>` 声明
+- 日内因子必须显式写 `freq="5m"` 或 `freq="1m"`；缺省 `freq` 等价于 `1d`
+- 不支持 `nbar`，也不支持 `last/mean/std/sum/max/min` 这类会改变维度的 data op
 - `<import path="...">` 只支持根节点为 `<data-pack>` 或 `<data>` 的纯 data 声明文件
 
 ---
@@ -391,7 +406,37 @@ class ResearchModel:
 
 ---
 
-## 9. 如何运行
+## 9. 可选：重写 Loader 和 Dataset
+
+如果只写 `ResearchModel` 不够，可以在 XML 里指定：
+
+```xml
+<paths
+  model_path="my_model.py"
+  research_loader_path="loader.py"
+  research_dataset_path="dataset.py"
+/>
+```
+
+`loader.py` 必须定义 `ResearchLoader(ComboDataLoader)`。常用 hook：
+
+- `preprocess_feature_group(freq, feature, ds)`：处理每个频率的单日 feature group，`1d=[stock,F]`，`5m/1m=[stock,bar,F]`。
+- `preprocess_daily_features(feature, ds)`：只改日频默认处理。
+- `preprocess_label(label_values, valid_mask, ds, ret_days)`：改 label 标准化和样本权重。
+- `transform_feature_window(feature_window, stage=...)`：改训练/预测窗口处理；默认会 mask 最后一天未来日内 bar。
+
+在 loader hook 中读取已声明的 factor / label / aux 数据，使用 `self.registry.get_data(name, start_ds, end_ds)`；返回保留 date 维：`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。
+
+`dataset.py` 必须定义 `ResearchDataset(ComboTrainDataset)`。常用 hook：
+
+- `_build_validinsts()`：改训练股票池。
+- `__getitem__(idx)`：改训练样本结构；如果改返回值，必须同步修改 `ResearchModel.fit()`。
+
+优先重写这些小 hook，不要直接改 `preprocess_features()`；它是遍历所有 group 的总控函数。完整输入、输出和 shape 契约见 `../../config.human`。
+
+---
+
+## 10. 如何运行
 
 ### 训练
 
@@ -409,7 +454,7 @@ python /root/autodl-tmp/comb2-organize/run_backtest.py --config /my_experiment/e
 
 ---
 
-## 10. 研究员开发建议
+## 11. 研究员开发建议
 
 ### 建议 1：先保证接口跑通，再优化效果
 

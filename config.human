@@ -31,10 +31,9 @@
 | `runEval --corr ...` | 对两个 parquet/csv 矩阵做日频截面相关性评估。 |
 | `runEval --exposure ...` | 对 signal 做 Barra 风格暴露评估。 |
 | `runEval --va ...` | 对 base/new PnL 或 signal 做 value-add 评估。 |
-| `comb-ablation-zero config.xml` | 可选：逐特征置零消融。 |
 | `comb-pos-corr pos_a.parquet pos_b.parquet` | 可选：两个 position parquet 的平均日频持仓相关。 |
 
-TODO: Optuna 调参流程需要稳定命令接口化后再纳入本手册。当前不要把 Optuna 作为稳定包主流程依赖。
+Optuna 调参流程暂不作为稳定包主流程依赖；如果项目需要调参，建议在 research 目录自行维护脚本。
 
 ## 2. 推荐目录结构
 
@@ -149,7 +148,6 @@ runEval config.xml
       retDays="1"
       tsDays="8"
       load_chunk_days=""
-      processed_feature_cache="false"
       torch_threads="64"
       torch_interop_threads="1"
       model_smooth_rate="0.7"
@@ -181,13 +179,13 @@ runEval config.xml
       filtered_path=""
       base_universe_path=""
     >
-      <item name="factor.example_1" module="builtin.factorsim" path="example_factor_1" role="factor" display_name="example_factor_1" />
-      <item name="factor.example_2" module="builtin.factorsim" path="example_factor_2" role="factor" display_name="example_factor_2">
+      <item name="factor.example_1" path="example_factor_1" role="factor" display_name="example_factor_1" />
+      <item name="factor.example_2" path="example_factor_2" role="factor" display_name="example_factor_2">
         <op name="cs_zscore" />
         <op name="truncate" min="-4" max="4" />
         <op name="nan_to_num" value="0" />
       </item>
-      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+      <item name="label.default" path="vwap30_label1d" role="label" />
     </data>
 
     <defaults
@@ -240,8 +238,8 @@ runEval config.xml
 
 - 绝对路径保持不变。
 - 相对路径相对 `config.xml` 或 data-pack 文件所在目录解析。
-- `builtin.factorsim` 不再使用隐式 factor root；普通 factor pool 请写绝对路径，或写相对当前 XML/data-pack 的路径。
-- `builtin.label` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
+- `<item>` 缺省 `module="builtin.factorsim"`；普通 factor pool 请写绝对路径，或写相对当前 XML/data-pack 的路径。
+- `role="label"` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
 - `constants.cache_path` 会派生出 `AshareCache`，供 label、mask、Barra、回测读取使用。
 
 ## 6. constants
@@ -377,7 +375,6 @@ class ComboBase(BaseComboBase):
 |---|---|
 | `self.loader.date2didx(ds)` | 把 `YYYYMMDD` 转成交易日序号。适合按“每 N 个交易日”写规则。 |
 | `self.loader.didx2date(didx)` | 把交易日序号转回 `YYYYMMDD`。适合向前向后看相邻交易日。 |
-| `self.loader.mask.date` | 全部交易日数组。需要遍历或判断边界时可直接使用。 |
 
 建议优先按“交易日序号”写逻辑，而不是按自然日差值写逻辑。A 股节假日和停牌日会让自然日规则变得不稳定。
 
@@ -409,41 +406,7 @@ class ComboBase(BaseComboBase):
         return self.loader.date2didx(ds) % 5 == 0
 ```
 
-2. 每周最后一个交易日训练一次
-
-```python
-import datetime
-
-from comb2 import ComboBase as BaseComboBase
-
-
-class ComboBase(BaseComboBase):
-    def isTrainDay(self, ds: int) -> bool:
-        didx = self.loader.date2didx(ds)
-        if didx >= len(self.loader.mask.date) - 1:
-            return True
-        today = datetime.datetime.strptime(str(self.loader.didx2date(didx)), "%Y%m%d")
-        next_day = datetime.datetime.strptime(str(self.loader.didx2date(didx + 1)), "%Y%m%d")
-        return (next_day - today).days > 1
-```
-
-3. 每月最后一个交易日训练一次
-
-```python
-from comb2 import ComboBase as BaseComboBase
-
-
-class ComboBase(BaseComboBase):
-    def isTrainDay(self, ds: int) -> bool:
-        didx = self.loader.date2didx(ds)
-        if didx >= len(self.loader.mask.date) - 1:
-            return True
-        this_month = str(ds)[4:6]
-        next_month = str(self.loader.didx2date(didx + 1))[4:6]
-        return this_month != next_month
-```
-
-4. 只在白名单日期训练
+2. 只在白名单日期训练
 
 ```python
 from comb2 import ComboBase as BaseComboBase
@@ -463,25 +426,7 @@ class ComboBase(BaseComboBase):
 
 ## 9. ResearchModel 接口
 
-`model_path` 指向的文件必须定义：
-
-```python
-class ResearchModel:
-    def __init__(self, config: dict):
-        ...
-
-    def fit(self, dataset):
-        ...
-
-    def predict(self, x_window):
-        ...
-
-    def save(self, path_or_buffer):
-        ...
-
-    def load(self, path_or_buffer):
-        ...
-```
+`model_path` 指向的文件必须定义 `ResearchModel`，并实现 `__init__`、`fit`、`predict`、`save`、`load`。下面的最小形态可以直接作为 `Model.py` 起点。
 
 最小可运行形态：
 
@@ -489,6 +434,7 @@ class ResearchModel:
 from __future__ import annotations
 
 import torch
+from comb2 import FeatureGroups
 
 
 class ResearchModel:
@@ -496,13 +442,14 @@ class ResearchModel:
         self.config = config
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 8))
-        self.num_features = int(config.get("num_features", 1))
+        self.freqs = tuple(config.get("freqs", ("1d",)))
+        self.num_features_by_freq = dict(config.get("num_features_by_freq", {"1d": 1}))
 
     def fit(self, dataset):
         return self
 
-    def predict(self, x_window: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(x_window.shape[1], dtype=self.dtype)
+    def predict(self, x_window: FeatureGroups) -> torch.Tensor:
+        return torch.zeros(x_window.stock_count(), dtype=self.dtype)
 
     def save(self, path_or_buffer):
         torch.save({"config": self.config}, path_or_buffer)
@@ -517,15 +464,25 @@ class ResearchModel:
 
 | 接口 | 约定 |
 |---|---|
-| `__init__(config)` | `config` 来自 `<combo><model>`，并额外注入 `dtype`、`tsDays`、`num_features`。 |
-| `fit(dataset)` | 训练模型。默认 dataset 样本形态为 `(idx, x, y, w)`。 |
-| `predict(x_window)` | 输入通常为 `[tsDays, n_valid_instruments, num_features]` tensor。 |
+| `__init__(config)` | `config` 来自 `<combo><model>`，并额外注入 `dtype`、`tsDays`、`freqs`、`num_features_by_freq`、`num_features`。 |
+| `fit(dataset)` | 训练模型。默认 dataset 样本形态为 `(idx, x, y, w)`，其中 `x` 是 `FeatureGroups`。 |
+| `predict(x_window)` | 输入是 `FeatureGroups`，和训练样本里的 `x` 具有相同分组 shape。 |
 | `predict` 返回 | `[n_valid_instruments]` tensor，表示预测 alpha。 |
 | `save/load` | 用于 checkpoint 保存和加载，需能接受文件路径或 file-like buffer。 |
 
 稳定 `predict(x_window)` 只接收 feature 窗口，不额外传入日期、loader 或 dataset。若预测阶段需要日期相关辅助数据，应在 `fit()` 阶段写入模型状态并通过 `save/load` 保留，或在项目自定义流程中显式扩展接口。
 
 `<combo><model>` 是开放字段。字段是否生效，取决于 `ResearchModel(config)` 是否读取它。
+
+模型侧 `FeatureGroups` 约定：
+
+| group | 单日 shape | 窗口 shape |
+|---|---|---|
+| `x["1d"]` | `[stock, F_1d]` | `[tsDays, stock, F_1d]` |
+| `x["5m"]` | `[stock, 49, F_5m]` | `[tsDays, stock, 49, F_5m]` |
+| `x["1m"]` | `[stock, 239, F_1m]` | `[tsDays, stock, 239, F_1m]` |
+
+如果 config 没有声明某个频率的 factor，该 key 不会出现在 `FeatureGroups` 中。模型应使用 `config["freqs"]` 或 `if "5m" in x_window` 判断，而不是假设所有 key 都存在。
 
 ## 10. combo.output
 
@@ -555,7 +512,6 @@ class ResearchModel:
   retDays="1"
   tsDays="8"
   load_chunk_days=""
-  processed_feature_cache="false"
   torch_threads="64"
   torch_interop_threads="1"
   model_smooth_rate="0.7"
@@ -569,7 +525,7 @@ class ResearchModel:
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `snaptime` | `mlp_minimal` | 训练快照名，checkpoint 子目录会使用它。 |
-| `snap_ti` | 空 | 默认数据时点；空值时使用该数据频率最后一个可用时点。对 3D `builtin.factorsim` 数据会影响日内切片位置。 |
+| `snap_ti` | 空 | 默认预测/训练时点；空值时使用 `150000`。对日内 feature 只影响窗口最后一天未来 bar 的 mask，不改变单日 cube 读取。 |
 | `seed` | 空 | 运行级随机种子；会用于 `random`、`numpy`、`torch`，并在有 CUDA 时同步设置 CUDA seed。 |
 | `deterministic` | `false` | 是否开启 PyTorch deterministic 模式。开启后通常更可复现，但可能变慢，且部分算子可能报 deterministic 限制。 |
 | `livetrading` | `false` | `false` 为历史训练/回测流程。 |
@@ -577,7 +533,6 @@ class ResearchModel:
 | `retDays` | `1` | 训练 label 的收益 horizon。 |
 | `tsDays` | `8` | 模型输入时间窗口长度。 |
 | `load_chunk_days` | 空 | 训练数据预取天数；空值时使用默认行为。 |
-| `processed_feature_cache` | `false` | 是否缓存处理后的 feature。可提速，但增加内存。 |
 | `torch_threads` | `64` | PyTorch intra-op 线程数。 |
 | `torch_interop_threads` | `1` | PyTorch inter-op 线程数。 |
 | `model_smooth_rate` | `0.7` | 新旧模型预测平滑比例；`1.0` 表示只用新模型。 |
@@ -589,14 +544,13 @@ class ResearchModel:
 补充说明：
 
 - `snap_ti` 是默认时点上下文。若调用方在运行时显式传入 `ti`，运行时 `ti` 会覆盖默认 `snap_ti`。
-- `snap_ti` / 运行时 `ti` 目前主要影响 3D `builtin.factorsim` 数据在某个交易日内截取到哪个时点，以及 `nbar` 选窗后的可见 `bar` 轴范围。
+- `snap_ti` / 运行时 `ti` 只用于训练或预测窗口的最后一天日内可见性 mask；历史天保持完整，单日 `gen_feature(ds)` 不因 `ti` 改变。
 
 常用调优：
 
 | 目标 | 建议 |
 |---|---|
-| 降低内存 | 降低 `max_train_days`，关闭 `processed_feature_cache`，或使用 `compression="fp4"`。 |
-| 提升重复训练读取速度 | 开启 `processed_feature_cache="true"`。 |
+| 降低内存 | 降低 `max_train_days`，或使用 `compression="fp4"`。 |
 | 禁用 checkpoint | `model_keep_num="0"`，并让 checkpoint 目录为空。 |
 | 快速 smoke run | 缩短 `strategy` 日期范围，降低 `epochs`、`max_train_days`。 |
 
@@ -624,7 +578,7 @@ class ResearchModel:
 - 这些字段只是 starter `ResearchModel` 的默认约定。
 - 可以添加任意自定义字段，例如 `hidden_size="256"`、`n_layers="3"`。
 - 数值会尽量解析为 bool/int/float，否则保留字符串。
-- 稳定包会额外注入 `dtype`、`tsDays`、`num_features`。
+- 稳定包会额外注入 `dtype`、`tsDays`、`freqs`、`num_features_by_freq`、`num_features`。
 - 兼容别名：`hiddenSize -> hidden_size`、`fcSize -> fc_size`、`batchSize -> batch_size`。
 
 ## 13. combo.data
@@ -640,8 +594,8 @@ class ResearchModel:
   filtered_path=""
   base_universe_path=""
 >
-  <item name="factor.example_1" module="builtin.factorsim" path="example_factor_1" role="factor" />
-  <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+  <item name="factor.example_1" path="example_factor_1" role="factor" />
+  <item name="label.default" path="vwap30_label1d" role="label" />
 </data>
 ```
 
@@ -650,7 +604,7 @@ class ResearchModel:
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `dtype` | `float16` | loader 输出 dtype。 |
-| `compression` | `none` | 内部特征缓存压缩：`none`、`fp4`、`fp8`。 |
+| `compression` | `none` | feature 存储压缩：`none`、`fp4`、`fp8`。 |
 | `data_start_ds` | `20160101` | 数据业务起点。 |
 | `data_offset` | `1024` | 交易日轴起始偏移；会在构建 universe 时跳过更早的 mask/date 数据。通常保持默认，只有明确知道需要更早历史或更小 universe 起点时再改。 |
 | `ashare_data_path` | 空 | AshareCache 根目录；空值时从 `constants.cache_path` 派生。 |
@@ -663,36 +617,48 @@ class ResearchModel:
 | 值 | 说明 |
 |---|---|
 | `none` | 不压缩，最保守。 |
-| `fp4` | 4-bit 近似量化，主要降低 CPU 内存。 |
+| `fp4` | 4-bit 近似量化，主要降低训练和预测时的 feature 内存。 |
 | `fp8` | 使用 PyTorch float8，依赖当前 PyTorch 环境支持。 |
 
-压缩只作用于内部特征缓存，不改变 label、mask、原始因子文件、模型参数和模型输入输出语义。
+启用方式：
+
+```xml
+<data dtype="float16" compression="fp4" data_start_ds="20160101" data_offset="1024">
+  <item name="factor.size" path="1d_BarraCNE5/BarraCNE5.size" role="factor" />
+  <item name="label.default" path="vwap30_label1d" role="label" />
+</data>
+```
+
+使用边界：
+
+- 压缩对所有已配置频率的 feature 生效，包括 `1d`、`5m`、`1m`。
+- 不压缩 label、mask、原始因子文件、模型参数和模型输出。
+- 模型侧仍拿到浮点 tensor，接口不变；区别主要是内存占用和数值精度。
+- `fp4` 是有损压缩，适合内存压力明显的训练；做数值排查或严格复现实验时优先用 `none`。
+- `fp4` / `fp8` 建议搭配 `dtype="float16"`、`float32` 或 `bfloat16`；如果需要 `float64`，使用 `compression="none"`。
 
 ### 13.2 item
 
 ```xml
-<item name="factor.example" module="builtin.factorsim" path="example_factor" role="factor" display_name="example_factor" />
-<item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+<item name="factor.example" path="example_factor" role="factor" display_name="example_factor" />
+<item name="label.default" path="vwap30_label1d" role="label" />
 ```
 
-3D `builtin.factorsim` 示例：
+日内 `builtin.factorsim` 示例：
 
 ```xml
 <item
-  name="factor.grid_close_mean_5"
-  module="builtin.factorsim"
+  name="factor.grid_close_1m"
   path="1m_Grid1mBar/Grid1mBar.close"
   role="factor"
-  nbar="5"
->
-  <op name="mean" axis="bar" />
-</item>
+  freq="1m"
+/>
 ```
 
 | 属性 | 说明 |
 |---|---|
 | `name` | 数据注册名，必须唯一。 |
-| `module` | 数据读取方式。稳定内置值见下表。 |
+| `module` | 数据读取方式；缺省为 `builtin.factorsim`。通常不用写，除非使用 parquet 或自定义读取函数。 |
 | `path` | 数据路径或内置 module 参数。 |
 | `role` | `factor` 进入模型 feature；`label` 作为训练 label；`aux` 只供 op 或自定义 loader 使用。 |
 | 其他属性 | 会进入 item 参数，例如 `display_name`。 |
@@ -701,33 +667,37 @@ class ResearchModel:
 
 | module | 用途 |
 |---|---|
-| `builtin.factorsim` | 读取 factor 或 AshareCache 数据；绝对路径直读，相对路径相对当前 XML/data-pack 文件。 |
-| `builtin.label` | 从 AshareCache label 路径读取 label。 |
+| `builtin.factorsim` | 默认读取方式；读取 factor、label、Barra 风格因子或 AshareCache 数据。 |
 | `builtin.alpha_parquet` | 读取本地 alpha parquet 矩阵。 |
-| `builtin.barra_style` | 读取 Barra 风格因子。 |
+| `my_data:load_data` | 自定义 data module。 |
 
 当前只支持一个训练 label。多个 factor 会按 item 顺序组成 feature。
 
 `builtin.factorsim` 补充约定：
 
-- 2D 数据源：直接按日读取，不接受 `nbar`、`freq` 这些参数。
-- 3D 数据源：可以声明 `nbar`，也可以只声明 `freq`。`nbar` 只负责在后续 `<op>` 执行前，把 `bar` 轴裁成最后 `nbar` 个位置；不负责聚合。
-- 如果 3D 数据源没有显式写 `nbar`，系统会根据 `freq` 给出该频率的默认全量 `bar` 数。
-- 3D 数据的可见时点仍由运行时 `ti` 决定；若未显式传入，则使用 `snap_ti`，再否则使用默认最后可用时点。
-- 所有聚合都通过 `<op>` 表达，例如 `mean(axis="bar")`、`last(axis="bar")`。
+- `freq` 支持固定值 `1d`、`5m`、`1m`；缺省等价于 `freq="1d"`。
+- 2D 数据源通常使用默认 `1d`，进入模型后的 group key 是 `x["1d"]`。
+- 3D 日内数据源必须显式声明 `freq="5m"` 或 `freq="1m"`，系统保持完整 `[date, bar, code]` cube，不允许在数据层用 `nbar` 或 reducer 降维。
+- factor 会按 `freq` 分组进入模型，不会在框架内 concat 成一个大 tensor。
+- 如果没有配置某个频率的 factor，模型输入里不会出现该 key；可通过模型 config 注入的 `freqs` 和 `num_features_by_freq` 判断。
+- 运行时 `ti` 只 mask 窗口最后一天中大于当前时点的日内 bars，历史天保持完整。
+- label 只支持 `freq="1d"`。日内数据可以作为 factor 或 aux，但不能作为训练 label。
 
-实测时间轴说明：
+研究员可见的单日 group shape：
 
-- 当前本机 `AshareCache/1m_Grid1mBar/Grid1mBar.close` 按天实际可读出 `239` 个时点：
-  上午 `09:30:00` 到 `11:30:00` 共 `121` 个，下午 `13:01:00` 到 `15:00:00` 共 `118` 个。
-- 当前本机 `AshareCache/5m_Intv5mBar/Intv5mBar.close` 按天实际可读出 `49` 个时点，不是 `48` 个：
-  上午从 `09:30:00` 到 `11:30:00` 共 `25` 个，下午从 `13:05:00` 到 `14:55:00` 共 `23` 个，外加收盘时点 `15:00:00`。
-- 也就是说，5 分钟序列在这套数据里包含最后一个单独的 `15:00:00` 时点。
+| freq | 数据源 shape | loader 输出单日 shape |
+|---|---|---|
+| `1d` | `[date, code]` | `[stock, feature]` |
+| `5m` | `[date, 49, code]` | `[stock, 49, feature]` |
+| `1m` | `[date, 239, code]` | `[stock, 239, feature]` |
 
-常用下标示例：
+训练和预测窗口会在最前面增加 `tsDays` 维度。研究员如果需要在模型侧聚合日内 bar，可以在 `ResearchModel` 中自行做 MLP/attention/pooling；框架不会在数据层降维。
 
-- `1m`：`0 -> 093000`，`120 -> 113000`，`121 -> 130100`，`238 -> 150000`
-- `5m`：`0 -> 093000`，`24 -> 113000`，`25 -> 130500`，`48 -> 150000`
+固定日内时间轴：
+
+- `1m` 固定为每天 `239` 个 bar。
+- `5m` 固定为每天 `49` 个 bar，包含 `15:00:00` 收盘 bar。
+- 自定义数据源必须按框架固定顺序返回完整 bar 轴；缺 bar 或顺序不同应在数据源侧修正。
 
 ### 13.3 import
 
@@ -753,8 +723,8 @@ data-pack 文件只写数据声明，不写完整任务配置：
 
 ```xml
 <data-pack>
-  <item name="factor.turn20" module="builtin.factorsim" path="turn20" role="factor" />
-  <item name="factor.size" module="builtin.factorsim" path="size" role="aux" />
+  <item name="factor.turn20" path="turn20" role="factor" />
+  <item name="factor.size" path="size" role="aux" />
 </data-pack>
 ```
 
@@ -763,7 +733,7 @@ data-pack 文件只写数据声明，不写完整任务配置：
 `<op>` 是 item 级预处理，写在对应 `<item>` 下：
 
 ```xml
-<item name="factor.example" module="builtin.factorsim" path="example_factor" role="factor">
+<item name="factor.example" path="example_factor" role="factor">
   <op name="rolling_mean" window="5" />
   <op name="neut(barra.size, barra.btop)" />
   <op name="neut(['size', 'beta', 'sizenl'], 0.5)" />
@@ -779,19 +749,13 @@ data-pack 文件只写数据声明，不写完整任务配置：
 |---|---|
 | `cs_zscore` / `zscore` | 截面 z-score。 |
 | `rank` | 排名，可选 `axis`、`pct`。 |
-| `last` | 沿指定轴取最后一个位置；必须显式给 `axis`。 |
-| `mean` | 沿指定轴求均值；必须显式给 `axis`。 |
-| `std` | 沿指定轴求标准差；必须显式给 `axis`。 |
-| `sum` | 沿指定轴求和；必须显式给 `axis`。 |
-| `max` | 沿指定轴取最大值；必须显式给 `axis`。 |
-| `min` | 沿指定轴取最小值；必须显式给 `axis`。 |
 | `truncate` | 截断到 `min`/`max`。 |
 | `nan_to_num` / `fillna` | 缺失和无穷替换为指定值。 |
 | `winsorize_by_quantile` | 分位数 winsorize，参数 `low`、`high`，可选 `axis`。 |
 | `normalize_by_max_abs` | 按最大绝对值归一化，可选 `axis`。 |
-| `rolling_mean` | 滚动均值，参数 `window`，默认作用在 `date` 轴；可选 `axis`。 |
-| `rolling_std` | 滚动标准差，参数 `window`，默认作用在 `date` 轴；可选 `axis`。 |
-| `neut(...)` | 对一个或多个已注册数据做中性化；依赖可逐个写，也可写成列表；末尾数值为扣除比例，默认 `1.0`，也可写成与依赖等长的比例列表。 |
+| `rolling_mean` | 沿 `date` 轴滚动均值，参数 `window`。 |
+| `rolling_std` | 沿 `date` 轴滚动标准差，参数 `window`。 |
+| `neut(...)` | 仅支持 `1d` 数据，对一个或多个已注册 `1d` 依赖做中性化；依赖可逐个写，也可写成列表；末尾数值为扣除比例，默认 `1.0`。 |
 
 其中轴语义统一用命名轴：
 
@@ -799,7 +763,7 @@ data-pack 文件只写数据声明，不写完整任务配置：
 - `axis="bar"`
 - `axis="code"`
 
-对于 3D cube item，系统会先应用 `nbar` 选窗，再按 `<op>` 顺序执行。最终 pipeline 必须收敛成 `[date, code]` 才能进入 `processed_cache`。
+item op 只接受上表白名单。`last/mean/std/sum/max/min` 和 `nbar` 不属于当前接口；如需日内聚合，应在 `ResearchLoader` 或 `ResearchModel` 中显式写代码。
 
 如果只需要改 item 级处理，优先用 `<op>`。如果要改完整 feature/label 生成逻辑，再接入 `ResearchLoader`。
 
@@ -817,15 +781,45 @@ data-pack 文件只写数据声明，不写完整任务配置：
 
 ### 14.1 ResearchLoader
 
-`loader.py` 必须定义 `ResearchLoader`。常见用途：
+`loader.py` 必须定义 `ResearchLoader`，并继承 `comb2.ComboDataLoader`。默认 loader 已经负责：
+
+- 按 `<combo><data>` 加载 factor、label、aux。
+- 按 `freq` 组装 `FeatureGroups`。
+- 对 `1d` feature 做默认截面标准化、截断、缺失填 0。
+- 对 `5m` / `1m` feature 默认不做预处理，只转成配置的 dtype。
+- 在训练和预测窗口最后一天 mask 掉当前 `ti` 之后的日内 bars。
+
+优先覆盖 group 级或 label 级 hook，不建议直接重写 `preprocess_features()`。`preprocess_features()` 已经负责遍历所有 group，用户只需要定义每个 group 怎么处理。
+
+常见用途：
 
 | 目标 | 推荐覆盖 |
 |---|---|
-| 改 feature 预处理 | `preprocess_feature(feature, ds)` |
+| 改某个频率 group 的预处理 | `preprocess_feature_group(freq, feature, ds)` |
+| 改日频默认预处理 | `preprocess_daily_features(feature, ds)` |
+| 给日内 group 增加默认处理 | `preprocess_feature_group(freq, feature, ds)` 中处理 `5m` / `1m` |
 | 改 label 预处理 | `preprocess_label(label_values, valid_mask, ds, ret_days)` |
-| 改完整 feature 生成方式 | `gen_feature(ds)` |
+| 改 raw feature 组装方式 | `build_raw_feature(ds)` |
+| 完全替换 feature 生成流程 | `gen_feature(ds)` |
 | 改完整 label 生成方式 | `gen_label(ds, ret_days)` |
-| 改预测窗口处理 | `process_feature_window(feature_window)` |
+| 改训练/预测窗口处理 | `transform_feature_window(feature_window, stage=...)` |
+| 改预测股票可用性 mask | `_feature_available_mask(feature_window)` |
+
+Hook 契约：
+
+| 函数 | 输入 | 必须返回 | 负责什么 | 不应该做什么 |
+|---|---|---|---|---|
+| `build_raw_feature(ds)` | 单个交易日 `ds` | `FeatureGroups` | 组装原始 feature group，通常用于加入派生 feature 或 aux feature。 | 不要改变股票顺序；不要制造未配置的频率 key。 |
+| `preprocess_daily_features(feature, ds)` | `1d` 单日 `[stock, feature]` | 同 shape tensor | 日频默认处理。 | 不要改变 stock 或 feature 维度。 |
+| `preprocess_feature_group(freq, feature, ds)` | 单日 group：`1d=[stock,F]`，`5m/1m=[stock,bar,F]` | 同 freq 的单日 tensor | 每个频率自己的预处理。 | 不要跨 group concat；不要删除 bar 维；不要改变 stock 顺序。 |
+| `preprocess_features(features, ds)` | `FeatureGroups` | `FeatureGroups` | 总控函数，默认遍历所有 group。 | 通常不要覆盖；覆盖后必须保留缺失频率不存在的语义。 |
+| `gen_feature(ds)` | 单日 `ds` | `FeatureGroups` | 对外单日 feature 入口。 | 如果覆盖，需自己处理 `align_date`、dtype 和 group key。 |
+| `preprocess_label(label_values, valid_mask, ds, ret_days)` | `[stock]` label 和 bool mask | `(y, w)`，二者 `[stock]` | label 标准化、截断、权重处理。 | 不要改变股票顺序或长度。 |
+| `gen_label(ds, ret_days)` | label 日期和 horizon | `(y, w)`，二者 `[stock]` | 完整 label 生成。 | 除非接管 label 来源，否则优先覆盖 `preprocess_label`。 |
+| `transform_feature_window(feature_window, stage=...)` | 窗口 `FeatureGroups` | 窗口 `FeatureGroups` | train/predict 共用窗口处理；默认 mask 最后一天未来日内 bars。 | 不要取消未来 bar mask，除非明确保证无未来数据泄露。 |
+| `_feature_available_mask(feature_window)` | predict 窗口 `FeatureGroups` | `[stock]` bool | 决定预测阶段哪些股票有 alpha。 | 不要返回已筛选后的 feature；筛选由 `process_feature_window` 做。 |
+
+当前框架没有 legacy adapter。旧的 `nbar`、`last/mean/std/sum/max/min` reducer、`<combo><loader>` 都不可用。
 
 最小示例：
 
@@ -834,35 +828,80 @@ from __future__ import annotations
 
 import torch
 
-from comb2 import ComboDataLoader
+from comb2 import ComboDataLoader, FeatureGroups
 
 
 class ResearchLoader(ComboDataLoader):
-    def preprocess_feature(self, feature, ds: int):
+    def preprocess_feature_group(self, freq: str, feature, ds: int):
+        if freq != "1d":
+            return feature.to(self.dtype)
         mean = feature.nanmean(dim=0, keepdim=True)
         std = torch.sqrt(((feature - mean) ** 2).nanmean(dim=0, keepdim=True)).clamp_min(1e-4)
         feature = (feature - mean) / std
         feature = feature.clamp(-4.0, 4.0)
         return torch.nan_to_num(feature, nan=0.0, posinf=0.0, neginf=0.0).to(self.dtype)
+
+    def transform_feature_window(self, feature_window: FeatureGroups, *, stage: str) -> FeatureGroups:
+        feature_window = super().transform_feature_window(feature_window, stage=stage)
+        return feature_window
 ```
 
 返回约定：
 
 | 接口 | 返回 |
 |---|---|
-| `gen_feature(ds)` | `[N, F]` tensor，`N` 为股票数。 |
+| `gen_feature(ds)` | `FeatureGroups`，按 `freq` 分组。 |
 | `gen_label(ds, ret_days)` | `(y, w)`，二者 shape 都是 `[N]`。 |
-| `process_feature_window(feature_window)` | 默认应保持或返回可用于预测的窗口结构。 |
+| `registry.get_data(name, start_ds, end_ds)` | 已声明 item 的处理后数据；`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。 |
+| `transform_feature_window(feature_window, stage=...)` | `FeatureGroups`，默认只对最后一天日内未来 bars 填 NaN。 |
 
-读取 `<combo><data>` 中 `role="aux"` 的数据时，可在 `ResearchLoader` 中使用 `self.registry`：
+`FeatureGroups` 是 mapping-like 对象，常用写法：
 
 ```python
-self.registry._ensure_range(("aux.example",), ds, ds)
-idx = self.universe.date2idx(ds)
-values = self.registry.get_data("aux.example")[idx]
+import torch
+
+for freq, tensor in x.items():
+    print(freq, tuple(tensor.shape))
+
+if "1m" in x:
+    cube = x["1m"]
+
+x = x.to(dtype=torch.float32)
+x_valid = x.select_stocks(torch.arange(x.stock_count()))
 ```
 
-`get_data(name)` 返回按 universe 对齐的完整矩阵；调用前需先确保目标日期范围已加载。
+`role="aux"` 适合声明自定义 loader / label 逻辑需要依赖、但不应该直接进入模型的 item。默认 loader 不会把 aux 放进 `FeatureGroups`；如果希望某个数据直接进入模型 feature，应把它声明为 `role="factor"`。
+
+XML：
+
+```xml
+<item name="aux.can_trade" path="can_trade_mask" role="aux" />
+```
+
+在 `ResearchLoader` 中读取已声明的 factor / label / aux 数据，统一使用 `self.registry.get_data(name, start_ds, end_ds)`。传入日期范围时会自动加载缺失区间；返回始终保留 date 维。
+
+```python
+import torch
+
+from comb2 import ComboDataLoader
+
+
+class ResearchLoader(ComboDataLoader):
+    def preprocess_feature_group(self, freq: str, feature, ds: int):
+        if freq != "1d":
+            return feature.to(self.dtype)
+        can_trade = self.registry.get_data("aux.can_trade", ds, ds)[0].to(torch.bool)
+        feature = feature.masked_fill(~can_trade[:, None], torch.nan)
+        return super().preprocess_daily_features(feature, ds)
+```
+
+常见返回 shape：
+
+- `freq="1d"`: `[R, stock]`
+- `freq="5m"`: `[R, 49, stock]`
+- `freq="1m"`: `[R, 239, stock]`
+
+如果要把 aux 变成模型 feature，直接在 XML 中把它声明为 `role="factor"`，让框架自动计入对应 `freq` 的 feature 数。
 
 ### 14.2 ResearchDataset
 
@@ -872,6 +911,16 @@ values = self.registry.get_data("aux.example")[idx]
 |---|---|
 | 改训练股票池 | `_build_validinsts()` |
 | 改训练样本返回结构 | `__getitem__(idx)` |
+| 改整段训练数据构造 | `__init__(...)`，仅在确实需要时使用 |
+
+默认训练样本：
+
+| 字段 | 类型和 shape |
+|---|---|
+| `idx` | Python int 或 0d index，用于定位样本。 |
+| `x` | `FeatureGroups`，窗口 shape：`1d=[tsDays, M, F]`，`5m/1m=[tsDays, M, bar, F]`。 |
+| `y` | `[M]` tensor。 |
+| `w` | `[M]` tensor，训练权重或有效 mask。 |
 
 最小示例：
 
@@ -889,7 +938,7 @@ class ResearchDataset(ComboTrainDataset):
         return super().__getitem__(idx)
 ```
 
-如果修改 `__getitem__` 的返回结构，必须同步修改 `ResearchModel.fit()`。
+如果修改 `__getitem__` 的返回结构，必须同步修改 `ResearchModel.fit()`；预测阶段仍然只调用 `ResearchModel.predict(x_window)`，不会自动接收 dataset 里额外返回的字段。
 
 ## 15. 外部 data module
 
@@ -901,6 +950,7 @@ class ResearchDataset(ComboTrainDataset):
   module="my_data:load_data"
   path="my_factor.parquet"
   role="factor"
+  freq="1d"
 />
 ```
 
@@ -914,21 +964,41 @@ import torch
 
 
 def load_data(item, registry, start_ds: int, end_ds: int):
-    path = Path(registry.config_path or ".") / item["path"]
-    frame = pd.read_parquet(path)
-    dates = [ds for ds in registry.universe.dates if start_ds <= int(ds) <= end_ds]
-    out = torch.full((len(dates), len(registry.universe.codes)), float("nan"))
-    return out
+    frame = pd.read_parquet(Path(item.path))
+    frame.index = frame.index.astype(int)
+    frame.columns = [str(code).zfill(6) for code in frame.columns]
+
+    start_idx = registry.universe.date2idx(start_ds)
+    end_idx = registry.universe.date2idx(end_ds)
+    dates = [registry.universe.idx2date(idx) for idx in range(start_idx, end_idx + 1)]
+    codes = list(registry.universe.codes)
+
+    aligned = frame.reindex(index=dates, columns=codes)
+    return torch.as_tensor(aligned.to_numpy(), dtype=registry.universe.dtype)
 ```
 
 稳定要求：
 
 | 要求 | 说明 |
 |---|---|
-| shape | `[R, N]`，`R` 是日期数，`N` 是股票数。 |
+| shape | `freq="1d"` 返回 `[R, N]`；`freq="5m"` 返回 `[R, 49, N]`；`freq="1m"` 返回 `[R, 239, N]`。`R` 是日期数，`N` 是股票数。 |
 | 缺失值 | 用 `NaN`。 |
-| 对齐 | 日期和股票顺序必须对齐 `registry.universe.dates` / `registry.universe.codes`。 |
+| 对齐 | 日期和股票顺序必须与框架 universe 一致；日内 bar 顺序必须完全等于框架固定时间轴。 |
+| 频率 | 自定义 module 也遵守 item 上的 `freq`；缺省是 `1d`。 |
 | 预处理 | rolling、neutralize 等建议写在 `<op>` 或 `ResearchLoader`。 |
+
+自定义 module 可用的稳定输入：
+
+| 对象 | 用法 |
+|---|---|
+| `item.path` | XML `<item path="...">` 解析后的路径。 |
+| `item.params` | XML `<item>` 上除标准字段外的额外参数，例如 `display_name`、`freq`。 |
+| `registry.universe.dates` | 框架交易日序列。 |
+| `registry.universe.codes` | 框架股票代码序列。 |
+| `registry.universe.dtype` | 当前数据 dtype。 |
+| `registry.universe.date2idx(ds)` / `idx2date(idx)` | 日期和交易日序号互转。 |
+
+自定义 module 只负责读取和对齐原始数据，不负责把 cube 降维。是否聚合日内维度由 `ResearchLoader` 或 `ResearchModel` 决定。
 
 ## 16. backtest
 
@@ -1191,19 +1261,6 @@ runEval --va base.csv new.csv --blended-output blended.csv
 
 ## 20. 消融和持仓相关
 
-逐特征置零消融：
-
-```bash
-comb-ablation-zero config.xml --features 0,1,2
-```
-
-常用参数：
-
-```bash
-comb-ablation-zero config.xml --feature-group-size 20 --ablation-batch-size 4
-comb-ablation-zero config.xml --output-suffix ablation_by_zero
-```
-
 两个 position parquet 平均日频相关：
 
 ```bash
@@ -1267,7 +1324,6 @@ comb-pos-corr pos_a.parquet pos_b.parquet --min-valid 1000
 建议：
 
 - 降低 `max_train_days`。
-- 关闭 `processed_feature_cache`。
 - 尝试 `compression="fp4"`。
 - 降低模型 `batch_size` 或 `epochs`。
 - 调整 `torch_threads`，避免多任务并发时 CPU 线程过量。

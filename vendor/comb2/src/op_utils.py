@@ -265,49 +265,6 @@ def normalize_by_max_abs(x: torch.Tensor, eps: float | None = None, axis: int | 
     return torch.where(scale_valid, out, x)
 
 
-def reduce_last(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
-    if x.shape[axis] == 0:
-        out_shape = list(x.shape)
-        del out_shape[axis]
-        return torch.full(out_shape, torch.nan, dtype=x.dtype, device=x.device)
-    return x.select(axis, x.shape[axis] - 1)
-
-
-def reduce_mean(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    return nanmean(x, axis=axis)
-
-
-def reduce_std(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    return nanstd(x, axis=axis)
-
-
-def reduce_sum(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
-    values = torch.nan_to_num(x, nan=0.0)
-    valid = torch.isfinite(x).any(dim=axis)
-    out = values.sum(dim=axis)
-    out = out.to(x.dtype)
-    out[~valid] = torch.nan
-    return out
-
-
-def _reduce_extreme(x: torch.Tensor, axis: int, fill_value: float, reducer) -> torch.Tensor:
-    axis = _resolve_axis(None, axis, ndim=x.ndim, default=-1)
-    values = torch.where(torch.isnan(x), torch.full_like(x, fill_value), x)
-    out = reducer(values, dim=axis).values
-    out[torch.isinf(out)] = torch.nan
-    return out
-
-
-def reduce_max(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    return _reduce_extreme(x, axis, -torch.inf, torch.max)
-
-
-def reduce_min(x: torch.Tensor, axis: int = -1) -> torch.Tensor:
-    return _reduce_extreme(x, axis, torch.inf, torch.min)
-
-
 def _rolling_reduce(x: torch.Tensor, window: int, axis: int, reducer, name: str) -> torch.Tensor:
     axis = _resolve_axis(None, axis, ndim=x.ndim, default=0)
     window = int(window)

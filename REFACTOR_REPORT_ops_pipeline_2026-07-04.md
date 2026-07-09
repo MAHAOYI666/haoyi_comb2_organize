@@ -2,6 +2,10 @@
 
 Date: 2026-07-04
 
+Status: superseded by the later cube/frequency refactor. This file is retained only as a historical migration note and is not a current API reference.
+
+Current stable behavior is documented in `config.human`, `README.md`, and `vendor/comb2/docs/ARCHITECTURE.md`: `freq` is fixed to `1d` / `5m` / `1m`, cube factors stay cube-shaped, `nbar` is removed, reducer ops are unsupported, and model inputs are `FeatureGroups`.
+
 ## Summary
 
 This refactor removed the old dedicated `reducer` concept from the 3D `builtin.factorsim` path and moved the data flow to an ops-only pipeline:

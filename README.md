@@ -20,6 +20,8 @@ vendor/
 
 `vendor/` 只包含运行所需源码，不包含原仓库 git history、构建产物、缓存和历史输出。
 
+完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
+
 ## research 流程示例
 
 下面以 `eg-lgbm` 为例说明完整流程。
@@ -50,6 +52,14 @@ eg-lgbm/
 - `predict(x_window)`
 - `save(path_or_buffer)`
 - `load(path_or_buffer)`
+
+`predict(x_window)` 接收的是按频率分组的 `FeatureGroups`，不是单个 concat tensor。常见 shape：
+
+- `x_window["1d"]`: `[ts_days, stock, feature]`
+- `x_window["5m"]`: `[ts_days, stock, 49, feature]`
+- `x_window["1m"]`: `[ts_days, stock, 239, feature]`
+
+如果 config 没有声明某个频率的 factor，对应 key 不会存在。模型初始化时会额外收到 `freqs`、`num_features_by_freq`、`num_features`。
 
 ### 3. 编写配置文件
 
@@ -164,9 +174,38 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 缓存说明：
 
-- `processed_feature_cache="true"` 缓存的是最终预处理后的单日 feature，不是原始 1m/5m 日内矩阵。
-- 3D `builtin.factorsim`（例如 `1m_Grid1mBar/*`、`5m_Intv5mBar/*`）会按请求日期即时读取成 cube，在 `nbar` 选窗后进入 item ops pipeline，不再长期保留原始分钟级 `source cache`。
-- 当前本机实测：`1m_Grid1mBar` 每天 `239` 个时点，`5m_Intv5mBar` 每天 `49` 个时点，且 `5m` 序列包含最后一个单独的 `15:00:00` 时点。
+- 3D `builtin.factorsim`（例如 `1m_Grid1mBar/*`、`5m_Intv5mBar/*`）必须在 `<item>` 声明 `freq="1m"` 或 `freq="5m"`，loader 会保持完整 cube 维度，不在数据层降维。
+- 模型侧拿到的是按频率分组的 `FeatureGroups`：`x["1d"]` 为 `[stock, feature]` 或 `[ts_days, stock, feature]`，`x["5m"]` / `x["1m"]` 为 `[stock, bar, feature]` 或 `[ts_days, stock, bar, feature]`。
+- 当前固定时间轴：`1m` 每天 `239` 个时点，`5m` 每天 `49` 个时点，且 `5m` 序列包含最后一个单独的 `15:00:00` 时点；source 时间轴必须完全一致。
+- 不支持 `nbar`，也不支持 `last/mean/std/sum/max/min` 这类会改变维度的 data op。日内聚合应放在 `ResearchModel` 或自定义 `ResearchLoader` 中。
+
+## 可重写接口
+
+可在 `<combo><paths>` 中指定：
+
+```xml
+<paths
+  model_path="model.py"
+  research_loader_path="loader.py"
+  research_dataset_path="dataset.py"
+/>
+```
+
+`loader.py` 里定义 `ResearchLoader(ComboDataLoader)`，常用 hook：
+
+- `preprocess_feature_group(freq, feature, ds)`：每个频率 group 的单日预处理；`1d=[stock,F]`，`5m/1m=[stock,bar,F]`。
+- `preprocess_daily_features(feature, ds)`：只改日频默认预处理。
+- `preprocess_label(label_values, valid_mask, ds, ret_days)`：改 label 标准化和样本权重。
+- `transform_feature_window(feature_window, stage=...)`：改训练/预测窗口处理；默认会 mask 最后一天未来日内 bar。
+
+在 loader hook 中读取已声明的 factor / label / aux 数据，使用 `self.registry.get_data(name, start_ds, end_ds)`；返回保留 date 维：`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。
+
+`dataset.py` 里定义 `ResearchDataset(ComboTrainDataset)`，常用 hook：
+
+- `_build_validinsts()`：改训练股票池。
+- `__getitem__(idx)`：改训练样本结构；如果改返回值，必须同步修改 `ResearchModel.fit()`。
+
+更完整的输入、输出和 shape 契约见 `config.human` 的 “ResearchLoader 和 ResearchDataset” 章节。
 
 ## 运行结果
 

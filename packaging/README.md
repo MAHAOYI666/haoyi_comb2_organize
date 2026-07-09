@@ -52,7 +52,7 @@ Python 3.13 environment.
 
 The build compiles:
 
-- `config`, `runCombo`, `runEval`, `comboRunner`, `runAblationByZero`, `runPosCorr`
+- `config`, `runCombo`, `runEval`, `comboRunner`, `runPosCorr`
 - `vendor/comb2-simbase` (`comb2_simbase` import package)
 - `optuna_framework`
 - `comb_eval`
@@ -77,5 +77,4 @@ Installed commands include:
 - `comb-run`
 - `comb-eval`
 - `comb-combo-runner`
-- `comb-ablation-zero`
 - `comb-pos-corr`

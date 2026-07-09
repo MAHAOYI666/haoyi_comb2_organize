@@ -32,7 +32,6 @@ MODULE_SOURCES = {
     "runCombo": REPO_ROOT / "runCombo.py",
     "runEval": REPO_ROOT / "runEval.py",
     "comboRunner": REPO_ROOT / "comboRunner.py",
-    "runAblationByZero": REPO_ROOT / "runAblationByZero.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "comboHelloWorld": REPO_ROOT / "comboHelloWorld.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
@@ -43,7 +42,6 @@ ENTRY_POINTS = {
     "runEval": "runEval:main",
     "comb-run": "runCombo:main",
     "comb-combo-runner": "comboRunner:main",
-    "comb-ablation-zero": "runAblationByZero:main",
     "comb-pos-corr": "runPosCorr:main",
     "comb-eval": "comb_eval.cli:main",
     "combo-hello-world": "comboHelloWorld:main",
@@ -152,7 +150,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for Combo2 and bundled vendor packages.")
     parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
     parser.add_argument("--name", default="Combo2", help="Wheel distribution name")
-    parser.add_argument("--version", default="0.1.4", help="Wheel version")
+    parser.add_argument("--version", default="0.1.5", help="Wheel version")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
     parser.add_argument("--dist-dir", type=Path, default=REPO_ROOT / "dist_protected", help="Output wheel directory")
     parser.add_argument("--dry-run", action="store_true", help="Prepare the build tree and print what would be compiled")

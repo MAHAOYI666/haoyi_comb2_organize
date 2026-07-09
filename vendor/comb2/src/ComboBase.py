@@ -18,7 +18,7 @@ from typing import Any
 import torch
 import numpy as np
 
-from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig, nan_to_num
+from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig
 from .selection import DefaultSelectionModule
 
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
@@ -39,7 +39,6 @@ class ComboBase:
         self.retDays = node.retDays
         self.tsDays = node.tsDays
         self.load_chunk_days = node.load_chunk_days
-        self.processed_feature_cache = bool(node.processed_feature_cache)
         self.snap_ti = getattr(node, "snap_ti", None)
         self.seed = getattr(node, "seed", None)
         self.deterministic = bool(getattr(node, "deterministic", False))
@@ -69,14 +68,13 @@ class ComboBase:
         self.loader = self.research_loader_cls(node.loader_config)
         if self.snap_ti is not None:
             self.loader.set_current_ti(int(self.snap_ti))
-        self.loader.set_processed_feature_cache_enabled(self.processed_feature_cache)
         self.loader.monitor = getattr(node, "monitor", None)
         self.buffer = ComboBuffer(
-            feat_size=self.loader.num_features,
+            group_shapes=self.loader.feature_group_shapes(len(self.loader.mask.code)),
             keepdays=self.tsDays,
-            instsz=len(self.loader.mask.code),
             dtype=self.loader.dtype,
             codec=self.loader.codec,
+            freqs=self.loader.freqs,
         )
         self.selection = node.selection_module or DefaultSelectionModule(
             max_train_days=self.max_train_days,
@@ -120,6 +118,8 @@ class ComboBase:
                 "dtype": self.loader.dtype,
                 "tsDays": self.tsDays,
                 "num_features": self.loader.num_features,
+                "freqs": self.loader.freqs,
+                "num_features_by_freq": dict(self.loader.num_features_by_freq),
             }
         )
         if "hiddenSize" in model_config:
@@ -267,7 +267,7 @@ class ComboBase:
             full_pred = torch.full((len(self.loader.mask.code),), torch.nan, dtype=self.loader.dtype)
             full_pred[:pred.numel()] = pred.to(dtype=self.loader.dtype)
             return full_pred
-        pred = self.predict(model, feature_window[:, trainii])
+        pred = self.predict(model, feature_window.select_stocks(trainii))
         full_pred = torch.full((len(self.loader.mask.code),), torch.nan, dtype=self.loader.dtype)
         full_pred[trainii] = pred.to(dtype=self.loader.dtype)
         return full_pred
@@ -286,7 +286,7 @@ class ComboBase:
         self.buffer_load(ds)
         end_didx = self.loader.date2didx(ds)
         didx_list = [end_didx - (self.tsDays - 1) + i for i in range(self.tsDays)]
-        feature_window = nan_to_num(self.buffer.get(didx_list), 0.0).to(self.loader.dtype)
+        feature_window = self.loader.transform_feature_window(self.buffer.get(didx_list), stage="predict")
         cur_pred = self._predict_with_refill(self.model, feature_window)
         if self.oldModel is not None and self.model_smooth_rate < 1.0:
             old_pred = self._predict_with_refill(self.oldModel, feature_window)
@@ -327,10 +327,6 @@ class ComboBase:
             self._release_torch_cache("after_old_model_replace")
 
         self.reset_buffer = True
-        if self.processed_feature_cache:
-            self.loader.set_processed_feature_cache_max_days(
-                plan.ndays + int(self.retDays) + int(self.trainDelay)
-            )
         print(
             f"[TRAIN] ds={ds} target_ds={plan.target_ds} "
             f"loading_days={plan.loading_days} raw_ndays={plan.raw_ndays} ndays={plan.ndays} tsDays={self.tsDays}"
@@ -345,7 +341,6 @@ class ComboBase:
             ts_days=self.tsDays,
             validinsts=plan.validinsts,
             load_chunk_days=self.load_chunk_days,
-            processed_feature_cache=self.processed_feature_cache,
             codec=self.loader.codec,
         )
         dataset_time = time.perf_counter() - dataset_start

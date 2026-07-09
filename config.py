@@ -44,7 +44,7 @@ def _builtin_factor_item(path: str) -> dict[str, Any]:
 def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
     return {
         "name": "label.default",
-        "module": "builtin.label",
+        "module": "builtin.factorsim",
         "path": path,
         "role": "label",
         "mode": "read_dump",
@@ -102,7 +102,6 @@ DEFAULT_CONFIG = {
             "retDays": 1,
             "tsDays": 8,
             "load_chunk_days": None,
-            "processed_feature_cache": False,
             "torch_threads": 64,
             "torch_interop_threads": 1,
             "model_smooth_rate": 0.7,
@@ -189,6 +188,21 @@ PATH_FIELDS = {
 
 DATA_PATH_FIELDS = {"path", "config_path"}
 BUILTIN_DATA_PRESETS = {"barra"}
+DATA_FREQ_ORDER = ("1d", "5m", "1m")
+SUPPORTED_DATA_FREQS = set(DATA_FREQ_ORDER)
+SUPPORTED_DATA_OPS = {
+    "cs_zscore",
+    "zscore",
+    "rank",
+    "truncate",
+    "nan_to_num",
+    "fillna",
+    "winsorize_by_quantile",
+    "normalize_by_max_abs",
+    "rolling_mean",
+    "rolling_std",
+    "neut",
+}
 DATA_ATTR_DEFAULTS = {
     key: DEFAULT_CONFIG["combo"]["loader"][key]
     for key in (
@@ -284,6 +298,9 @@ def _parse_feature_ops(feature_element: ET.Element) -> tuple[dict[str, Any], ...
         name = op_element.attrib.get("name")
         if not name:
             raise ValueError(f"<op> under <{feature_element.tag}> requires name")
+        op_name = name.split("(", 1)[0].strip().lower()
+        if op_name not in SUPPORTED_DATA_OPS:
+            raise ValueError(f"unsupported data op: {name}")
         params = {key: _parse_scalar(value) for key, value in op_element.attrib.items() if key != "name"}
         ops.append({"name": name, "params": params})
     return tuple(ops)
@@ -296,7 +313,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     config_path = attrs.pop("config_path", None)
     mode = attrs.pop("mode", "read_dump")
     role = attrs.pop("role", "aux")
-    module = attrs.pop("module", None)
+    module = attrs.pop("module", "builtin.factorsim")
     legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
     if legacy_keys:
         extra = ", ".join(sorted(legacy_keys))
@@ -304,13 +321,25 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     if not name:
         raise ValueError("<item> requires name")
     if not module:
-        raise ValueError(f"<item name='{name}'> requires module")
+        module = "builtin.factorsim"
+    if "nbar" in attrs:
+        raise ValueError(f"<item name='{name}'> uses unsupported attribute nbar")
+    role = str(role).lower()
+    freq = str(attrs.pop("freq", "1d") or "1d").strip().lower()
+    if freq not in SUPPORTED_DATA_FREQS:
+        supported = ", ".join(DATA_FREQ_ORDER)
+        raise ValueError(f"<item name='{name}'> has unsupported freq={freq!r}; expected one of {supported}")
+    if role == "label" and freq != "1d":
+        raise ValueError(f"<item name='{name}'> role='label' only supports freq='1d'")
+    if role == "label" and not path:
+        path = "vwap30_label1d"
     params = {key: _parse_scalar(value) for key, value in attrs.items()}
+    params["freq"] = freq
     return {
         "name": str(name),
         "module": str(module),
         "path": path,
-        "role": str(role),
+        "role": role,
         "mode": mode,
         "config_path": config_path,
         "ops": _parse_feature_ops(item_element),
@@ -374,6 +403,7 @@ def _resolve_data_item_path(
     value: str | None,
     *,
     module: str,
+    role: str,
     field: str,
     ashare_data_path: str | None,
     base_dir: Path,
@@ -388,9 +418,9 @@ def _resolve_data_item_path(
         return str(path.resolve())
     if field == "path" and normalized_module == "barra_style":
         return value
-    if field == "path" and normalized_module == "label":
+    if field == "path" and str(role).strip().lower() == "label":
         if ashare_data_path is None:
-            raise ValueError("builtin.label requires combo.loader.ashare_data_path or constants.cache_path")
+            raise ValueError("label items require combo.loader.ashare_data_path or constants.cache_path")
         return str((Path(ashare_data_path) / "1d_DailyLabel" / f"DailyLabel.{value}").resolve())
     return str((base_dir / path).resolve())
 
@@ -453,6 +483,7 @@ def _resolve_data_pack(
             resolved_item[field] = _resolve_data_item_path(
                 resolved_item.get(field),
                 module=module,
+                role=str(resolved_item.get("role", "aux")),
                 field=field,
                 ashare_data_path=ashare_data_path,
                 base_dir=base_dir,

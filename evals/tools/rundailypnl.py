@@ -32,7 +32,7 @@ PNL_KEY_COLUMNS = [
     "fitness",
 ]
 
-DEFAULT_LABEL_PATH = "/home/jovyan/ml-data1-pvc/factorsim_data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d"
+DEFAULT_LABEL_PATH = "/root/ml-data1-pvc/factorsim_data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d"
 
 
 def main() -> None:

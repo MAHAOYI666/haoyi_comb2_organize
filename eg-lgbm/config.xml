@@ -3,110 +3,110 @@
   <strategy start_ds="20200101" end_ds="20200331" />
   <combo>
     <paths model_path="model.py" />
-    <runtime snaptime="example_lgbm" snap_ti="" seed="42" livetrading="false" trainDelay="1" retDays="5" tsDays="3" model_smooth_rate="0.7" model_keep_num="0" select_days="100" max_train_days="400" />
+    <runtime snaptime="example_lgbm" snap_ti="" seed="42" livetrading="false" trainDelay="1" retDays="5" tsDays="3" model_smooth_rate="0.7" model_keep_num="0" select_days="100" max_train_days="400" verbose="true" />
     <model device="cpu" hiddenSize="16" lr="0.05" epochs="100" num_leaves="31" feature_fraction="0.8" bagging_fraction="0.8" bagging_freq="1" min_data_in_leaf="100" num_threads="-1" />
-    <data dtype="float16" data_start_ds="20160101">
-      <item name="alpha.cyz_20231130_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_01" role="factor" display_name="cyz_20231130_01" />
-      <item name="alpha.cyz_20231130_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_02" role="factor" display_name="cyz_20231130_02" />
-      <item name="alpha.cyz_20231130_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_03" role="factor" display_name="cyz_20231130_03" />
-      <item name="alpha.cyz_20240718_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240718_01" role="factor" display_name="cyz_20240718_01" />
-      <item name="alpha.cyz_20240718_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240718_02" role="factor" display_name="cyz_20240718_02" />
-      <item name="alpha.cyz_20240212_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240212_02" role="factor" display_name="cyz_20240212_02" />
-      <item name="alpha.cyz_20240212_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240212_01" role="factor" display_name="cyz_20240212_01" />
-      <item name="alpha.cyz_20240208_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240208_01" role="factor" display_name="cyz_20240208_01" />
-      <item name="alpha.cyz_20231026_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231026_01" role="factor" display_name="cyz_20231026_01" />
-      <item name="alpha.cyz_20231026_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231026_02" role="factor" display_name="cyz_20231026_02" />
-      <item name="alpha.cyz_20240627_1" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_1" role="factor" display_name="cyz_20240627_1" />
-      <item name="alpha.cyz_20240627_2" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_2" role="factor" display_name="cyz_20240627_2" />
-      <item name="alpha.cyz_20240627_3" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_3" role="factor" display_name="cyz_20240627_3" />
-      <item name="alpha.cyz_20240627_4" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_4" role="factor" display_name="cyz_20240627_4" />
-      <item name="alpha.cyz_20231019_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231019_01" role="factor" display_name="cyz_20231019_01" />
-      <item name="alpha.cyz_20231019_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231019_02" role="factor" display_name="cyz_20231019_02" />
-      <item name="alpha.cyz_20231207_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_01" role="factor" display_name="cyz_20231207_01" />
-      <item name="alpha.cyz_20231207_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_02" role="factor" display_name="cyz_20231207_02" />
-      <item name="alpha.cyz_20231207_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_03" role="factor" display_name="cyz_20231207_03" />
-      <item name="alpha.cyz_20231207_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_04" role="factor" display_name="cyz_20231207_04" />
-      <item name="alpha.cyz_20231207_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_05" role="factor" display_name="cyz_20231207_05" />
-      <item name="alpha.cyz_20240425_2" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_2" role="factor" display_name="cyz_20240425_2" />
-      <item name="alpha.cyz_20240425_3" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_3" role="factor" display_name="cyz_20240425_3" />
-      <item name="alpha.cyz_20240425_5" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_5" role="factor" display_name="cyz_20240425_5" />
-      <item name="alpha.cyz_20240425_4" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_4" role="factor" display_name="cyz_20240425_4" />
-      <item name="alpha.cyz_20240425_6" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_6" role="factor" display_name="cyz_20240425_6" />
-      <item name="alpha.cyz_20231123_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231123_01" role="factor" display_name="cyz_20231123_01" />
-      <item name="alpha.cyz_20240219_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240219_01" role="factor" display_name="cyz_20240219_01" />
-      <item name="alpha.cyz_20240220_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240220_02" role="factor" display_name="cyz_20240220_02" />
-      <item name="alpha.cyz_20240222_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240222_03" role="factor" display_name="cyz_20240222_03" />
-      <item name="alpha.cyz_20240226_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240226_04" role="factor" display_name="cyz_20240226_04" />
-      <item name="alpha.wjx_20231130_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20231130_01" role="factor" display_name="wjx_20231130_01" />
-      <item name="alpha.wjx_20231130_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20231130_02" role="factor" display_name="wjx_20231130_02" />
-      <item name="alpha.wjx_20240523_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_01" role="factor" display_name="wjx_20240523_01" />
-      <item name="alpha.wjx_20240523_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_02" role="factor" display_name="wjx_20240523_02" />
-      <item name="alpha.wjx_20240523_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_03" role="factor" display_name="wjx_20240523_03" />
-      <item name="alpha.wjx_20240523_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_04" role="factor" display_name="wjx_20240523_04" />
-      <item name="alpha.wjx_20240425_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_01" role="factor" display_name="wjx_20240425_01" />
-      <item name="alpha.wjx_20240425_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_02" role="factor" display_name="wjx_20240425_02" />
-      <item name="alpha.wjx_20240425_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_03" role="factor" display_name="wjx_20240425_03" />
-      <item name="alpha.wjx_20240829_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240829_01" role="factor" display_name="wjx_20240829_01" />
-      <item name="alpha.wjx_20240829_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240829_02" role="factor" display_name="wjx_20240829_02" />
-      <item name="alpha.wjx_20240704_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240704_01" role="factor" display_name="wjx_20240704_01" />
-      <item name="alpha.wjx_20240704_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240704_02" role="factor" display_name="wjx_20240704_02" />
-      <item name="alpha.wjx_20240912_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_01" role="factor" display_name="wjx_20240912_01" />
-      <item name="alpha.wjx_20240912_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_02" role="factor" display_name="wjx_20240912_02" />
-      <item name="alpha.wjx_20240912_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_03" role="factor" display_name="wjx_20240912_03" />
-      <item name="alpha.wjx_20240411_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240411_01" role="factor" display_name="wjx_20240411_01" />
-      <item name="alpha.wjx_20240725_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240725_01" role="factor" display_name="wjx_20240725_01" />
-      <item name="alpha.xk_0224_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_02" role="factor" display_name="xk_0224_02" />
-      <item name="alpha.xk_0224_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_04" role="factor" display_name="xk_0224_04" />
-      <item name="alpha.xk_0224_07" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_07" role="factor" display_name="xk_0224_07" />
-      <item name="alpha.xk_0425_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0425_02" role="factor" display_name="xk_0425_02" />
-      <item name="alpha.xk_0202_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_02" role="factor" display_name="xk_0202_02" />
-      <item name="alpha.xk_0202_06" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_06" role="factor" display_name="xk_0202_06" />
-      <item name="alpha.xk_0202_08" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_08" role="factor" display_name="xk_0202_08" />
-      <item name="alpha.xk_0530_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_01" role="factor" display_name="xk_0530_01" />
-      <item name="alpha.xk_0530_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_02" role="factor" display_name="xk_0530_02" />
-      <item name="alpha.xk_0530_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_03" role="factor" display_name="xk_0530_03" />
-      <item name="alpha.xk_0411_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0411_02" role="factor" display_name="xk_0411_02" />
-      <item name="alpha.yz_20250219_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_01" role="factor" display_name="yz_20250219_01" />
-      <item name="alpha.yz_20250219_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_02" role="factor" display_name="yz_20250219_02" />
-      <item name="alpha.yz_20250219_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_03" role="factor" display_name="yz_20250219_03" />
-      <item name="alpha.yz_20250219_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_04" role="factor" display_name="yz_20250219_04" />
-      <item name="alpha.yz_20241106_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241106_01" role="factor" display_name="yz_20241106_01" />
-      <item name="alpha.yz_20241106_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241106_02" role="factor" display_name="yz_20241106_02" />
-      <item name="alpha.yz_20241030_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_01" role="factor" display_name="yz_20241030_01" />
-      <item name="alpha.yz_20241030_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_02" role="factor" display_name="yz_20241030_02" />
-      <item name="alpha.yz_20241030_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_03" role="factor" display_name="yz_20241030_03" />
-      <item name="alpha.yz_20241016_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_01" role="factor" display_name="yz_20241016_01" />
-      <item name="alpha.yz_20241016_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_02" role="factor" display_name="yz_20241016_02" />
-      <item name="alpha.yz_20241016_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_03" role="factor" display_name="yz_20241016_03" />
-      <item name="alpha.yz_20241016_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_04" role="factor" display_name="yz_20241016_04" />
-      <item name="alpha.yz_20240731_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_01" role="factor" display_name="yz_20240731_01" />
-      <item name="alpha.yz_20240731_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_02" role="factor" display_name="yz_20240731_02" />
-      <item name="alpha.yz_20240731_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_03" role="factor" display_name="yz_20240731_03" />
-      <item name="alpha.yz_20240731_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_04" role="factor" display_name="yz_20240731_04" />
-      <item name="alpha.yz_20240731_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_05" role="factor" display_name="yz_20240731_05" />
-      <item name="alpha.yz_20240731_06" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_06" role="factor" display_name="yz_20240731_06" />
-      <item name="alpha.yz_20240731_07" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_07" role="factor" display_name="yz_20240731_07" />
-      <item name="alpha.yz_20240620_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_01" role="factor" display_name="yz_20240620_01" />
-      <item name="alpha.yz_20240620_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_02" role="factor" display_name="yz_20240620_02" />
-      <item name="alpha.yz_20240620_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_03" role="factor" display_name="yz_20240620_03" />
-      <item name="alpha.yz_20240620_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_04" role="factor" display_name="yz_20240620_04" />
-      <item name="alpha.yz_20240620_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_05" role="factor" display_name="yz_20240620_05" />
-      <item name="alpha.yz_20240718_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_01" role="factor" display_name="yz_20240718_01" />
-      <item name="alpha.yz_20240718_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_02" role="factor" display_name="yz_20240718_02" />
-      <item name="alpha.yz_20240718_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_03" role="factor" display_name="yz_20240718_03" />
-      <item name="alpha.yz_20240718_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_04" role="factor" display_name="yz_20240718_04" />
-      <item name="alpha.yz_20241113_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_01" role="factor" display_name="yz_20241113_01" />
-      <item name="alpha.yz_20241113_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_02" role="factor" display_name="yz_20241113_02" />
-      <item name="alpha.yz_20241113_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_03" role="factor" display_name="yz_20241113_03" />
-      <item name="alpha.yz_20241113_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_04" role="factor" display_name="yz_20241113_04" />
-      <item name="alpha.yz_20250114_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250114_01" role="factor" display_name="yz_20250114_01" />
-      <item name="alpha.yz_20250114_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250114_02" role="factor" display_name="yz_20250114_02" />
-      <item name="alpha.yz_20240627_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240627_02" role="factor" display_name="yz_20240627_02" />
-      <item name="alpha.yz_20240704_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_01" role="factor" display_name="yz_20240704_01" />
-      <item name="alpha.yz_20240704_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_02" role="factor" display_name="yz_20240704_02" />
-      <item name="alpha.yz_20240704_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_03" role="factor" display_name="yz_20240704_03" />
-      <item name="alpha.yz_20240704_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_04" role="factor" display_name="yz_20240704_04" />
-      <item name="label.default" module="builtin.label" path="vwap30_label1d" role="label" />
+    <data dtype="float16" data_start_ds="20160101" data_offset="1024">
+      <item name="alpha.cyz_20231130_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_01" role="factor" display_name="cyz_20231130_01" freq="1d" />
+      <item name="alpha.cyz_20231130_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_02" role="factor" display_name="cyz_20231130_02" freq="1d" />
+      <item name="alpha.cyz_20231130_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_03" role="factor" display_name="cyz_20231130_03" freq="1d" />
+      <item name="alpha.cyz_20240718_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240718_01" role="factor" display_name="cyz_20240718_01" freq="1d" />
+      <item name="alpha.cyz_20240718_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240718_02" role="factor" display_name="cyz_20240718_02" freq="1d" />
+      <item name="alpha.cyz_20240212_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240212_02" role="factor" display_name="cyz_20240212_02" freq="1d" />
+      <item name="alpha.cyz_20240212_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240212_01" role="factor" display_name="cyz_20240212_01" freq="1d" />
+      <item name="alpha.cyz_20240208_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240208_01" role="factor" display_name="cyz_20240208_01" freq="1d" />
+      <item name="alpha.cyz_20231026_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231026_01" role="factor" display_name="cyz_20231026_01" freq="1d" />
+      <item name="alpha.cyz_20231026_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231026_02" role="factor" display_name="cyz_20231026_02" freq="1d" />
+      <item name="alpha.cyz_20240627_1" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_1" role="factor" display_name="cyz_20240627_1" freq="1d" />
+      <item name="alpha.cyz_20240627_2" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_2" role="factor" display_name="cyz_20240627_2" freq="1d" />
+      <item name="alpha.cyz_20240627_3" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_3" role="factor" display_name="cyz_20240627_3" freq="1d" />
+      <item name="alpha.cyz_20240627_4" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240627_4" role="factor" display_name="cyz_20240627_4" freq="1d" />
+      <item name="alpha.cyz_20231019_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231019_01" role="factor" display_name="cyz_20231019_01" freq="1d" />
+      <item name="alpha.cyz_20231019_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231019_02" role="factor" display_name="cyz_20231019_02" freq="1d" />
+      <item name="alpha.cyz_20231207_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_01" role="factor" display_name="cyz_20231207_01" freq="1d" />
+      <item name="alpha.cyz_20231207_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_02" role="factor" display_name="cyz_20231207_02" freq="1d" />
+      <item name="alpha.cyz_20231207_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_03" role="factor" display_name="cyz_20231207_03" freq="1d" />
+      <item name="alpha.cyz_20231207_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_04" role="factor" display_name="cyz_20231207_04" freq="1d" />
+      <item name="alpha.cyz_20231207_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231207_05" role="factor" display_name="cyz_20231207_05" freq="1d" />
+      <item name="alpha.cyz_20240425_2" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_2" role="factor" display_name="cyz_20240425_2" freq="1d" />
+      <item name="alpha.cyz_20240425_3" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_3" role="factor" display_name="cyz_20240425_3" freq="1d" />
+      <item name="alpha.cyz_20240425_5" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_5" role="factor" display_name="cyz_20240425_5" freq="1d" />
+      <item name="alpha.cyz_20240425_4" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_4" role="factor" display_name="cyz_20240425_4" freq="1d" />
+      <item name="alpha.cyz_20240425_6" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240425_6" role="factor" display_name="cyz_20240425_6" freq="1d" />
+      <item name="alpha.cyz_20231123_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231123_01" role="factor" display_name="cyz_20231123_01" freq="1d" />
+      <item name="alpha.cyz_20240219_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240219_01" role="factor" display_name="cyz_20240219_01" freq="1d" />
+      <item name="alpha.cyz_20240220_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240220_02" role="factor" display_name="cyz_20240220_02" freq="1d" />
+      <item name="alpha.cyz_20240222_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240222_03" role="factor" display_name="cyz_20240222_03" freq="1d" />
+      <item name="alpha.cyz_20240226_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20240226_04" role="factor" display_name="cyz_20240226_04" freq="1d" />
+      <item name="alpha.wjx_20231130_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20231130_01" role="factor" display_name="wjx_20231130_01" freq="1d" />
+      <item name="alpha.wjx_20231130_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20231130_02" role="factor" display_name="wjx_20231130_02" freq="1d" />
+      <item name="alpha.wjx_20240523_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_01" role="factor" display_name="wjx_20240523_01" freq="1d" />
+      <item name="alpha.wjx_20240523_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_02" role="factor" display_name="wjx_20240523_02" freq="1d" />
+      <item name="alpha.wjx_20240523_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_03" role="factor" display_name="wjx_20240523_03" freq="1d" />
+      <item name="alpha.wjx_20240523_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240523_04" role="factor" display_name="wjx_20240523_04" freq="1d" />
+      <item name="alpha.wjx_20240425_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_01" role="factor" display_name="wjx_20240425_01" freq="1d" />
+      <item name="alpha.wjx_20240425_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_02" role="factor" display_name="wjx_20240425_02" freq="1d" />
+      <item name="alpha.wjx_20240425_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240425_03" role="factor" display_name="wjx_20240425_03" freq="1d" />
+      <item name="alpha.wjx_20240829_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240829_01" role="factor" display_name="wjx_20240829_01" freq="1d" />
+      <item name="alpha.wjx_20240829_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240829_02" role="factor" display_name="wjx_20240829_02" freq="1d" />
+      <item name="alpha.wjx_20240704_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240704_01" role="factor" display_name="wjx_20240704_01" freq="1d" />
+      <item name="alpha.wjx_20240704_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240704_02" role="factor" display_name="wjx_20240704_02" freq="1d" />
+      <item name="alpha.wjx_20240912_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_01" role="factor" display_name="wjx_20240912_01" freq="1d" />
+      <item name="alpha.wjx_20240912_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_02" role="factor" display_name="wjx_20240912_02" freq="1d" />
+      <item name="alpha.wjx_20240912_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240912_03" role="factor" display_name="wjx_20240912_03" freq="1d" />
+      <item name="alpha.wjx_20240411_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240411_01" role="factor" display_name="wjx_20240411_01" freq="1d" />
+      <item name="alpha.wjx_20240725_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240725_01" role="factor" display_name="wjx_20240725_01" freq="1d" />
+      <item name="alpha.xk_0224_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_02" role="factor" display_name="xk_0224_02" freq="1d" />
+      <item name="alpha.xk_0224_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_04" role="factor" display_name="xk_0224_04" freq="1d" />
+      <item name="alpha.xk_0224_07" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0224_07" role="factor" display_name="xk_0224_07" freq="1d" />
+      <item name="alpha.xk_0425_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0425_02" role="factor" display_name="xk_0425_02" freq="1d" />
+      <item name="alpha.xk_0202_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_02" role="factor" display_name="xk_0202_02" freq="1d" />
+      <item name="alpha.xk_0202_06" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_06" role="factor" display_name="xk_0202_06" freq="1d" />
+      <item name="alpha.xk_0202_08" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0202_08" role="factor" display_name="xk_0202_08" freq="1d" />
+      <item name="alpha.xk_0530_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_01" role="factor" display_name="xk_0530_01" freq="1d" />
+      <item name="alpha.xk_0530_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_02" role="factor" display_name="xk_0530_02" freq="1d" />
+      <item name="alpha.xk_0530_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0530_03" role="factor" display_name="xk_0530_03" freq="1d" />
+      <item name="alpha.xk_0411_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/xk_0411_02" role="factor" display_name="xk_0411_02" freq="1d" />
+      <item name="alpha.yz_20250219_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_01" role="factor" display_name="yz_20250219_01" freq="1d" />
+      <item name="alpha.yz_20250219_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_02" role="factor" display_name="yz_20250219_02" freq="1d" />
+      <item name="alpha.yz_20250219_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_03" role="factor" display_name="yz_20250219_03" freq="1d" />
+      <item name="alpha.yz_20250219_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_04" role="factor" display_name="yz_20250219_04" freq="1d" />
+      <item name="alpha.yz_20241106_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241106_01" role="factor" display_name="yz_20241106_01" freq="1d" />
+      <item name="alpha.yz_20241106_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241106_02" role="factor" display_name="yz_20241106_02" freq="1d" />
+      <item name="alpha.yz_20241030_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_01" role="factor" display_name="yz_20241030_01" freq="1d" />
+      <item name="alpha.yz_20241030_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_02" role="factor" display_name="yz_20241030_02" freq="1d" />
+      <item name="alpha.yz_20241030_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241030_03" role="factor" display_name="yz_20241030_03" freq="1d" />
+      <item name="alpha.yz_20241016_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_01" role="factor" display_name="yz_20241016_01" freq="1d" />
+      <item name="alpha.yz_20241016_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_02" role="factor" display_name="yz_20241016_02" freq="1d" />
+      <item name="alpha.yz_20241016_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_03" role="factor" display_name="yz_20241016_03" freq="1d" />
+      <item name="alpha.yz_20241016_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241016_04" role="factor" display_name="yz_20241016_04" freq="1d" />
+      <item name="alpha.yz_20240731_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_01" role="factor" display_name="yz_20240731_01" freq="1d" />
+      <item name="alpha.yz_20240731_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_02" role="factor" display_name="yz_20240731_02" freq="1d" />
+      <item name="alpha.yz_20240731_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_03" role="factor" display_name="yz_20240731_03" freq="1d" />
+      <item name="alpha.yz_20240731_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_04" role="factor" display_name="yz_20240731_04" freq="1d" />
+      <item name="alpha.yz_20240731_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_05" role="factor" display_name="yz_20240731_05" freq="1d" />
+      <item name="alpha.yz_20240731_06" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_06" role="factor" display_name="yz_20240731_06" freq="1d" />
+      <item name="alpha.yz_20240731_07" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240731_07" role="factor" display_name="yz_20240731_07" freq="1d" />
+      <item name="alpha.yz_20240620_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_01" role="factor" display_name="yz_20240620_01" freq="1d" />
+      <item name="alpha.yz_20240620_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_02" role="factor" display_name="yz_20240620_02" freq="1d" />
+      <item name="alpha.yz_20240620_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_03" role="factor" display_name="yz_20240620_03" freq="1d" />
+      <item name="alpha.yz_20240620_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_04" role="factor" display_name="yz_20240620_04" freq="1d" />
+      <item name="alpha.yz_20240620_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240620_05" role="factor" display_name="yz_20240620_05" freq="1d" />
+      <item name="alpha.yz_20240718_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_01" role="factor" display_name="yz_20240718_01" freq="1d" />
+      <item name="alpha.yz_20240718_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_02" role="factor" display_name="yz_20240718_02" freq="1d" />
+      <item name="alpha.yz_20240718_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_03" role="factor" display_name="yz_20240718_03" freq="1d" />
+      <item name="alpha.yz_20240718_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240718_04" role="factor" display_name="yz_20240718_04" freq="1d" />
+      <item name="alpha.yz_20241113_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_01" role="factor" display_name="yz_20241113_01" freq="1d" />
+      <item name="alpha.yz_20241113_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_02" role="factor" display_name="yz_20241113_02" freq="1d" />
+      <item name="alpha.yz_20241113_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_03" role="factor" display_name="yz_20241113_03" freq="1d" />
+      <item name="alpha.yz_20241113_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20241113_04" role="factor" display_name="yz_20241113_04" freq="1d" />
+      <item name="alpha.yz_20250114_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250114_01" role="factor" display_name="yz_20250114_01" freq="1d" />
+      <item name="alpha.yz_20250114_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250114_02" role="factor" display_name="yz_20250114_02" freq="1d" />
+      <item name="alpha.yz_20240627_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240627_02" role="factor" display_name="yz_20240627_02" freq="1d" />
+      <item name="alpha.yz_20240704_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_01" role="factor" display_name="yz_20240704_01" freq="1d" />
+      <item name="alpha.yz_20240704_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_02" role="factor" display_name="yz_20240704_02" freq="1d" />
+      <item name="alpha.yz_20240704_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_03" role="factor" display_name="yz_20240704_03" freq="1d" />
+      <item name="alpha.yz_20240704_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20240704_04" role="factor" display_name="yz_20240704_04" freq="1d" />
+      <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" freq="1d" />
     </data>
   </combo>
   <backtest daily_metrics_file="daily_pnl.csv" cash="10000000" fee_rate="0.00075" reserve_cash="0.95" verbose="false" universe="base" />
