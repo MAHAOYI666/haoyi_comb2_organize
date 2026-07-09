@@ -69,6 +69,31 @@ def test_summarize_pnl_omits_periods_without_finite_performance_metrics() -> Non
     assert np.isfinite(result.table.loc["ALL", "ret_pct"])
 
 
+def test_summarize_pnl_completes_combo_backtest_daily_metrics() -> None:
+    pnl = pd.DataFrame(
+        {
+            "total_asset": [100.0, 110.0, 120.0],
+            "pnl": [0.0, 10.0, 5.0],
+            "trade_cost": [0.0, 0.3, 0.3],
+            "reserve_cash": [100.0, 10.0, 20.0],
+            "tvr": [0.0, 0.1, 0.2],
+            "long_num": [0.0, 3.0, 4.0],
+        },
+        index=pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
+    )
+
+    result = summarize_pnl(pnl)
+    row = result.table.loc["20200101-20200103"]
+
+    assert row["longonly_pnl_m"] == row["pnl_m"]
+    assert np.isclose(row["longonly_tvr_pct"], 10.0)
+    assert np.isclose(row["tvr_pct"], 10.0)
+    assert np.isfinite(row["longonly_ret_pct"])
+    assert np.isfinite(row["longonly_ir"])
+    assert np.isfinite(row["margin"])
+    assert row["snum"] == 0.0
+
+
 def test_decile_backtest_ignores_constant_signal_rows() -> None:
     signal = pd.DataFrame(
         [
