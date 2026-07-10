@@ -5,11 +5,15 @@ import sys
 from pathlib import Path
 
 EVALS_ROOT = Path(__file__).resolve().parents[1]
-if str(EVALS_ROOT) not in sys.path:
-    sys.path.insert(0, str(EVALS_ROOT))
+REPO_ROOT = EVALS_ROOT.parent
+for local_path in (EVALS_ROOT, REPO_ROOT / "vendor" / "comb2-simbase"):
+    if str(local_path) not in sys.path:
+        sys.path.insert(0, str(local_path))
 
 import numpy as np
 import pandas as pd
+
+from comb2_simbase.cache_layout import daily_label_path
 
 from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
 from comb_eval.pnl import summarize_pnl_with_benchmark
@@ -32,14 +36,12 @@ PNL_KEY_COLUMNS = [
     "fitness",
 ]
 
-DEFAULT_LABEL_PATH = "/root/ml-data1-pvc/factorsim_data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run daily pnl evaluation for one signal or daily pnl file.")
     parser.add_argument("path", help="Signal path by default, or daily pnl path with --input-is-pnl")
     parser.add_argument("--input-is-pnl", action="store_true", help="Treat input as an existing daily pnl dump")
-    parser.add_argument("--label", default=DEFAULT_LABEL_PATH, help="Forward-return label path for signal -> pnl")
+    parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--label", help="Explicit forward-return label path for signal -> pnl")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
     parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
     parser.add_argument("--booksize", type=float, default=1e7)
@@ -54,9 +56,10 @@ def main() -> None:
     if args.input_is_pnl:
         daily_pnl = read_table(args.path, start=args.start, end=args.end)
     else:
+        label_path = _resolve_label_path(args.label, args.cache_path, "vwap30_label1d")
         daily_pnl = calculate_daily_pnl(
             args.path,
-            args.label,
+            label_path,
             label_is_table=args.label_is_table,
             label_df_type=_parse_df_type(args.label_df_type),
             booksize=args.booksize,
@@ -73,6 +76,14 @@ def main() -> None:
     print(text)
     if args.summary_output:
         write_text(frame_to_text(result.table) + "\n", args.summary_output)
+
+
+def _resolve_label_path(label: str | None, cache_path: str | None, label_name: str) -> Path:
+    if label:
+        return Path(label).expanduser()
+    if not cache_path:
+        raise ValueError("signal input requires --cache-path or an explicit --label")
+    return daily_label_path(cache_path, label_name)
 
 
 def calculate_daily_pnl(

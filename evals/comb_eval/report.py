@@ -12,6 +12,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from comb2_simbase.cache_layout import (
+    BASE_UNIVERSE_MASK_NAME,
+    FILTERED_MASK_NAME,
+    daily_label_path,
+    stock_mask_path,
+)
+
 warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
 
 from .exposure import compute_barra_style_exposure
@@ -22,8 +29,6 @@ from .pnl import summarize_pnl_with_benchmark
 from .rules import evaluate_result
 
 DEFAULT_LABEL_DF_TYPE = True
-BASE_UNIVERSE_MASK_PATH = "1d_StockMask2/StockMask2.BaseUnivMask"
-TRADING_MASK_PATH = "1d_StockMask2/StockMask2.LimitMask"
 PNL_KEY_COLUMNS = [
     "pnl_m",
     "ret_pct",
@@ -66,7 +71,7 @@ class ConfigEvalArtifacts:
     label_df_type: object
     booksize: float
     tradecost_ratio: float
-    ashare_cache_path: Path
+    cache_path: Path
 
 
 @dataclass
@@ -148,7 +153,7 @@ def run_config_evaluation(
 
     label_1d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
     label_5d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
-    evaluation_mask = load_evaluation_mask(alpha, artifacts.ashare_cache_path)
+    evaluation_mask = load_evaluation_mask(alpha, artifacts.cache_path)
     alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
     daily_pnl = calculate_daily_pnl_from_signal(
@@ -193,7 +198,7 @@ def run_config_evaluation(
                 start_ds=int(eval_start) if eval_start is not None else None,
                 end_ds=int(eval_end) if eval_end is not None else None,
                 mode=0,
-                ashare_cache_path=artifacts.ashare_cache_path,
+                cache_path=artifacts.cache_path,
             )
             exposure_summary = summarize_exposure(exposure)
         except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
@@ -539,7 +544,7 @@ def _resolve_artifacts(
         if tradecost_ratio is not None
         else _tradecost_ratio_from_fee(config["backtest"].get("fee_rate", 0.0))
     )
-    ashare_cache_path = Path(config["combo"]["loader"]["ashare_data_path"]).expanduser().resolve()
+    cache_path = Path(config["constants"]["cache_path"]).expanduser().resolve()
     return ConfigEvalArtifacts(
         config_path=config_path,
         output_root=output_root,
@@ -553,7 +558,7 @@ def _resolve_artifacts(
         label_df_type=label_df_type,
         booksize=resolved_booksize,
         tradecost_ratio=resolved_tradecost_ratio,
-        ashare_cache_path=ashare_cache_path,
+        cache_path=cache_path,
     )
 
 
@@ -585,11 +590,11 @@ def _file_status(name: str, path: Path) -> OutputFileStatus:
 
 
 def _default_label_path(config: dict[str, Any]) -> Path:
-    return Path(config["combo"]["loader"]["ashare_data_path"]) / "1d_DailyLabel" / "DailyLabel.vwap30_label1d"
+    return daily_label_path(config["constants"]["cache_path"], "vwap30_label1d")
 
 
 def _default_label_5d_path(config: dict[str, Any]) -> Path:
-    return Path(config["combo"]["loader"]["ashare_data_path"]) / "1d_DailyLabel" / "DailyLabel.vwap30_label5d"
+    return daily_label_path(config["constants"]["cache_path"], "vwap30_label5d")
 
 
 def _tradecost_ratio_from_fee(fee_rate: float) -> float:
@@ -622,15 +627,14 @@ def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame,
     )
 
 
-def load_evaluation_mask(signal: pd.DataFrame, ashare_cache_path: str | Path) -> pd.DataFrame:
+def load_evaluation_mask(signal: pd.DataFrame, cache_path: str | Path) -> pd.DataFrame:
     normalized = _normalize_matrix(signal)
     if normalized.empty:
         raise ValueError("signal is empty")
     start_ds = normalized.index.min().strftime("%Y%m%d")
     end_ds = normalized.index.max().strftime("%Y%m%d")
-    cache_root = Path(ashare_cache_path)
-    base = _normalize_matrix(read_cache_array(cache_root / BASE_UNIVERSE_MASK_PATH, start_ds, end_ds, True))
-    trading = _normalize_matrix(read_cache_array(cache_root / TRADING_MASK_PATH, start_ds, end_ds, True))
+    base = _normalize_matrix(read_cache_array(stock_mask_path(cache_path, BASE_UNIVERSE_MASK_NAME), start_ds, end_ds, True))
+    trading = _normalize_matrix(read_cache_array(stock_mask_path(cache_path, FILTERED_MASK_NAME), start_ds, end_ds, True))
     dates = base.index.intersection(trading.index)
     codes = base.columns.intersection(trading.columns)
     base = base.reindex(index=dates, columns=codes)

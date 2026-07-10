@@ -95,7 +95,7 @@ python -m comb_eval.cli trade-limit /path/to/trades.parquet /path/to/trading_lim
 AshareCache 读取入口只使用 `Memmaper2(path).load(start_ds, end_ds, df_type)[:]`：
 
 ```bash
-python -m comb_eval.cli cache-ic /home/jovyan/ml-data1-pvc/factorsim_data/Cache/AshareCache/<cache_path> 20160101 20240101 df
+python -m comb_eval.cli cache-ic /path/to/Cache/AshareCache/<relative_cache_path> 20160101 20240101 df
 ```
 
 ## 本地输入格式
@@ -157,7 +157,7 @@ position / trade / alpha matrix 支持 csv/tsv/parquet。需要日期索引或 `
    - `mode=1` 返回横截面回归 beta 暴露。
    - 返回值是 `date x style` 的 DataFrame。
 
-2. `compute_barra_style_exposure(signal, start_ds=None, end_ds=None, mode=0, ashare_cache_path=...)`
+2. `compute_barra_style_exposure(signal, cache_path=..., start_ds=None, end_ds=None, mode=0)`
    - 自动从 `AshareCache/1d_BarraCNE5` 读取全部 Barra 风格因子。
    - 输入:
      - `signal`: `date x code` 的 DataFrame

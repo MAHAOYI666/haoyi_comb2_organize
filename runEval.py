@@ -1,4 +1,4 @@
-#!/root/autodl/python310fs/bin/python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -9,13 +9,13 @@ import pandas as pd
 
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
-for local_path in (ORGANIZE_ROOT, ORGANIZE_ROOT / "evals"):
+for local_path in (ORGANIZE_ROOT, ORGANIZE_ROOT / "evals", ORGANIZE_ROOT / "vendor" / "comb2-simbase"):
     text_path = str(local_path)
     if text_path not in sys.path:
         sys.path.insert(0, text_path)
 
 from comb_eval.correlation import matrix_correlation
-from comb_eval.exposure import DEFAULT_ASHARE_CACHE_PATH, compute_barra_style_exposure
+from comb_eval.exposure import compute_barra_style_exposure
 from comb_eval.formatting import output_dict_to_lines, output_frame_to_text
 from comb_eval.ic import summarize_ic
 from comb_eval.io import read_matrix, read_table
@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--corr-days", type=int, default=240, help="For --corr, use only the most recent N overlapping dates; default 240")
     parser.add_argument("--min-valid", type=int, default=1000, help="For --corr, minimum nonzero overlapping instruments per day")
     parser.add_argument("--top-pct", type=float, default=10.0, help="For --corr, long-holding overlap top percentage; default 10")
-    parser.add_argument("--ashare-cache-path", help="For --exposure, AshareCache root; defaults to the built-in default")
+    parser.add_argument("--cache-path", help="For --exposure, parent directory containing AshareCache")
     parser.add_argument("--exposure-mode", type=int, choices=(0, 1), default=0, help="For --exposure, 0=cross-sectional correlation, 1=beta")
     parser.add_argument("--column", default="longonly_pnl", help="For --va, PnL column to compare")
     parser.add_argument("--weights", default=DEFAULT_VA_WEIGHTS, help="For --va, comma-separated new-pnl blend weights")
@@ -185,7 +185,7 @@ def run_exposure(args: argparse.Namespace) -> int:
         start_ds=int(args.start) if args.start is not None else None,
         end_ds=int(args.end) if args.end is not None else None,
         mode=args.exposure_mode,
-        ashare_cache_path=_resolve_ashare_cache_path(args),
+        cache_path=_resolve_cache_path(args),
     )
     _write_frame_if_requested(exposure, args.output)
     summary = summarize_exposure(exposure)
@@ -225,10 +225,10 @@ def _resolve_booksize(args: argparse.Namespace) -> float:
     return 1e7
 
 
-def _resolve_ashare_cache_path(args: argparse.Namespace) -> str | Path:
-    if args.ashare_cache_path:
-        return Path(args.ashare_cache_path).expanduser()
-    return DEFAULT_ASHARE_CACHE_PATH
+def _resolve_cache_path(args: argparse.Namespace) -> Path:
+    if not args.cache_path:
+        raise ValueError("--exposure requires --cache-path pointing to the parent directory of AshareCache")
+    return Path(args.cache_path).expanduser()
 
 
 def _read_va_series(path: str, args: argparse.Namespace) -> pd.Series:

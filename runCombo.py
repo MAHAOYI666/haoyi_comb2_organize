@@ -61,6 +61,7 @@ if str(EVAL_ROOT) not in sys.path:
 
 from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
 from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase.cache_layout import daily_label_path
 from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress
 
@@ -139,7 +140,8 @@ def configure_torch_threads(organize_config: dict):
 
 
 class Node:
-    def __init__(self, config: dict):
+    def __init__(self, organize_config: dict):
+        config = organize_config["combo"]
         instsz = len(IndexMask().code)
         self.alpha = torch.zeros(instsz, dtype=config["loader"]["dtype"])
         self.alpha_history: dict[int, torch.Tensor] = {}
@@ -151,6 +153,7 @@ class Node:
         self.model_config = dict(config["model"])
         loader_fields = {field.name for field in fields(LoaderConfig)}
         loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
+        loader_config["cache_path"] = organize_config["constants"]["cache_path"]
         loader_config["verbose"] = bool(getattr(self, "verbose", False))
         self.loader_config = LoaderConfig(**loader_config)
 
@@ -204,8 +207,8 @@ def print_live_metrics(meta: dict):
     _print_metric_table("[LIVE]", columns)
 
 
-def get_backtest_label(ashare_data_path: str, period: str, start_ds: int, end_ds: int):
-    label = Memmaper2(f"{ashare_data_path}/1d_DailyLabel/DailyLabel.vwap30_label{period}").load(
+def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int):
+    label = Memmaper2(daily_label_path(cache_path, f"vwap30_label{period}")).load(
         start_ds=start_ds,
         end_ds=end_ds,
         df_type=True,
@@ -213,25 +216,26 @@ def get_backtest_label(ashare_data_path: str, period: str, start_ds: int, end_ds
     return label.astype(float)
 
 
-def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFrame:
+def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str) -> pd.DataFrame:
     if alpha.index.nlevels > 1:
         alpha = alpha.reset_index("times", drop=True).sort_index()
     date_idx = alpha.index.astype(int)
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
-    label_1d = get_backtest_label(ashare_data_path, "1d", start_time, end_time).reindex(index=date_idx)
-    label_5d = get_backtest_label(ashare_data_path, "5d", start_time, end_time).reindex(index=date_idx)
-    evaluation_mask = load_evaluation_mask(alpha, ashare_data_path)
+    label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
+    label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    evaluation_mask = load_evaluation_mask(alpha, cache_path)
     alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
     daily_ic.index = daily_ic.index.strftime("%Y%m%d").astype(int)
     return daily_ic
 
 
-def dump_alpha_analysis(node: Node, combo_config: dict):
+def dump_alpha_analysis(node: Node, organize_config: dict):
     if not node.alpha_history:
         return
+    combo_config = organize_config["combo"]
     output_dir = Path(combo_config["paths"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     alpha_history_path = Path(combo_config["output"]["alpha_history_path"])
@@ -247,8 +251,7 @@ def dump_alpha_analysis(node: Node, combo_config: dict):
     alpha_path = output_dir / "alpha.parquet"
     alpha.to_parquet(alpha_path)
 
-    ashare_data_path = combo_config["loader"]["ashare_data_path"]
-    daily_ic = calculate_alpha_ic(alpha, ashare_data_path)
+    daily_ic = calculate_alpha_ic(alpha, organize_config["constants"]["cache_path"])
     daily_ic_path = output_dir / "daily_ic"
     daily_ic.to_csv(daily_ic_path, sep="\t", na_rep="NAN")
     print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
@@ -299,7 +302,7 @@ class ExperimentRunner:
         self.live_output_dir = Path(self.combo_config["paths"]["output_dir"]) / "live"
 
     def setup(self):
-        self.node = Node(self.combo_config)
+        self.node = Node(self.organize_config)
         self.node.monitor = self.monitor
         self.combo = self.combo_base_cls(self.node)
         if self.monitor.enabled:
@@ -343,7 +346,7 @@ class ExperimentRunner:
         if not self.combo_config["output"].get("enable_alpha_analysis", True):
             print("[IC] alpha analysis disabled by config")
             return
-        dump_alpha_analysis(self.node, self.combo_config)
+        dump_alpha_analysis(self.node, self.organize_config)
 
     def live_step(self, date_int: int, alpha) -> dict:
         if self.combo.model is None or int(self.combo.model_dt) < 0:

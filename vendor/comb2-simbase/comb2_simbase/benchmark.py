@@ -7,11 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .memmaper2 import Memmaper2
-
-
-def ashare_cache_path(cache_path: str | Path) -> Path:
-    path = Path(cache_path).expanduser()
-    return path if path.name == "AshareCache" else path / "AshareCache"
+from .cache_layout import ashare_cache_path
 
 
 def load_index_benchmark(

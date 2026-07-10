@@ -434,13 +434,13 @@ class ResearchModel:
 ### 训练
 
 ```bash
-python /root/autodl-tmp/comb2/train_test.py --config /my_experiment/experiment.xml
+python /path/to/comb2/train_test.py --config /my_experiment/experiment.xml
 ```
 
 ### 回测
 
 ```bash
-python /root/autodl-tmp/comb2-organize/run_backtest.py --config /my_experiment/experiment.xml
+python /path/to/comb2-organize/run_backtest.py --config /my_experiment/experiment.xml
 ```
 
 如果不传 `--config`，脚本会使用框架内置默认配置。

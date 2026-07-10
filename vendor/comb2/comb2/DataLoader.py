@@ -10,6 +10,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
+
+from comb2_simbase.cache_layout import (
+    BASE_UNIVERSE_MASK_NAME,
+    FILTERED_MASK_NAME,
+    VALID_MASK_NAME,
+    ashare_cache_path,
+    stock_mask_path,
+)
 from torch.utils.data import Dataset
 
 from .codec import Codec, PassthroughCodec, build_codec
@@ -176,11 +184,8 @@ class LoaderConfig:
     dtype: torch.dtype = torch.float16
     data_start_ds: int = 20160101
     data_offset: int = 1024
-    valid_path: str | None = None
-    filtered_path: str | None = None
     compression: str = "none"
-    base_universe_path: str | None = None
-    ashare_data_path: str | None = None
+    cache_path: str | None = None
     data_items: Sequence[_DataItem | dict[str, Any]] = ()
     data_presets: Sequence[str] = ()
     config_path: str | None = None
@@ -206,11 +211,12 @@ class ComboDataLoader:
         self.data_start_ds = int(self.config.data_start_ds)
         self.data_start_didx = self.universe.date2idx(self.data_start_ds)
         data_items = _build_loader_data_items(config)
+        ashare_path = ashare_cache_path(self.config.cache_path) if self.config.cache_path else None
         self.registry = _DataRegistry(
             data_items,
             universe=self.universe,
             data_start_ds=self.data_start_ds,
-            ashare_data_path=self.config.ashare_data_path,
+            ashare_cache_path=str(ashare_path) if ashare_path else None,
             config_path=self.config.config_path,
             presets=self.config.data_presets,
             verbose=bool(getattr(config, "verbose", False)),
@@ -235,9 +241,11 @@ class ComboDataLoader:
             for freq in self.freqs
         }
         self.feature_names = tuple(name for freq in self.freqs for name in self.feature_names_by_freq[freq])
-        self.valid_source = MemmapMaskSource(self.config.valid_path)
-        self.filtered_source = MemmapMaskSource(self.config.filtered_path)
-        self.base_universe_source = MemmapMaskSource(self.config.base_universe_path)
+        self.valid_source = MemmapMaskSource(str(stock_mask_path(self.config.cache_path, VALID_MASK_NAME)) if self.config.cache_path else None)
+        self.filtered_source = MemmapMaskSource(str(stock_mask_path(self.config.cache_path, FILTERED_MASK_NAME)) if self.config.cache_path else None)
+        self.base_universe_source = MemmapMaskSource(
+            str(stock_mask_path(self.config.cache_path, BASE_UNIVERSE_MASK_NAME)) if self.config.cache_path else None
+        )
         self.monitor = None
         self.verbose = bool(getattr(config, "verbose", False))
         self.current_ti = 150000

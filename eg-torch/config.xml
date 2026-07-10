@@ -6,15 +6,15 @@
     <output enable_alpha_analysis="true" />
     <runtime snaptime="mlp_minimal" snap_ti="" seed="42" livetrading="false" trainDelay="0" retDays="1" tsDays="8" load_chunk_days="" model_smooth_rate="0.7" model_keep_num="2" max_train_days="2000" verbose="false" />
     <model device="cpu" hiddenSize="512" fcSize="256" dropout="0.5" lr="0.000002" epochs="15" batchSize="3" weight_decay="0.000001" scheduler_step_size="10" scheduler_gamma="0.5" grad_clip="10.0" />
-    <data dtype="float16" compression="none" data_start_ds="20160101" ashare_data_path="" data_offset="1024">
-      <item name="alpha.yz_20250219_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_02" role="factor" display_name="yz_20250219_02" freq="1d" />
-      <item name="alpha.wjx_20240829_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/wjx_20240829_02" role="factor" display_name="wjx_20240829_02" freq="1d" />
-      <item name="alpha.guanxl_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/guanxl_05" role="factor" display_name="guanxl_05" freq="1d" />
-      <item name="alpha.alpha1_20251008_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha1_20251008_01" role="factor" display_name="alpha1_20251008_01" freq="1d" />
-      <item name="alpha.alpha2_20251008_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha2_20251008_02" role="factor" display_name="alpha2_20251008_02" freq="1d" />
-      <item name="alpha.alpha3_20251008_03" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha3_20251008_03" role="factor" display_name="alpha3_20251008_03" freq="1d" />
-      <item name="alpha.alpha4_20251008_04" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha4_20251008_04" role="factor" display_name="alpha4_20251008_04" freq="1d" />
-      <item name="alpha.alpha5_20251008_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha5_20251008_05" role="factor" display_name="alpha5_20251008_05" freq="1d" />
+    <data dtype="float16" compression="none" data_start_ds="20160101" data_offset="1024">
+      <item name="alpha.yz_20250219_02" module="builtin.factorsim" path="factors/yz_20250219_02" role="factor" display_name="yz_20250219_02" freq="1d" />
+      <item name="alpha.wjx_20240829_02" module="builtin.factorsim" path="factors/wjx_20240829_02" role="factor" display_name="wjx_20240829_02" freq="1d" />
+      <item name="alpha.guanxl_05" module="builtin.factorsim" path="factors/guanxl_05" role="factor" display_name="guanxl_05" freq="1d" />
+      <item name="alpha.alpha1_20251008_01" module="builtin.factorsim" path="factors/alpha1_20251008_01" role="factor" display_name="alpha1_20251008_01" freq="1d" />
+      <item name="alpha.alpha2_20251008_02" module="builtin.factorsim" path="factors/alpha2_20251008_02" role="factor" display_name="alpha2_20251008_02" freq="1d" />
+      <item name="alpha.alpha3_20251008_03" module="builtin.factorsim" path="factors/alpha3_20251008_03" role="factor" display_name="alpha3_20251008_03" freq="1d" />
+      <item name="alpha.alpha4_20251008_04" module="builtin.factorsim" path="factors/alpha4_20251008_04" role="factor" display_name="alpha4_20251008_04" freq="1d" />
+      <item name="alpha.alpha5_20251008_05" module="builtin.factorsim" path="factors/alpha5_20251008_05" role="factor" display_name="alpha5_20251008_05" freq="1d" />
       <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" freq="1d" />
     </data>
   </combo>

@@ -166,7 +166,6 @@ runEval config.xml
       dtype="float16"
       compression="none"
       data_start_ds="20160101"
-      ashare_data_path=""
     >
       <item name="factor.example_1" path="example_factor_1" role="factor" display_name="example_factor_1" />
       <item name="factor.example_2" path="example_factor_2" role="factor" display_name="example_factor_2">
@@ -225,7 +224,7 @@ runEval config.xml
 - 相对路径相对 `config.xml` 或 data-pack 文件所在目录解析。
 - `<item>` 缺省 `module="builtin.factorsim"`；普通 factor pool 请写绝对路径，或写相对当前 XML/data-pack 的路径。
 - `role="label"` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
-- `constants.cache_path` 会派生出 `AshareCache`，供 label、mask、Barra、回测读取使用。
+- `constants.cache_path` 表示 `AshareCache` 的父目录，是所有固定 cache 数据的唯一配置真源。
 
 ## 6. constants
 
@@ -238,7 +237,7 @@ runEval config.xml
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `cache_path` | `data/Cache` | 行情、mask、label 等缓存根目录。运行时会使用其下的 `AshareCache`。 |
+| `cache_path` | `data/Cache` | `AshareCache` 的父目录。运行时固定使用 `{cache_path}/AshareCache`。 |
 | `output_root` | `output` | 唯一输出根目录。日志、alpha、checkpoint、回测和评估子目录都从这里自动派生。 |
 
 固定派生路径：`train.log`、`alpha_history.pt`、`alpha.parquet`、`checkpoints/`、`backtest/`、`eval_report/`。
@@ -564,7 +563,6 @@ class ResearchModel:
   compression="none"
   data_start_ds="20160101"
   data_offset="1024"
-  ashare_data_path=""
 >
   <item name="factor.example_1" path="example_factor_1" role="factor" />
   <item name="label.default" path="vwap30_label1d" role="label" />
@@ -579,9 +577,7 @@ class ResearchModel:
 | `compression` | `none` | feature 存储压缩：`none`、`fp4`、`fp8`。 |
 | `data_start_ds` | `20160101` | 数据业务起点。 |
 | `data_offset` | `1024` | 交易日轴起始偏移；会在构建 universe 时跳过更早的 mask/date 数据。通常保持默认，只有明确知道需要更早历史或更小 universe 起点时再改。 |
-| `ashare_data_path` | 空 | AshareCache 根目录；空值时从 `constants.cache_path` 派生。 |
-
-股票池 mask 不需要配置：框架从 `constants.cache_path` 自动派生 `StockMask2.NoNewStockMask`、`StockMask2.LimitMask` 和 `StockMask2.BaseUnivMask`。
+`<data>` 只描述数据格式和加载方式；label、股票池 mask 和 Barra 路径固定从 `constants.cache_path` 派生。
 
 压缩说明：
 
@@ -1165,20 +1161,20 @@ runEval --corr pos_a.parquet pos_b.parquet --top-pct 5
 ### 19.5 exposure: Barra 暴露
 
 ```bash
-runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache
+runEval --exposure alpha.parquet --cache-path /path/to/Cache
 ```
 
-显式 AshareCache：
+显式 cache 父目录：
 
 ```bash
-runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache
+runEval --exposure alpha.parquet --cache-path /path/to/Cache
 ```
 
 模式：
 
 ```bash
-runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache --exposure-mode 0
-runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache --exposure-mode 1
+runEval --exposure alpha.parquet --cache-path /path/to/Cache --exposure-mode 0
+runEval --exposure alpha.parquet --cache-path /path/to/Cache --exposure-mode 1
 ```
 
 `0` 表示截面相关暴露，`1` 表示 beta 暴露。输出各 Barra 风格的 `min/mean/max/std`。

@@ -37,9 +37,13 @@ if str(SIMBASE_ROOT) not in sys.path:
     sys.path.insert(0, str(SIMBASE_ROOT))
 
 from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase.cache_layout import (
+    BARRA_STYLE_DIRNAME,
+    BARRA_STYLE_PREFIX,
+    DAILY_LABEL_DIRNAME,
+    DAILY_LABEL_PREFIX,
+)
 
-BARRA_STYLE_DIRNAME = "1d_BarraCNE5"
-BARRA_STYLE_PREFIX = "BarraCNE5."
 BARRA_PRESET_FILES = (
     ("beta", "BETA"),
     ("btop", "BTOP"),
@@ -632,7 +636,7 @@ class DataRegistry:
         *,
         universe: Universe,
         data_start_ds: int,
-        ashare_data_path: str | None,
+        ashare_cache_path: str | None,
         config_path: str | None,
         presets: Sequence[str] = (),
         verbose: bool = False,
@@ -640,7 +644,7 @@ class DataRegistry:
         self.universe = universe
         self.data_start_ds = int(data_start_ds)
         self.data_start_idx = universe.date2idx(int(data_start_ds))
-        self.ashare_data_path = ashare_data_path
+        self.ashare_cache_path = ashare_cache_path
         self.config_path = config_path
         self.verbose = bool(verbose)
         self.module_cache: dict[str, Any] = {}
@@ -649,13 +653,13 @@ class DataRegistry:
 
         all_items = list(_coerce_data_item(item) for item in items)
         all_items.extend(self._preset_items(presets))
-        if ashare_data_path:
+        if ashare_cache_path:
             for short_name, (full_name, rel_path) in FACTORSIM_BASE_ITEMS.items():
                 all_items.append(
                     DataItem(
                         name=full_name,
                         module="builtin.factorsim",
-                        path=str(Path(ashare_data_path) / rel_path),
+                        path=str(Path(ashare_cache_path) / rel_path),
                         role="base",
                         params={"_builtin_short_name": short_name},
                     )
@@ -694,10 +698,10 @@ class DataRegistry:
             preset_name = str(preset).strip().lower()
             if preset_name != "barra":
                 raise ValueError(f"unsupported data preset: {preset}")
-            if not self.ashare_data_path:
-                raise ValueError("barra preset requires ashare_data_path")
+            if not self.ashare_cache_path:
+                raise ValueError("barra preset requires an AshareCache root")
             for style, filename in BARRA_PRESET_FILES:
-                path = str(Path(self.ashare_data_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{filename}")
+                path = str(Path(self.ashare_cache_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{filename}")
                 items.append(
                     DataItem(
                         name=f"barra.{style}",
@@ -941,9 +945,9 @@ def _memmap_load_2d(registry: DataRegistry, path: str, start_ds: int, end_ds: in
 def _load_factorsim(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
     path = item.path
     if not path and item.role == "label":
-        if not registry.ashare_data_path:
-            raise ValueError(f"label data {item.name!r} requires path or registry.ashare_data_path")
-        path = str(Path(registry.ashare_data_path) / "1d_DailyLabel" / "DailyLabel.vwap30_label1d")
+        if not registry.ashare_cache_path:
+            raise ValueError(f"label data {item.name!r} requires a path or AshareCache root")
+        path = str(Path(registry.ashare_cache_path) / DAILY_LABEL_DIRNAME / f"{DAILY_LABEL_PREFIX}vwap30_label1d")
     if not path:
         raise ValueError(f"factorsim data {item.name!r} requires path")
     cache_key = f"factorsim_reader:{path}"

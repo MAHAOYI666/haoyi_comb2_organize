@@ -13,6 +13,13 @@ from comb2.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_
 from comb2.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig, MemmapMaskSource
 from comb2.DataRegistry import CANONICAL_BAR_TIMES, DataItem, DataRegistry, OpSpec, Universe
 from comb2.op_utils import cs_zscore, nan_to_num, nanmean, nanstd, normalize_by_max_abs, rank, truncate, winsorize_by_quantile
+from comb2_simbase.cache_layout import (
+    BASE_UNIVERSE_MASK_NAME,
+    FILTERED_MASK_NAME,
+    VALID_MASK_NAME,
+    ashare_cache_path,
+    stock_mask_path,
+)
 
 
 FLOAT_DTYPES = (torch.float16, torch.float32, torch.float64, torch.bfloat16)
@@ -460,7 +467,7 @@ def test_config_accepts_builtin_factor_until_registry_resolve(tmp_path) -> None:
         [item],
         universe=Universe(dates=(20200101,), codes=("000001",), dtype=torch.float32),
         data_start_ds=20200101,
-        ashare_data_path=loaded["combo"]["loader"]["ashare_data_path"],
+        ashare_cache_path=str(ashare_cache_path(loaded["constants"]["cache_path"])),
         config_path=None,
     )
 
@@ -506,7 +513,7 @@ def test_config_rejects_legacy_data_item_aliases(tmp_path) -> None:
             [{"name": "alpha.bad", "source": "builtin.factorsim", "path": "factor_a", "role": "factor"}],
             universe=Universe(dates=(20200101,), codes=("000001",), dtype=torch.float32),
             data_start_ds=20200101,
-            ashare_data_path=None,
+            ashare_cache_path=None,
             config_path=None,
         )
 
@@ -745,6 +752,14 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
             rows.append([10_000 * date_idx + bar_idx + 10.0, 10_000 * date_idx + bar_idx + 1.0, 10_000 * date_idx + bar_idx + 100.0])
     data = np.asarray(rows, dtype=np.float64)
     _write_memmaper2_3d_fixture(cache_dir, data, dates, times, columns, chunk_size=1)
+    for mask_name in (VALID_MASK_NAME, FILTERED_MASK_NAME, BASE_UNIVERSE_MASK_NAME):
+        _write_memmaper2_fixture(
+            stock_mask_path(tmp_path / "cache_root", mask_name),
+            np.ones((len(dates), len(columns)), dtype=np.float64),
+            dates,
+            columns,
+            chunk_size=1,
+        )
 
     xml_path = tmp_path / "config.xml"
     xml_path.write_text(
@@ -772,7 +787,7 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
     parsed = load_config(str(xml_path))
     loader_fields = LoaderConfig.__dataclass_fields__
     loader_values = {key: value for key, value in parsed["combo"]["loader"].items() if key in loader_fields}
-    loader_values.update(valid_path=None, filtered_path=None, base_universe_path=None)
+    loader_values["cache_path"] = parsed["constants"]["cache_path"]
     loader_config = LoaderConfig(**loader_values)
     loader = IdentityPreprocessLoader(loader_config)
 
@@ -804,7 +819,7 @@ def test_date_rolling_reloads_raw_lookback_after_processed_cache_hit() -> None:
         ],
         universe=universe,
         data_start_ds=20200101,
-        ashare_data_path=None,
+        ashare_cache_path=None,
         config_path=None,
     )
 
@@ -932,7 +947,7 @@ def test_universe_from_mask_applies_data_offset() -> None:
 
 
 def test_barra_preset_registers_all_cne5_styles(tmp_path) -> None:
-    registry, _ = _fake_registry([], presets=("barra",), ashare_data_path=str(tmp_path))
+    registry, _ = _fake_registry([], presets=("barra",), ashare_cache_path=str(tmp_path))
     expected_styles = {
         "beta",
         "btop",
@@ -1290,7 +1305,7 @@ def _fake_registry(
     items: list[DataItem],
     presets: tuple[str, ...] = (),
     verbose: bool = False,
-    ashare_data_path: str | None = None,
+    ashare_cache_path: str | None = None,
 ) -> tuple[DataRegistry, list[tuple[str, int, int]]]:
     universe = Universe(
         dates=(20200101, 20200102, 20200103, 20200106),
@@ -1302,7 +1317,7 @@ def _fake_registry(
         items,
         universe=universe,
         data_start_ds=20200101,
-        ashare_data_path=ashare_data_path,
+        ashare_cache_path=ashare_cache_path,
         config_path=None,
         presets=presets,
         verbose=verbose,
@@ -1599,7 +1614,7 @@ def test_data_registry_builtin_factorsim_2d_direct_load(tmp_path) -> None:
         ],
         universe=universe,
         data_start_ds=20200101,
-        ashare_data_path=str(tmp_path / "cache_root" / "AshareCache"),
+        ashare_cache_path=str(tmp_path / "cache_root" / "AshareCache"),
         config_path=None,
     )
 
@@ -1634,7 +1649,7 @@ def test_data_registry_builtin_factorsim_3d_preserves_cube_by_freq(tmp_path) -> 
         ],
         universe=universe,
         data_start_ds=20200102,
-        ashare_data_path=str(tmp_path / "cache_root" / "AshareCache"),
+        ashare_cache_path=str(tmp_path / "cache_root" / "AshareCache"),
         config_path=None,
     )
 
@@ -1667,7 +1682,7 @@ def test_data_registry_builtin_factorsim_3d_requires_canonical_time_axis(tmp_pat
         ],
         universe=universe,
         data_start_ds=20200102,
-        ashare_data_path=str(tmp_path / "cache_root" / "AshareCache"),
+        ashare_cache_path=str(tmp_path / "cache_root" / "AshareCache"),
         config_path=None,
     )
 
@@ -1719,7 +1734,7 @@ def test_data_registry_rejects_nbar_and_reducer_ops_for_3d_items(tmp_path) -> No
     common = {
         "universe": universe,
         "data_start_ds": 20200102,
-        "ashare_data_path": str(tmp_path / "cache_root" / "AshareCache"),
+        "ashare_cache_path": str(tmp_path / "cache_root" / "AshareCache"),
         "config_path": None,
     }
     with pytest.raises(ValueError, match="nbar"):
@@ -1772,7 +1787,7 @@ def test_data_registry_fails_when_3d_source_has_neither_nbar_nor_freq(tmp_path) 
         ],
         universe=universe,
         data_start_ds=20200102,
-        ashare_data_path=str(tmp_path / "cache_root" / "AshareCache"),
+        ashare_cache_path=str(tmp_path / "cache_root" / "AshareCache"),
         config_path=None,
     )
 

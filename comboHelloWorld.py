@@ -324,10 +324,6 @@ CONFIG_TEMPLATE = '''
       dtype="float16"
       compression="none"
       data_start_ds="20160101"
-      ashare_data_path=""
-      valid_path=""
-      filtered_path=""
-      base_universe_path=""
     >
       <!-- Factor paths can be absolute or relative to this config.xml. -->
       <item name="factor.example_factor" path="example_factor" role="factor" display_name="example_factor" />

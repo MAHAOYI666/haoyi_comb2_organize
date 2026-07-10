@@ -143,13 +143,16 @@ def test_evaluation_mask_combines_base_and_limit_then_shifts(monkeypatch) -> Non
     signal = pd.DataFrame(1.0, index=dates, columns=columns)
     base = pd.DataFrame([[1, 1], [1, 0], [1, 1]], index=dates, columns=columns)
     limit = pd.DataFrame([[1, 1], [1, 1], [0, 1]], index=dates, columns=columns)
+    paths = []
 
     def fake_read(path, start_ds, end_ds, df_type):
+        paths.append(str(path))
         return base if str(path).endswith("BaseUnivMask") else limit
 
     monkeypatch.setattr("comb_eval.report.read_cache_array", fake_read)
-    mask = load_evaluation_mask(signal, "/cache/AshareCache")
+    mask = load_evaluation_mask(signal, "/cache")
 
     assert mask.loc[pd.Timestamp("2020-01-01")].tolist() == [True, False]
     assert mask.loc[pd.Timestamp("2020-01-02")].tolist() == [False, True]
     assert mask.loc[pd.Timestamp("2020-01-03")].tolist() == [False, False]
+    assert all(path.startswith("/cache/AshareCache/1d_StockMask2/") for path in paths)

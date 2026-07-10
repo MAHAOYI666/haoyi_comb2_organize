@@ -16,7 +16,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT / "evals"), env.get("PYTHONPATH", "")])
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT / "evals"), str(REPO_ROOT / "vendor" / "comb2-simbase"), env.get("PYTHONPATH", "")]
+    )
     return subprocess.run(
         [sys.executable, *args],
         cwd=REPO_ROOT,
@@ -30,7 +32,14 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 def run_cli_in(cwd: Path, *args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT / "evals"), str(REPO_ROOT), env.get("PYTHONPATH", "")])
+    env["PYTHONPATH"] = os.pathsep.join(
+        [
+            str(REPO_ROOT / "evals"),
+            str(REPO_ROOT / "vendor" / "comb2-simbase"),
+            str(REPO_ROOT),
+            env.get("PYTHONPATH", ""),
+        ]
+    )
     return subprocess.run(
         [sys.executable, *args],
         cwd=cwd,
@@ -252,6 +261,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
+    assert set(root.find("./combo/data").attrib) == {"dtype", "compression", "data_start_ds"}
     assert "output_path" not in root.find("./backtest").attrib
     assert root.find("./combo/defaults") is None
 
@@ -267,13 +277,20 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
     assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
     assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
-    assert parsed["combo"]["loader"]["valid_path"].endswith("1d_StockMask2/StockMask2.NoNewStockMask")
-    assert parsed["combo"]["loader"]["filtered_path"].endswith("1d_StockMask2/StockMask2.LimitMask")
-    assert parsed["combo"]["loader"]["base_universe_path"].endswith("1d_StockMask2/StockMask2.BaseUnivMask")
+    assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
+    assert set(parsed["combo"]["loader"]) == {
+        "dtype",
+        "compression",
+        "data_start_ds",
+        "data_offset",
+        "data_items",
+        "data_presets",
+        "config_path",
+    }
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
 
 
-def test_config_rejects_invalid_training_delay_and_removed_output_paths(tmp_path):
+def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     from config import load_config
 
     invalid_delay = tmp_path / "invalid-delay.xml"
@@ -281,10 +298,10 @@ def test_config_rejects_invalid_training_delay_and_removed_output_paths(tmp_path
     with pytest.raises(ValueError, match="trainDelay must be nonnegative"):
         load_config(str(invalid_delay))
 
-    removed_path = tmp_path / "removed-path.xml"
-    removed_path.write_text('<config><constants checkpoint_root="checkpoints" /></config>', encoding="utf-8")
-    with pytest.raises(ValueError, match="unsupported config key 'checkpoint_root'"):
-        load_config(str(removed_path))
+    unknown_constant = tmp_path / "unknown-constant.xml"
+    unknown_constant.write_text('<config><constants custom_path="value" /></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
+        load_config(str(unknown_constant))
 
 
 def test_version_file_is_the_build_default():

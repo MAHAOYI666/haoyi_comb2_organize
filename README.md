@@ -65,7 +65,7 @@ eg-lgbm/
 所有 XML 里的相对路径都会按 `config.xml` 所在目录解析，不依赖运行命令时的当前目录。换机器时，通常只需要修改 `<constants>` 中的机器相关根目录。
 
 关键配置包括：
-- `constants.cache_path`：行情、mask、label 等 `AshareCache` 数据根目录
+- `constants.cache_path`：`AshareCache` 的父目录；行情、mask、label、Barra 和回测路径均从这里派生
 - `constants.output_root`：唯一输出根目录；日志、alpha、checkpoint、回测和评估目录自动从这里派生
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
 
@@ -74,7 +74,7 @@ eg-lgbm/
 - 绝对路径：直接读取
 - 相对路径：相对 `config.xml` 或 data-pack 文件所在目录解析
 
-普通 factor pool 不再通过 `constants` 配置隐式根目录；需要在 `<item path="...">` 中写绝对路径，或者相对当前 XML/data-pack 的路径。`AshareCache` 内的数据也建议写成绝对路径或相对 data-pack 的路径。
+普通 factor pool 使用 `<item path="...">` 中的绝对路径，或者相对当前 XML/data-pack 的路径。固定的 label、mask 和 Barra 数据由 `constants.cache_path` 统一派生。
 
 示例里：
 - `model_path="model.py"`
@@ -112,7 +112,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 /path/to/comb2-organize/runEval.py --config /path/to/research/config.xml
 ```
 
-`runEval.py` 的 shebang 固定使用 `/root/autodl/python310fs/bin/python3`。如果当前就在 `comb2-organize` 仓库目录下，也可以直接：
+如果当前就在 `comb2-organize` 仓库目录下，也可以直接：
 
 ```bash
 ./runEval.py /path/to/research/config.xml
@@ -126,7 +126,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 如果缺失或为空，会打印不齐全的文件列表并退出。齐全后会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算 IC、PNL、分组回测，并在 `<output_root>/eval_report/` 下生成 summary、检查表和 `signal_analysis.png` 长图，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`。
 
-默认会从 config 的 `combo.loader.ashare_data_path` 下读取 `DailyLabel.vwap30_label1d` 和 `DailyLabel.vwap30_label5d`。如果要显式指定本地 label 表：
+默认会从 `constants.cache_path/AshareCache/1d_DailyLabel` 读取 `DailyLabel.vwap30_label1d` 和 `DailyLabel.vwap30_label5d`。如果要显式指定本地 label 表：
 
 ```bash
 ./runEval.py /path/to/research/config.xml \
@@ -141,7 +141,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 ./runEval.py --pnl /path/to/daily_pnl.parquet
 ./runEval.py --corr /path/to/left.parquet /path/to/right.parquet
 ./runEval.py --va /path/to/base_daily_pnl.parquet /path/to/new_daily_pnl.parquet
-./runEval.py --exposure /path/to/alpha.parquet --ashare-cache-path /path/to/AshareCache
+./runEval.py --exposure /path/to/alpha.parquet --cache-path /path/to/Cache
 ```
 
 这些单项模式不再读取 `config.xml` 兜底补参数；如果需要 `config` 驱动的整体评估，继续使用 `runEval config.xml`。

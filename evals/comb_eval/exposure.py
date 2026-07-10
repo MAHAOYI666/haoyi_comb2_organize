@@ -6,12 +6,9 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+from comb2_simbase.cache_layout import BARRA_STYLE_DIRNAME, BARRA_STYLE_PREFIX, ashare_cache_path
+
 from .io import read_cache_array
-
-
-BARRA_STYLE_DIRNAME = "1d_BarraCNE5"
-BARRA_STYLE_PREFIX = "BarraCNE5."
-DEFAULT_ASHARE_CACHE_PATH = Path("/root/ml-data1-pvc/factorsim_data/Cache/AshareCache")
 
 
 def compute_style_factor_exposure(
@@ -52,13 +49,13 @@ def compute_style_factor_exposure(
 
 def compute_barra_style_exposure(
     signal: pd.DataFrame,
+    cache_path: str | Path,
     start_ds: int | None = None,
     end_ds: int | None = None,
     mode: int = 0,
-    ashare_cache_path: str | Path = DEFAULT_ASHARE_CACHE_PATH,
 ) -> pd.DataFrame:
     signal_df = _normalize_exposure_frame(signal)
-    style_paths = _discover_barra_style_paths(ashare_cache_path)
+    style_paths = _discover_barra_style_paths(cache_path)
     if mode not in {0, 1}:
         raise ValueError("mode must be 0 (correlation exposure) or 1 (beta exposure).")
 
@@ -133,8 +130,8 @@ def _coerce_int_dates(index: pd.Index) -> np.ndarray:
     return dates.to_numpy(dtype="float64")
 
 
-def _discover_barra_style_paths(ashare_cache_path: str | Path) -> list[tuple[str, Path]]:
-    barra_root = Path(ashare_cache_path) / BARRA_STYLE_DIRNAME
+def _discover_barra_style_paths(cache_path: str | Path) -> list[tuple[str, Path]]:
+    barra_root = ashare_cache_path(cache_path) / BARRA_STYLE_DIRNAME
     if not barra_root.exists():
         raise FileNotFoundError(f"Barra style directory not found: {barra_root}")
     paths = [

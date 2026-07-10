@@ -24,18 +24,19 @@ Changes:
 
 - Consolidated the framework implementation under the single `comb2` import package and removed the generic top-level `src` package from source and protected-wheel builds.
 - Made `isTrainDay` the sole training-calendar rule. Checkpoint age no longer suppresses or triggers training; only an exact target-date checkpoint skips an otherwise scheduled training run.
-- Fixed the published distribution name to `combo2`, removed build-time name overrides, and made the repository-root `VERSION` file the only build version source. CI reads the same identity and runs the test suite before building.
+- Fixed the published distribution name to `combo2`, removed build-time name overrides, and made the repository-root `VERSION` file the only build version source. CI reads the same identity when building the protected wheel.
 - Consolidated runtime artifacts under `constants.output_root`. `train.log`, `alpha_history.pt`, `alpha.parquet`, checkpoints, backtest results, and evaluation reports now use fixed derived paths; redundant output and checkpoint path settings were removed from configs, examples, Optuna rendering, and documentation.
-- Fixed the complete `barra` preset on case-sensitive filesystems by mapping all 11 logical lowercase style names to their uppercase on-disk `BarraCNE5.*` filenames. The built-in size and book-to-price paths now follow the same convention, and the preset requires an `ashare_data_path` from which absolute paths can be derived.
+- The complete `barra` preset maps all 11 logical style names to the canonical uppercase `BarraCNE5.*` filenames derived from `constants.cache_path`.
 - Clarified training-date semantics and changed starter configs to `trainDelay=0`: no hidden framework offset is added, because labels retain their stored delay convention. `retDays` continues to align each factor date with the future-return window beginning on that date, while `tsDays` only controls the trailing feature window.
 - Added config validation for training windows, thread counts, data offsets, smoothing, strategy dates, and backtest constraints. Negative `trainDelay`, non-positive `retDays`/`tsDays`, and training windows shorter than `tsDays` now fail during config loading.
 - Removed the selection-module API, `select_days`, `<combo><defaults>`, selection hooks, and package exports. Training-window calculation is now explicit in `ComboBase`, bounded directly by `trainDelay`, `retDays`, `tsDays`, and `max_train_days`.
-- Changed configured mask handling to fail immediately with `FileNotFoundError` when a non-empty mask path does not exist, instead of silently deferring the error or running without the requested mask.
-- Replaced obsolete `Ashare`/`AshareFiltered` mask defaults with cache-derived `StockMask2.NoNewStockMask` and `StockMask2.LimitMask`; the base universe continues to derive from `StockMask2.BaseUnivMask`.
+- Centralized the AshareCache layout under `constants.cache_path`. Labels, stock masks, Barra data, backtests, and evaluation all use the same parent-root derivation; per-loader `ashare_data_path` and custom mask-path settings were removed, with `StockMask2.NoNewStockMask`, `StockMask2.LimitMask`, and `StockMask2.BaseUnivMask` as the standard universe inputs. `runEval --exposure` now requires `--cache-path` with that parent directory.
 - Unified alpha IC calculation with the report implementation. Signals and 1-day/5-day labels are aligned on common dates and instruments and filtered by the shifted intersection of `BaseUnivMask` and `LimitMask`, so `runCombo` and evaluation reports use the same metrics and universe rules.
 - Corrected the example Torch IC loss to compute a masked, weighted Pearson correlation with valid centering and normalization; zero-weight instruments no longer affect the loss.
 - Changed `runCombo` to tee standard output and errors to the derived `train.log` while preserving console output.
 - Updated generated projects and Torch examples to use the public `FeatureGroups` interface and refreshed root, package, packaging, and configuration documentation for the new paths and removed APIs.
+- Updated starter/example configurations to use relocatable factor paths and `constants.cache_path` rather than machine-specific absolute AshareCache paths.
+- CI now only builds and publishes the protected wheel; pytest remains a local validation step so the build runner does not require pytest to be installed.
 
 ## 0.1.6
 

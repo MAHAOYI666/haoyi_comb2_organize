@@ -116,7 +116,7 @@ def test_registry_preserves_item_shape_by_freq():
         ),
         universe=universe,
         data_start_ds=20200101,
-        ashare_data_path=None,
+        ashare_cache_path=None,
         config_path=None,
     )
     registry.modules["test.daily"] = _daily_loader

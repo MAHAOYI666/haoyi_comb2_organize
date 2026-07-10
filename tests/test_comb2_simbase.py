@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -7,11 +8,13 @@ import pandas as pd
 import pytest
 import torch
 
-from comb2_simbase import IndexMask, Memmaper2, fast
+from comb2_simbase import IndexMask, Memmaper2, ashare_cache_path, daily_label_path, fast, stock_mask_path
 from comb2_simbase.benchmark import benchmark_returns_from_cache, load_index_benchmark
 
 
-REAL_CACHE = Path("/root/ml-data1-pvc/factorsim_data/Cache")
+REAL_CACHE_VALUE = os.environ.get("COMB2_TEST_CACHE_PATH")
+REAL_CACHE = Path(REAL_CACHE_VALUE).expanduser() if REAL_CACHE_VALUE else None
+HAS_REAL_CACHE = REAL_CACHE is not None and ashare_cache_path(REAL_CACHE).exists()
 
 
 def _write_memmaper2_fixture(base: Path, data: np.ndarray, index: np.ndarray, columns: np.ndarray, chunk_size: int = 2):
@@ -26,6 +29,16 @@ def _write_memmaper2_fixture(base: Path, data: np.ndarray, index: np.ndarray, co
     np.save(base / "meta.npy", meta)
     np.save(base / "index.npy", index.astype(np.int64))
     np.save(base / "columns.npy", columns)
+
+
+def test_cache_layout_uses_parent_directory_semantics(tmp_path: Path):
+    assert ashare_cache_path(tmp_path) == tmp_path / "AshareCache"
+    assert daily_label_path(tmp_path, "vwap30_label1d") == (
+        tmp_path / "AshareCache" / "1d_DailyLabel" / "DailyLabel.vwap30_label1d"
+    )
+    assert stock_mask_path(tmp_path, "StockMask2.LimitMask") == (
+        tmp_path / "AshareCache" / "1d_StockMask2" / "StockMask2.LimitMask"
+    )
 
 
 def test_memmaper2_loads_exact_2d_slices(tmp_path: Path):
@@ -53,8 +66,9 @@ def test_index_mask_matches_local_simbase_arrays():
     assert mask.code2cidx("000001") == 0
     assert mask.didx2date(mask.date2didx(20100105)) == 20100105
 
-    simbase_dir = Path("/root/autodl/simbase/IndexMask/index_mask/memmap_mask")
-    if simbase_dir.exists():
+    simbase_value = os.environ.get("COMB2_TEST_INDEX_MASK_PATH")
+    if simbase_value:
+        simbase_dir = Path(simbase_value).expanduser()
         np.testing.assert_array_equal(mask.date, np.load(simbase_dir / "DateRange.FactorSim.npy"))
         np.testing.assert_array_equal(mask.time, np.load(simbase_dir / "TimeRange.FactorSim.npy"))
         np.testing.assert_array_equal(mask.code, np.load(simbase_dir / "CodeRange.FactorSim.npy", allow_pickle=True))
@@ -90,23 +104,24 @@ def test_fast_helpers_match_pandas_numpy_reference():
     assert np.isnan(actual[1, 0])
 
 
-@pytest.mark.skipif(not (REAL_CACHE / "AshareCache").exists(), reason="local AshareCache is unavailable")
+@pytest.mark.skipif(not HAS_REAL_CACHE, reason="COMB2_TEST_CACHE_PATH is unavailable")
 def test_memmaper2_reads_real_local_cache():
-    path = REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.close"
+    path = ashare_cache_path(REAL_CACHE) / "1d_DailyKline" / "DailyKline.close"
     frame = Memmaper2(path).load(20200102, 20200106, df_type=True).dloc[:]
     assert list(frame.index.astype(int)) == [20200102, 20200103, 20200106]
     assert frame.shape[1] == len(IndexMask().code)
     assert "000001" in frame.columns
 
-@pytest.mark.skipif(not (REAL_CACHE / "AshareCache").exists(), reason="local AshareCache is unavailable")
+@pytest.mark.skipif(not HAS_REAL_CACHE, reason="COMB2_TEST_CACHE_PATH is unavailable")
 def test_local_benchmark_returns_match_manual_index_weight_formula():
     dates = [20200102, 20200103, 20200106]
     bench = load_index_benchmark(REAL_CACHE, dates[0], dates[-1], ts_code="000905.SH")
     returns = bench["close"].pct_change().fillna(0.0).to_numpy()
 
-    weights = Memmaper2(REAL_CACHE / "AshareCache" / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    prev_close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.real_pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    root = ashare_cache_path(REAL_CACHE)
+    weights = Memmaper2(root / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    close = Memmaper2(root / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    prev_close = Memmaper2(root / "1d_DailyKline" / "DailyKline.real_pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
     stock_ret = close / prev_close - 1.0
 
     for row_idx in (1, 2):
@@ -120,15 +135,16 @@ def test_local_benchmark_returns_match_manual_index_weight_formula():
     np.testing.assert_allclose(series.to_numpy(), returns)
 
 
-@pytest.mark.skipif(not (REAL_CACHE / "AshareCache").exists(), reason="local AshareCache is unavailable")
+@pytest.mark.skipif(not HAS_REAL_CACHE, reason="COMB2_TEST_CACHE_PATH is unavailable")
 def test_local_benchmark_uses_raw_previous_close_instead_of_adjusted_previous_close():
     dates = [20150602, 20150603, 20150604]
     bench = load_index_benchmark(REAL_CACHE, dates[0], dates[-1], ts_code="000905.SH")
     actual = bench["close"].pct_change().fillna(0.0).to_numpy()
 
-    weights = Memmaper2(REAL_CACHE / "AshareCache" / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    close = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
-    preclose = Memmaper2(REAL_CACHE / "AshareCache" / "1d_DailyKline" / "DailyKline.pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    root = ashare_cache_path(REAL_CACHE)
+    weights = Memmaper2(root / "1d_IndexWeight" / "IndexWeight.000905.SH").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    close = Memmaper2(root / "1d_DailyKline" / "DailyKline.close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
+    preclose = Memmaper2(root / "1d_DailyKline" / "DailyKline.pre_close").load(dates[0], dates[-1], df_type=True).dloc[:].astype(float)
 
     adjusted = []
     for row_idx in range(len(dates)):

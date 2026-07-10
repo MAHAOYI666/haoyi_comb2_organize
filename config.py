@@ -3,12 +3,19 @@ from __future__ import annotations
 from copy import deepcopy
 import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 import xml.etree.ElementTree as ET
 
 import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
+LOCAL_SIMBASE_ROOT = ORGANIZE_ROOT / "vendor" / "comb2-simbase"
+if LOCAL_SIMBASE_ROOT.is_dir() and str(LOCAL_SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(LOCAL_SIMBASE_ROOT))
+
+from comb2_simbase.cache_layout import daily_label_path
+
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 COMB2_ROOT = VENDOR_ROOT / "comb2"
 PCM_ROOT = VENDOR_ROOT / "comb2-pcmaster"
@@ -111,14 +118,10 @@ DEFAULT_CONFIG = {
             "attrs": {},
         },
         "loader": {
-            "ashare_data_path": None,
             "dtype": torch.float16,
             "compression": "none",
             "data_start_ds": 20160101,
             "data_offset": 1024,
-            "valid_path": None,
-            "filtered_path": None,
-            "base_universe_path": None,
             "data_items": (),
             "data_presets": (),
             "config_path": None,
@@ -161,10 +164,6 @@ PATH_FIELDS = {
     ("combo", "paths", "combo_base_path"),
     ("combo", "paths", "research_loader_path"),
     ("combo", "paths", "research_dataset_path"),
-    ("combo", "loader", "ashare_data_path"),
-    ("combo", "loader", "valid_path"),
-    ("combo", "loader", "filtered_path"),
-    ("combo", "loader", "base_universe_path"),
     ("monitor", "output_path"),
 }
 
@@ -188,14 +187,10 @@ SUPPORTED_DATA_OPS = {
 DATA_ATTR_DEFAULTS = {
     key: DEFAULT_CONFIG["combo"]["loader"][key]
     for key in (
-        "ashare_data_path",
         "dtype",
         "compression",
         "data_start_ds",
         "data_offset",
-        "valid_path",
-        "filtered_path",
-        "base_universe_path",
     )
 }
 
@@ -387,7 +382,7 @@ def _resolve_data_item_path(
     module: str,
     role: str,
     field: str,
-    ashare_data_path: str | None,
+    cache_path: str,
     base_dir: Path,
 ) -> str | None:
     if value is None:
@@ -401,9 +396,7 @@ def _resolve_data_item_path(
     if field == "path" and normalized_module == "barra_style":
         return value
     if field == "path" and str(role).strip().lower() == "label":
-        if ashare_data_path is None:
-            raise ValueError("label items require combo.loader.ashare_data_path or constants.cache_path")
-        return str((Path(ashare_data_path) / "1d_DailyLabel" / f"DailyLabel.{value}").resolve())
+        return str(daily_label_path(cache_path, str(value)).resolve())
     return str((base_dir / path).resolve())
 
 
@@ -419,7 +412,7 @@ def _resolve_data_pack(
     parsed: dict[str, Any],
     *,
     base_dir: Path,
-    ashare_data_path: str | None,
+    cache_path: str,
     seen_paths: set[tuple[str, tuple[str, ...] | None]],
     presets: list[str],
 ) -> list[dict[str, Any]]:
@@ -448,7 +441,7 @@ def _resolve_data_pack(
         nested_items = _resolve_data_pack(
             nested,
             base_dir=nested_path.parent,
-            ashare_data_path=ashare_data_path,
+            cache_path=cache_path,
             seen_paths=seen_paths,
             presets=nested_presets,
         )
@@ -467,7 +460,7 @@ def _resolve_data_pack(
                 module=module,
                 role=str(resolved_item.get("role", "aux")),
                 field=field,
-                ashare_data_path=ashare_data_path,
+                cache_path=cache_path,
                 base_dir=base_dir,
             )
         resolved_items.append(resolved_item)
@@ -477,22 +470,13 @@ def _resolve_data_pack(
 def _apply_constant_paths(config: dict) -> dict:
     updated = deepcopy(config)
     constants = updated["constants"]
-    cache_path = Path(constants["cache_path"]) / "AshareCache"
+    cache_path = Path(constants["cache_path"])
     output_root = Path(constants["output_root"])
 
     updated["combo"]["paths"]["output_dir"] = str(output_root)
     updated["combo"]["paths"]["checkpoint_root"] = str(output_root / "checkpoints")
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
-    loader_config = updated["combo"]["loader"]
-    if loader_config.get("ashare_data_path") is None:
-        loader_config["ashare_data_path"] = str(cache_path)
-    if loader_config.get("valid_path") is None:
-        loader_config["valid_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.NoNewStockMask")
-    if loader_config.get("filtered_path") is None:
-        loader_config["filtered_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.LimitMask")
-    if loader_config.get("base_universe_path") is None:
-        loader_config["base_universe_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")
     updated["backtest"]["output_path"] = str(output_root / "backtest")
     return updated
 
@@ -517,7 +501,7 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     data_items = _resolve_data_pack(
         resolved["combo"].get("data", {"imports": (), "items": ()}),
         base_dir=base_dir,
-        ashare_data_path=resolved["combo"]["loader"].get("ashare_data_path"),
+        cache_path=resolved["constants"]["cache_path"],
         seen_paths=set(),
         presets=presets,
     )
