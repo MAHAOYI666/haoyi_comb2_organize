@@ -19,7 +19,6 @@ import torch
 import numpy as np
 
 from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig
-from .selection import DefaultSelectionModule
 
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
@@ -35,16 +34,15 @@ class ComboBase:
         self.research_dataset_path = getattr(node, "research_dataset_path", None)
         self.snaptime = node.snaptime
         self.livetrading = node.livetrading
-        self.trainDelay = node.trainDelay
-        self.retDays = node.retDays
-        self.tsDays = node.tsDays
+        self.trainDelay = int(node.trainDelay)
+        self.retDays = int(node.retDays)
+        self.tsDays = int(node.tsDays)
         self.load_chunk_days = node.load_chunk_days
         self.snap_ti = getattr(node, "snap_ti", None)
         self.seed = getattr(node, "seed", None)
         self.deterministic = bool(getattr(node, "deterministic", False))
         self.model_smooth_rate = node.model_smooth_rate
         self.model_keep_num = node.model_keep_num
-        self.select_days = node.select_days
         self.max_train_days = int(node.max_train_days)
         self.checkpoint_root = node.checkpoint_root
         self._set_random_seed()
@@ -75,10 +73,6 @@ class ComboBase:
             dtype=self.loader.dtype,
             codec=self.loader.codec,
             freqs=self.loader.freqs,
-        )
-        self.selection = node.selection_module or DefaultSelectionModule(
-            max_train_days=self.max_train_days,
-            select_days=self.select_days,
         )
         self.model = None
         self.oldModel = None
@@ -226,7 +220,7 @@ class ComboBase:
         if self.needTrain(ds):
             self.Train(ds)
             if self.modelDir:
-                self.SaveCheckpointModel(self.modelDir, self._prev_date(ds, self.trainDelay))
+                self.SaveCheckpointModel(self.modelDir, self._train_target_ds(ds))
         return alpha
 
     def _resolve_date(self, di) -> int:
@@ -239,6 +233,9 @@ class ComboBase:
     def _prev_date(self, ds: int, offset: int = 1) -> int:
         didx = self.loader.date2didx(ds)
         return self.loader.didx2date(max(0, didx - offset))
+
+    def _train_target_ds(self, ds: int) -> int:
+        return self._prev_date(ds, self.trainDelay)
 
     def buffer_load(self, ds: int):
         end_didx = self.loader.date2didx(ds)
@@ -305,16 +302,13 @@ class ComboBase:
         return pred.to(dtype=self.loader.dtype)
 
     def Train(self, ds: int):
-        plan = self.selection.build_train_plan(
-            ds,
-            loader=self.loader,
-            context={
-                "trainDelay": self.trainDelay,
-                "retDays": self.retDays,
-                "tsDays": self.tsDays,
-                "prev_date": self._prev_date,
-            },
-        )
+        target_ds = self._train_target_ds(ds)
+        target_didx = self.loader.date2didx(target_ds)
+        loading_days = target_didx - self.loader.data_start_didx + 1
+        raw_ndays = loading_days - self.retDays + 1
+        ndays = min(raw_ndays, self.max_train_days)
+        if ndays < self.tsDays:
+            raise ValueError(f"not enough training window for ds={ds}")
 
         if self.model is not None:
             model_data_in_memory = BytesIO()
@@ -328,26 +322,21 @@ class ComboBase:
 
         self.reset_buffer = True
         print(
-            f"[TRAIN] ds={ds} target_ds={plan.target_ds} "
-            f"loading_days={plan.loading_days} raw_ndays={plan.raw_ndays} ndays={plan.ndays} tsDays={self.tsDays}"
+            f"[TRAIN] ds={ds} target_ds={target_ds} "
+            f"loading_days={loading_days} raw_ndays={raw_ndays} ndays={ndays} tsDays={self.tsDays}"
         )
         train_start = time.perf_counter()
         dataset_start = time.perf_counter()
         dataset = self.research_dataset_cls(
             self.loader,
-            end_ds=plan.target_ds,
-            ndays=plan.ndays,
+            end_ds=target_ds,
+            ndays=ndays,
             x_delay=self.retDays,
             ts_days=self.tsDays,
-            validinsts=plan.validinsts,
             load_chunk_days=self.load_chunk_days,
             codec=self.loader.codec,
         )
         dataset_time = time.perf_counter() - dataset_start
-        plan.validinsts = dataset.validinsts
-        selection_start = time.perf_counter()
-        self.selection.before_fit(dataset, plan)
-        before_fit_time = time.perf_counter() - selection_start
         print(f"[TRAIN] dataset_len={len(dataset)} valid_instruments={dataset.numValidinsts}")
         self.model = None
         self._release_torch_cache("before_new_model_fit")
@@ -357,22 +346,19 @@ class ComboBase:
         fit_time = time.perf_counter() - fit_start
         dataset = None
         self._release_torch_cache("after_fit_dataset_release")
-        selection_start = time.perf_counter()
-        self.selection.after_fit(self.model, plan)
-        after_fit_time = time.perf_counter() - selection_start
         if getattr(self.loader, "verbose", False):
             print_progress(
                 f"Stage:Train ds={ds}",
                 1,
                 1,
                 train_start,
-                f"dataset {dataset_time:.2f}, before_fit {before_fit_time:.2f}, fit {fit_time:.2f}, after_fit {after_fit_time:.2f}",
+                f"dataset {dataset_time:.2f}, fit {fit_time:.2f}",
                 final=True,
             )
-        print(f"[TRAIN] finished ds={ds} target_ds={plan.target_ds}")
+        print(f"[TRAIN] finished ds={ds} target_ds={target_ds}")
 
     def needTrain(self, ds: int) -> bool:
-        target_ds = self._prev_date(ds, self.trainDelay)
+        target_ds = self._train_target_ds(ds)
         train_day = self.isTrainDay(target_ds)
         if not self.modelDir:
             return train_day

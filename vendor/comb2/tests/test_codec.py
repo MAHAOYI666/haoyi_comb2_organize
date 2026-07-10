@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -9,12 +10,27 @@ import torch
 import random
 
 from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
-from src.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig
+from src.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig, MemmapMaskSource
 from src.DataRegistry import CANONICAL_BAR_TIMES, DataItem, DataRegistry, OpSpec, Universe
 from src.op_utils import cs_zscore, nan_to_num, nanmean, nanstd, normalize_by_max_abs, rank, truncate, winsorize_by_quantile
 
 
 FLOAT_DTYPES = (torch.float16, torch.float32, torch.float64, torch.bfloat16)
+
+
+def test_nonempty_missing_mask_path_fails_fast(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="mask data not found"):
+        MemmapMaskSource(str(tmp_path / "missing-mask"))
+
+
+def test_train_delay_zero_does_not_add_framework_offset() -> None:
+    from src.ComboBase import ComboBase
+
+    combo = ComboBase.__new__(ComboBase)
+    combo.trainDelay = 0
+    combo._prev_date = lambda ds, offset=1: (ds, offset)
+
+    assert combo._train_target_ds(20200102) == (20200102, 0)
 
 
 def _write_memmaper2_fixture(base, data, index, columns, chunk_size=2):
@@ -755,7 +771,9 @@ def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeyp
 
     parsed = load_config(str(xml_path))
     loader_fields = LoaderConfig.__dataclass_fields__
-    loader_config = LoaderConfig(**{key: value for key, value in parsed["combo"]["loader"].items() if key in loader_fields})
+    loader_values = {key: value for key, value in parsed["combo"]["loader"].items() if key in loader_fields}
+    loader_values.update(valid_path=None, filtered_path=None, base_universe_path=None)
+    loader_config = LoaderConfig(**loader_values)
     loader = IdentityPreprocessLoader(loader_config)
 
     loader.set_current_ti(93100)
@@ -913,23 +931,29 @@ def test_universe_from_mask_applies_data_offset() -> None:
     assert universe.date2idx(20100106) == 0
 
 
-def test_barra_preset_registers_all_cne5_styles() -> None:
-    registry, _ = _fake_registry([], presets=("barra",))
-    expected = {
-        "barra.beta",
-        "barra.btop",
-        "barra.earnyild",
-        "barra.growth",
-        "barra.industry",
-        "barra.leverage",
-        "barra.liquidty",
-        "barra.momentum",
-        "barra.resvol",
-        "barra.size",
-        "barra.sizenl",
+def test_barra_preset_registers_all_cne5_styles(tmp_path) -> None:
+    registry, _ = _fake_registry([], presets=("barra",), ashare_data_path=str(tmp_path))
+    expected_styles = {
+        "beta",
+        "btop",
+        "earnyild",
+        "growth",
+        "industry",
+        "leverage",
+        "liquidty",
+        "momentum",
+        "resvol",
+        "size",
+        "sizenl",
     }
 
-    assert expected.issubset(set(registry.items))
+    assert {f"barra.{style}" for style in expected_styles}.issubset(set(registry.items))
+    assert {
+        Path(registry.items[f"barra.{style}"].path).relative_to(tmp_path).as_posix()
+        for style in expected_styles
+    } == {f"1d_BarraCNE5/BarraCNE5.{style.upper()}" for style in expected_styles}
+    assert Path(registry.items["base.size"].path).name == "BarraCNE5.SIZE"
+    assert Path(registry.items["base.btop"].path).name == "BarraCNE5.BTOP"
     assert registry._resolve_name("size") == "barra.size"
     assert registry._resolve_name("sizenl") == "barra.sizenl"
 
@@ -1266,6 +1290,7 @@ def _fake_registry(
     items: list[DataItem],
     presets: tuple[str, ...] = (),
     verbose: bool = False,
+    ashare_data_path: str | None = None,
 ) -> tuple[DataRegistry, list[tuple[str, int, int]]]:
     universe = Universe(
         dates=(20200101, 20200102, 20200103, 20200106),
@@ -1277,7 +1302,7 @@ def _fake_registry(
         items,
         universe=universe,
         data_start_ds=20200101,
-        ashare_data_path=None,
+        ashare_data_path=ashare_data_path,
         config_path=None,
         presets=presets,
         verbose=verbose,
@@ -1933,10 +1958,8 @@ def test_combo_base_sets_random_seed_from_model_config(monkeypatch) -> None:
             "load_chunk_days": None,
             "model_smooth_rate": 0.7,
             "model_keep_num": 0,
-            "select_days": 10,
             "max_train_days": 20,
             "checkpoint_root": "",
-                "selection_module": None,
                 "alpha_history": {},
                 "loader_config": LoaderConfig(dtype=torch.float32, data_start_ds=20200101, data_items=(DataItem(name="alpha.raw", module="test.tensor", role="factor", params={}),)),
                 "model_config": {},
@@ -1997,10 +2020,8 @@ def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> N
             "load_chunk_days": None,
             "model_smooth_rate": 0.7,
             "model_keep_num": 1,
-            "select_days": 10,
             "max_train_days": 20,
             "checkpoint_root": "/tmp/checkpoints",
-            "selection_module": None,
             "alpha_history": {},
             "loader_config": LoaderConfig(
                 dtype=torch.float32,
@@ -2117,10 +2138,8 @@ def test_transform_feature_window_hook_applies_to_train_and_predict(monkeypatch)
             "load_chunk_days": None,
             "model_smooth_rate": 1.0,
             "model_keep_num": 0,
-            "select_days": 10,
             "max_train_days": 20,
             "checkpoint_root": "",
-            "selection_module": None,
             "alpha_history": {},
             "loader_config": loader_config,
             "model_config": {},

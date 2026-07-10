@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import torch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +223,20 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "class ResearchModel" in model_text
     assert "class AlphaStrategy" not in model_text
     assert "adaptive_hidden_size" in model_text
+    assert "FeatureGroups" in model_text
+
+    import importlib.util
+
+    model_spec = importlib.util.spec_from_file_location("generated_combo_model", tmp_path / "Model.py")
+    model_module = importlib.util.module_from_spec(model_spec)
+    assert model_spec.loader is not None
+    model_spec.loader.exec_module(model_module)
+    loss = model_module.ICLoss()(
+        torch.tensor([[1.0, 2.0, 100.0]]),
+        torch.tensor([[2.0, 4.0, -100.0]]),
+        torch.tensor([[1.0, 1.0, 0.0]]),
+    )
+    assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6)
 
     config_text = (tmp_path / "config.xml").read_text(encoding="utf-8")
     assert 'model_path="Model.py"' in config_text
@@ -232,6 +248,12 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert 'path="vwap30_label1d"' in config_text
     root = ET.fromstring(config_text)
     assert root.find("./strategy").get("path") is None
+    assert set(root.find("./constants").attrib) == {"cache_path", "output_root"}
+    assert "output_dir" not in root.find("./combo/paths").attrib
+    assert "checkpoint_root" not in root.find("./combo/paths").attrib
+    assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
+    assert "output_path" not in root.find("./backtest").attrib
+    assert root.find("./combo/defaults") is None
 
     from config import DEFAULT_CONFIG, load_config
 
@@ -242,7 +264,56 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["strategy"]["path"].endswith("comb2_pcmaster/default_strategy.py")
     assert parsed["combo"]["paths"]["combo_base_path"] is None
     assert parsed["combo"]["runtime"]["trainDelay"] == 0
+    assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
+    assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
+    assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
+
+
+def test_config_rejects_invalid_training_delay_and_removed_output_paths(tmp_path):
+    from config import load_config
+
+    invalid_delay = tmp_path / "invalid-delay.xml"
+    invalid_delay.write_text('<config><combo><runtime trainDelay="-1" /></combo></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="trainDelay must be nonnegative"):
+        load_config(str(invalid_delay))
+
+    removed_path = tmp_path / "removed-path.xml"
+    removed_path.write_text('<config><constants checkpoint_root="checkpoints" /></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported config key 'checkpoint_root'"):
+        load_config(str(removed_path))
+
+
+def test_version_file_is_the_build_default():
+    import importlib.util
+
+    script = REPO_ROOT / "packaging/build_protected_wheel.py"
+    spec = importlib.util.spec_from_file_location("combo2_build", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert module.read_version() == (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def test_run_combo_tees_output_to_derived_train_log(tmp_path, monkeypatch, capsys):
+    import runCombo
+
+    config_path = tmp_path / "config.xml"
+    config_path.write_text(
+        '<config><constants output_root="run-output" /><combo><paths model_path="Model.py" /></combo></config>',
+        encoding="utf-8",
+    )
+
+    def fake_run(config, resolved_config_path):
+        print("train log marker")
+        return 0
+
+    monkeypatch.setattr(runCombo, "run_loaded_config", fake_run)
+    monkeypatch.setattr(sys, "argv", ["runCombo", str(config_path)])
+
+    assert runCombo.main() == 0
+    assert "train log marker" in capsys.readouterr().out
+    assert (tmp_path / "run-output/train.log").read_text(encoding="utf-8") == "train log marker\n"
 
 
 def test_run_combo_loads_custom_combo_base(tmp_path):

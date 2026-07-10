@@ -40,23 +40,23 @@ from comb2_simbase import IndexMask, Memmaper2
 
 BARRA_STYLE_DIRNAME = "1d_BarraCNE5"
 BARRA_STYLE_PREFIX = "BarraCNE5."
-BARRA_PRESET_STYLES = (
-    "beta",
-    "btop",
-    "earnyild",
-    "growth",
-    "industry",
-    "leverage",
-    "liquidty",
-    "momentum",
-    "resvol",
-    "size",
-    "sizenl",
+BARRA_PRESET_FILES = (
+    ("beta", "BETA"),
+    ("btop", "BTOP"),
+    ("earnyild", "EARNYILD"),
+    ("growth", "GROWTH"),
+    ("industry", "INDUSTRY"),
+    ("leverage", "LEVERAGE"),
+    ("liquidty", "LIQUIDTY"),
+    ("momentum", "MOMENTUM"),
+    ("resvol", "RESVOL"),
+    ("size", "SIZE"),
+    ("sizenl", "SIZENL"),
 )
 
 FACTORSIM_BASE_ITEMS = {
-    "size": ("base.size", "1d_BarraCNE5/BarraCNE5.size"),
-    "btop": ("base.btop", "1d_BarraCNE5/BarraCNE5.btop"),
+    "size": ("base.size", "1d_BarraCNE5/BarraCNE5.SIZE"),
+    "btop": ("base.btop", "1d_BarraCNE5/BarraCNE5.BTOP"),
 }
 FREQ_ORDER = ("1d", "5m", "1m")
 SUPPORTED_FREQS = set(FREQ_ORDER)
@@ -694,8 +694,10 @@ class DataRegistry:
             preset_name = str(preset).strip().lower()
             if preset_name != "barra":
                 raise ValueError(f"unsupported data preset: {preset}")
-            for style in BARRA_PRESET_STYLES:
-                path = str(Path(self.ashare_data_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{style}") if self.ashare_data_path else style
+            if not self.ashare_data_path:
+                raise ValueError("barra preset requires ashare_data_path")
+            for style, filename in BARRA_PRESET_FILES:
+                path = str(Path(self.ashare_data_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{filename}")
                 items.append(
                     DataItem(
                         name=f"barra.{style}",

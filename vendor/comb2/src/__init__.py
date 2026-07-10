@@ -7,12 +7,9 @@ __all__ = [
     "ComboTrainDataset",
     "DataItem",
     "DataRegistry",
-    "DefaultSelectionModule",
     "FeatureGroups",
     "LoaderConfig",
     "OpSpec",
-    "SelectionModule",
-    "SelectionPlan",
     "Universe",
 ]
 
@@ -40,13 +37,5 @@ def __getattr__(name: str):
             "DataRegistry": DataRegistry,
             "OpSpec": OpSpec,
             "Universe": Universe,
-        }[name]
-    if name in {"DefaultSelectionModule", "SelectionModule", "SelectionPlan"}:
-        from .selection import DefaultSelectionModule, SelectionModule, SelectionPlan
-
-        return {
-            "DefaultSelectionModule": DefaultSelectionModule,
-            "SelectionModule": SelectionModule,
-            "SelectionPlan": SelectionPlan,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

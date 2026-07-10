@@ -1,10 +1,10 @@
 <config>
-  <constants cache_path="data/Cache" output_root="output-torch" checkpoint_root="" />
+  <constants cache_path="data/Cache" output_root="output-torch" />
   <strategy start_ds="20160111" end_ds="20200101" />
   <combo>
-    <paths base_dir="../vendor/comb2" output_dir="output-torch" model_path="model.py" research_loader_path="loader.py" research_dataset_path="dataset.py" checkpoint_root="" />
-    <output alpha_history_path="output-torch/alpha_history.pt" log_path="output-torch/train.log" enable_alpha_analysis="true" />
-    <runtime snaptime="mlp_minimal" snap_ti="" seed="42" livetrading="false" trainDelay="1" retDays="1" tsDays="8" load_chunk_days="" model_smooth_rate="0.7" model_keep_num="2" select_days="100" max_train_days="2000" verbose="false" />
+    <paths model_path="model.py" research_loader_path="loader.py" research_dataset_path="dataset.py" />
+    <output enable_alpha_analysis="true" />
+    <runtime snaptime="mlp_minimal" snap_ti="" seed="42" livetrading="false" trainDelay="0" retDays="1" tsDays="8" load_chunk_days="" model_smooth_rate="0.7" model_keep_num="2" max_train_days="2000" verbose="false" />
     <model device="cpu" hiddenSize="512" fcSize="256" dropout="0.5" lr="0.000002" epochs="15" batchSize="3" weight_decay="0.000001" scheduler_step_size="10" scheduler_gamma="0.5" grad_clip="10.0" />
     <data dtype="float16" compression="none" data_start_ds="20160101" ashare_data_path="" valid_path="" filtered_path="" base_universe_path="" data_offset="1024">
       <item name="alpha.yz_20250219_02" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/yz_20250219_02" role="factor" display_name="yz_20250219_02" freq="1d" />
@@ -17,8 +17,7 @@
       <item name="alpha.alpha5_20251008_05" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/alpha5_20251008_05" role="factor" display_name="alpha5_20251008_05" freq="1d" />
       <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" freq="1d" />
     </data>
-    <defaults selection_module="" />
   </combo>
-  <backtest output_path="output-torch/backtest" daily_metrics_file="daily_pnl.csv" cash="10000000.0" fee_rate="0.0015" reserve_cash="0.95" verbose="false" universe="base" execution_price="vwap30" drawdown_stop="0.0" cooldown_days="0" />
+  <backtest daily_metrics_file="daily_pnl.csv" cash="10000000.0" fee_rate="0.0015" reserve_cash="0.95" verbose="false" universe="base" execution_price="vwap30" drawdown_stop="0.0" cooldown_days="0" />
   <monitor enabled="false" output_path="" format="csv" print_summary="true" collect_gpu="true" sync_cuda="false" verbose="false" />
 </config>

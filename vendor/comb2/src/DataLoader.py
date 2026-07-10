@@ -156,7 +156,9 @@ class MemmapMaskSource:
     def __init__(self, path: str | None):
         self.path = path
         self._mmap = None
-        if path and os.path.exists(path):
+        if path is not None:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"mask data not found: {path}")
             self._mmap = _require_memmaper2_cls()(path)
 
     def load_day(self, ds: int) -> torch.Tensor:

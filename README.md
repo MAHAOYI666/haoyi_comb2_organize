@@ -35,14 +35,12 @@ eg-lgbm/
   model.py
   config.xml
   output/
-  checkpoints/
 ```
 
 其中：
 - `model.py`：research 模型实现
 - `config.xml`：运行配置
 - `output/`：输出目录
-- `checkpoints/`：模型 checkpoint 目录
 
 ### 2. 编写 research 模型
 
@@ -69,12 +67,8 @@ eg-lgbm/
 
 关键配置包括：
 - `constants.cache_path`：行情、mask、label 等 `AshareCache` 数据根目录
-- `constants.output_root`：日志、alpha、回测输出的根目录
-- `constants.checkpoint_root`：模型 checkpoint 输出目录
+- `constants.output_root`：唯一输出根目录；日志、alpha、checkpoint、回测和评估目录自动从这里派生
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
-- `combo.paths.checkpoint_root`：checkpoint 输出目录
-- `combo.paths.output_dir`：日志和中间结果输出目录
-- `backtest.output_path`：回测结果输出目录
 
 `builtin.factorsim` 的路径规则：
 
@@ -85,9 +79,9 @@ eg-lgbm/
 
 示例里：
 - `model_path="model.py"`
-- `checkpoint_root="checkpoints"`
-- `output_dir="output"`
-- `output_path="output/backtest"`
+- `output_root="output"`
+
+固定输出包括 `output/train.log`、`output/alpha_history.pt`、`output/alpha.parquet`、`output/checkpoints/` 和 `output/backtest/`。
 
 ### 4. 运行 organize 入口
 
@@ -216,7 +210,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 - `output/alpha.parquet`
 - `output/daily_ic`
 - `output/backtest/daily_pnl.csv`
-- `checkpoints/` 下的模型文件
+- `output/checkpoints/` 下的模型文件
 
 ## 性能监控
 

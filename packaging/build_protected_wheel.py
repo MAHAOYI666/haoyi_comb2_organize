@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+VERSION_FILE = REPO_ROOT / "VERSION"
 
 PACKAGE_SOURCES = {
     "comb2_templates": REPO_ROOT / "comb2_templates",
@@ -150,13 +151,20 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for Combo2 and bundled vendor packages.")
     parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
     parser.add_argument("--name", default="Combo2", help="Wheel distribution name")
-    parser.add_argument("--version", default="0.1.6", help="Wheel version")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
     parser.add_argument("--dist-dir", type=Path, default=REPO_ROOT / "dist_protected", help="Output wheel directory")
     parser.add_argument("--dry-run", action="store_true", help="Prepare the build tree and print what would be compiled")
     parser.add_argument("--no-clean", action="store_true", help="Reuse the existing build root")
     parser.add_argument("--no-build-isolation", action="store_true", help="Build with packages already installed in --python")
+    parser.set_defaults(version=read_version())
     return parser.parse_args()
+
+
+def read_version() -> str:
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    if not version:
+        raise ValueError(f"empty version file: {VERSION_FILE}")
+    return version
 
 
 def default_build_python() -> Path:

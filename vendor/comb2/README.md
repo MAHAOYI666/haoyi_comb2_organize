@@ -307,31 +307,26 @@ class ResearchModel:
 
 ```xml
 <config>
+  <constants cache_path="/path/to/Cache" output_root="/my_experiment/output" />
   <strategy start_ds="20160111" end_ds="20200101" />
 
   <combo>
     <paths
       model_path="/my_experiment/my_model.py"
       combo_base_path=""
-      output_dir="/my_experiment/output"
-      checkpoint_root="/my_experiment/checkpoints"
     />
 
-    <output
-      alpha_history_path="/my_experiment/output/alpha_history.pt"
-      log_path="/my_experiment/output/train.log"
-    />
+    <output enable_alpha_analysis="true" />
 
     <runtime
       snaptime="exp_demo"
       snap_ti="150000"
       livetrading="false"
-      trainDelay="1"
+      trainDelay="0"
       retDays="1"
       tsDays="8"
       model_smooth_rate="0.7"
       model_keep_num="2"
-      select_days="100"
       max_train_days="2000"
     />
 
@@ -361,7 +356,6 @@ class ResearchModel:
   </combo>
 
   <backtest
-    output_path="/my_experiment/backtest"
     daily_metrics_file="daily_pnl.csv"
     cash="10000000"
     fee_rate="0.0015"
@@ -374,6 +368,7 @@ class ResearchModel:
 
 说明：
 - XML 中未填写的字段会回退到框架默认值
+- 所有输出都从 `constants.output_root` 派生，包括日志、alpha、checkpoint 和 backtest
 - `runtime.snaptime` 是实验/checkpoint 名；`runtime.snap_ti` 是默认数据时点
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`

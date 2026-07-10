@@ -3,6 +3,8 @@
 Build a Cython-based wheel that hides implementation modules as native `.so`
 extensions while keeping only minimal package `__init__.py` wrappers.
 
+The wheel version is read from the repository-root `VERSION` file by default.
+
 Dry run:
 
 ```bash

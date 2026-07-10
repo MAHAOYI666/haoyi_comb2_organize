@@ -44,7 +44,6 @@ my-research/
   config.xml
   Model.py
   output/
-  checkpoints/
 ```
 
 可选扩展文件：
@@ -89,7 +88,7 @@ combo-hello-world --force
 
 然后按顺序修改：
 
-1. `config.xml` 的 `<constants>`：填真实数据根目录、因子根目录、输出目录、checkpoint 目录。
+1. `config.xml` 的 `<constants>`：填真实数据根目录和唯一输出目录。
 2. `config.xml` 的 `<combo><data>`：填要使用的 factor 和 label。
 3. `config.xml` 的 `<strategy>`：填回测日期范围，必要时接入自定义 strategy。
 4. `Model.py`：实现自己的 `ResearchModel`。
@@ -114,7 +113,6 @@ runEval config.xml
   <constants
     cache_path="data/Cache"
     output_root="output"
-    checkpoint_root=""
   />
 
   <strategy
@@ -124,18 +122,13 @@ runEval config.xml
 
   <combo>
     <paths
-      base_dir="."
-      output_dir="output"
       model_path="Model.py"
       combo_base_path=""
       research_loader_path=""
       research_dataset_path=""
-      checkpoint_root=""
     />
 
     <output
-      alpha_history_path="output/alpha_history.pt"
-      log_path="output/train.log"
       enable_alpha_analysis="true"
     />
 
@@ -152,7 +145,6 @@ runEval config.xml
       torch_interop_threads="1"
       model_smooth_rate="0.7"
       model_keep_num="2"
-      select_days="100"
       max_train_days="2000"
       verbose="false"
     />
@@ -188,13 +180,9 @@ runEval config.xml
       <item name="label.default" path="vwap30_label1d" role="label" />
     </data>
 
-    <defaults
-      selection_module=""
-    />
   </combo>
 
   <backtest
-    output_path="output/backtest"
     daily_metrics_file="daily_pnl.csv"
     cash="10000000.0"
     fee_rate="0.0015"
@@ -232,7 +220,7 @@ runEval config.xml
 | bool false | `0`, `false`, `no`, `n`, `off` |
 | int/float | 按默认字段类型转换，例如 `max_train_days="2000"`。 |
 | dtype | `float16`, `float32`, `float64`, `bfloat16` |
-| None | 对允许为空的字段写空字符串，例如 `checkpoint_root=""`。 |
+| None | 对允许为空的字段写空字符串，例如 `snap_ti=""`。 |
 
 路径规则：
 
@@ -248,15 +236,15 @@ runEval config.xml
 <constants
   cache_path="data/Cache"
   output_root="output"
-  checkpoint_root=""
 />
 ```
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `cache_path` | `data/Cache` | 行情、mask、label 等缓存根目录。运行时会使用其下的 `AshareCache`。 |
-| `output_root` | `output` | alpha、日志、回测、评估报告的默认输出根目录。 |
-| `checkpoint_root` | 空 | checkpoint 根目录。空值表示不通过 constants 统一派生 checkpoint。 |
+| `output_root` | `output` | 唯一输出根目录。日志、alpha、checkpoint、回测和评估子目录都从这里自动派生。 |
+
+固定派生路径：`train.log`、`alpha_history.pt`、`alpha.parquet`、`checkpoints/`、`backtest/`、`eval_report/`。
 
 ## 7. strategy: 回测持仓逻辑接入
 
@@ -314,25 +302,19 @@ class AlphaStrategy(StrategyBase):
 
 ```xml
 <paths
-  base_dir="."
-  output_dir="output"
   model_path="Model.py"
   combo_base_path=""
   research_loader_path=""
   research_dataset_path=""
-  checkpoint_root=""
 />
 ```
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `base_dir` | `.` | 稳定包场景通常不需要修改。 |
-| `output_dir` | `output` | 训练和 alpha 输出目录，通常与 `constants.output_root` 保持一致。 |
 | `model_path` | `Model.py` | research 模型文件，必须定义 `ResearchModel`。 |
 | `combo_base_path` | 空 | 可选运行时扩展文件，必须定义继承 `comb2.ComboBase` 的 `ComboBase`。适合覆写 `isTrainDay()`、`needTrain()` 等训练调度逻辑。 |
 | `research_loader_path` | 空 | 可选 loader 扩展文件，必须定义 `ResearchLoader`。 |
 | `research_dataset_path` | 空 | 可选 dataset 扩展文件，必须定义 `ResearchDataset`。 |
-| `checkpoint_root` | 空 | checkpoint 目录；空值表示不由该字段启用。 |
 
 ### 8.1 自定义 ComboBase 训练调度
 
@@ -488,17 +470,15 @@ class ResearchModel:
 
 ```xml
 <output
-  alpha_history_path="output/alpha_history.pt"
-  log_path="output/train.log"
   enable_alpha_analysis="true"
 />
 ```
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `alpha_history_path` | `output/alpha_history.pt` | 保存按日期组织的 alpha tensor 历史。 |
-| `log_path` | `output/train.log` | 训练日志路径。 |
 | `enable_alpha_analysis` | `true` | 是否在 `runCombo` 结束后导出 `alpha.parquet` 和 `daily_ic`。快速调试可设为 `false`，正式评估需要 `alpha.parquet`。 |
+
+`train.log` 和 `alpha_history.pt` 固定写入 `constants.output_root`；不再单独配置路径。
 
 ## 11. combo.runtime
 
@@ -516,7 +496,6 @@ class ResearchModel:
   torch_interop_threads="1"
   model_smooth_rate="0.7"
   model_keep_num="2"
-  select_days="100"
   max_train_days="2000"
   verbose="false"
 />
@@ -529,7 +508,7 @@ class ResearchModel:
 | `seed` | 空 | 运行级随机种子；会用于 `random`、`numpy`、`torch`，并在有 CUDA 时同步设置 CUDA seed。 |
 | `deterministic` | `false` | 是否开启 PyTorch deterministic 模式。开启后通常更可复现，但可能变慢，且部分算子可能报 deterministic 限制。 |
 | `livetrading` | `false` | `false` 为历史训练/回测流程。 |
-| `trainDelay` | `0` | 训练目标相对当前日期的延迟。 |
+| `trainDelay` | `0` | 训练目标相对当前日期额外后移的交易日数，必须非负。`0` 使用当天索引的 label；label 数据自身已按存储约定包含 delay1。 |
 | `retDays` | `1` | 训练 label 的收益 horizon。 |
 | `tsDays` | `8` | 模型输入时间窗口长度。 |
 | `load_chunk_days` | 空 | 训练数据预取天数；空值时使用默认行为。 |
@@ -537,7 +516,6 @@ class ResearchModel:
 | `torch_interop_threads` | `1` | PyTorch inter-op 线程数。 |
 | `model_smooth_rate` | `0.7` | 新旧模型预测平滑比例；`1.0` 表示只用新模型。 |
 | `model_keep_num` | `2` | 保留 checkpoint 个数；`0` 表示不保存，负数表示不清理。 |
-| `select_days` | `100` | 训练样本选择窗口参数。普通用户通常保持默认。 |
 | `max_train_days` | `2000` | 每次训练最多加载的训练日数。 |
 | `verbose` | `false` | 是否打印更详细进度。 |
 
@@ -551,7 +529,7 @@ class ResearchModel:
 | 目标 | 建议 |
 |---|---|
 | 降低内存 | 降低 `max_train_days`，或使用 `compression="fp4"`。 |
-| 禁用 checkpoint | `model_keep_num="0"`，并让 checkpoint 目录为空。 |
+| 禁用 checkpoint | 设置 `model_keep_num="0"`。 |
 | 快速 smoke run | 缩短 `strategy` 日期范围，降低 `epochs`、`max_train_days`。 |
 
 ## 12. combo.model
@@ -624,7 +602,7 @@ class ResearchModel:
 
 ```xml
 <data dtype="float16" compression="fp4" data_start_ds="20160101" data_offset="1024">
-  <item name="factor.size" path="1d_BarraCNE5/BarraCNE5.size" role="factor" />
+  <item name="factor.size" path="1d_BarraCNE5/BarraCNE5.SIZE" role="factor" />
   <item name="label.default" path="vwap30_label1d" role="label" />
 </data>
 ```
@@ -1004,7 +982,6 @@ def load_data(item, registry, start_ds: int, end_ds: int):
 
 ```xml
 <backtest
-  output_path="output/backtest"
   daily_metrics_file="daily_pnl.csv"
   cash="10000000.0"
   fee_rate="0.0015"
@@ -1019,7 +996,6 @@ def load_data(item, registry, start_ds: int, end_ds: int):
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `output_path` | `output/backtest` | 回测输出目录。 |
 | `daily_metrics_file` | `daily_pnl.csv` | 每日 PnL 文件名。 |
 | `cash` | `10000000.0` | 初始资金。 |
 | `fee_rate` | `0.0015` | 交易费率。 |
@@ -1030,7 +1006,7 @@ def load_data(item, registry, start_ds: int, end_ds: int):
 | `drawdown_stop` | `0.0` | 回撤止损参数。 |
 | `cooldown_days` | `0` | 冷却天数。 |
 
-回测持仓生成逻辑由 `<strategy>` 决定；交易和每日指标输出由 `<backtest>` 决定。
+回测持仓生成逻辑由 `<strategy>` 决定；交易和每日指标固定输出到 `<output_root>/backtest/`。
 
 ## 17. monitor
 
@@ -1074,7 +1050,7 @@ output/
   daily_ic
   backtest/
     daily_pnl.csv
-checkpoints/
+  checkpoints/
 ```
 
 说明：
@@ -1136,51 +1112,30 @@ runEval config.xml --label vwap30_label1d.csv --label-is-table --label-5d vwap30
 
 ### 19.2 sim: IC 类评估
 
-输入 signal，直接计算 daily IC 并输出 simsummary 风格汇总：
+输入已有 daily IC 文件并输出 simsummary 风格汇总：
 
 ```bash
-runEval --sim alpha.parquet --config config.xml
+runEval --sim daily_ic --normalize-names
 ```
 
-显式 label：
+可选摘要落盘：
 
 ```bash
-runEval --sim alpha.parquet \
-  --label vwap30_label1d.csv --label-is-table \
-  --label-5d vwap30_label5d.csv --label-5d-is-table
-```
-
-输入已有 daily IC：
-
-```bash
-runEval --sim daily_ic --input-is-ic --normalize-names
-```
-
-可选落盘：
-
-```bash
-runEval --sim alpha.parquet --config config.xml --output daily_ic.csv --summary-output simsummary.txt
+runEval --sim daily_ic --normalize-names --summary-output simsummary.txt
 ```
 
 ### 19.3 pnl: PnL 类评估
 
-输入 signal，按 label 转 daily PnL，再输出 pnlsummary 风格汇总：
+输入已有 daily PnL 文件并输出 pnlsummary 风格汇总：
 
 ```bash
-runEval --pnl alpha.parquet --config config.xml
-```
-
-输入已有 daily PnL：
-
-```bash
-runEval --pnl output/backtest/daily_pnl.csv --input-is-pnl
+runEval --pnl output/backtest/daily_pnl.csv
 ```
 
 常用参数：
 
 ```bash
-runEval --pnl alpha.parquet --config config.xml --booksize 10000000 --tradecost-ratio 0.5
-runEval --pnl output/backtest/daily_pnl.csv --input-is-pnl --pnlzz500 pnlzz500.tsv
+runEval --pnl output/backtest/daily_pnl.csv --pnlzz500 pnlzz500.tsv
 ```
 
 ### 19.4 corr: 两个矩阵相关
@@ -1217,7 +1172,7 @@ runEval --corr pos_a.parquet pos_b.parquet --top-pct 5
 ### 19.5 exposure: Barra 暴露
 
 ```bash
-runEval --exposure alpha.parquet --config config.xml
+runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache
 ```
 
 显式 AshareCache：
@@ -1229,8 +1184,8 @@ runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache
 模式：
 
 ```bash
-runEval --exposure alpha.parquet --config config.xml --exposure-mode 0
-runEval --exposure alpha.parquet --config config.xml --exposure-mode 1
+runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache --exposure-mode 0
+runEval --exposure alpha.parquet --ashare-cache-path /path/to/Cache/AshareCache --exposure-mode 1
 ```
 
 `0` 表示截面相关暴露，`1` 表示 beta 暴露。输出各 Barra 风格的 `min/mean/max/std`。
@@ -1243,12 +1198,6 @@ runEval --exposure alpha.parquet --config config.xml --exposure-mode 1
 runEval --va base_daily_pnl.csv new_daily_pnl.csv
 ```
 
-输入 signal，并用 config 的 label 转 PnL：
-
-```bash
-runEval --va base_alpha.parquet new_alpha.parquet --config config.xml
-```
-
 常用参数：
 
 ```bash
@@ -1256,6 +1205,8 @@ runEval --va base.csv new.csv --column longonly_pnl
 runEval --va base.csv new.csv --weights 0.01,0.03,0.05,0.1
 runEval --va base.csv new.csv --blended-output blended.csv
 ```
+
+`--sim/--pnl/--corr/--exposure/--va` 都是直接文件模式，不接受 `config.xml`。需要从 alpha 和 label 重新计算完整指标时，使用 `runEval config.xml`。
 
 输出按年度和 full period 展示 base、new 以及不同混合权重对应的年化收益增量。
 
@@ -1305,7 +1256,7 @@ comb-pos-corr pos_a.parquet pos_b.parquet --min-valid 1000
 
 - `strategy.start_ds/end_ds` 是否有交易日。
 - `enable_alpha_analysis` 是否为 `true`。
-- `backtest.output_path` 是否可写。
+- `constants.output_root` 是否可写。
 - 自定义 `AlphaStrategy.generate_positions()` 是否返回 pandas Series。
 - 返回权重是否全 NaN、全 0 或没有可交易股票。
 
@@ -1345,7 +1296,7 @@ output/eval_report/signal_analysis.png
 如果启用了 checkpoint，还应有：
 
 ```text
-checkpoints/
+output/checkpoints/
 ```
 
 一个 agent 接手项目时，优先按这个顺序确认：

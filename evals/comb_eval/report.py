@@ -22,6 +22,8 @@ from .pnl import summarize_pnl_with_benchmark
 from .rules import evaluate_result
 
 DEFAULT_LABEL_DF_TYPE = True
+BASE_UNIVERSE_MASK_PATH = "1d_StockMask2/StockMask2.BaseUnivMask"
+TRADING_MASK_PATH = "1d_StockMask2/StockMask2.LimitMask"
 PNL_KEY_COLUMNS = [
     "pnl_m",
     "ret_pct",
@@ -146,6 +148,8 @@ def run_config_evaluation(
 
     label_1d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
     label_5d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
+    evaluation_mask = load_evaluation_mask(alpha, artifacts.ashare_cache_path)
+    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
     daily_pnl = calculate_daily_pnl_from_signal(
         alpha,
@@ -598,19 +602,7 @@ def _read_alpha(path: Path, *, start: str | None, end: str | None) -> pd.DataFra
 
 
 def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame, label_5d: pd.DataFrame) -> pd.DataFrame:
-    signal = normalize_date_index(signal)
-    label_1d = normalize_date_index(label_1d)
-    label_5d = normalize_date_index(label_5d)
-    signal.columns = signal.columns.astype(str).str.zfill(6)
-    label_1d.columns = label_1d.columns.astype(str).str.zfill(6)
-    label_5d.columns = label_5d.columns.astype(str).str.zfill(6)
-    signal, label_1d = signal.align(label_1d, join="inner", axis=0)
-    signal, label_1d = signal.align(label_1d, join="inner", axis=1)
-    signal, label_5d = signal.align(label_5d, join="inner", axis=0)
-    signal, label_5d = signal.align(label_5d, join="inner", axis=1)
-    label_5d = label_5d.reindex(index=signal.index, columns=signal.columns)
-    if signal.empty or label_1d.empty or label_5d.empty:
-        raise ValueError("No overlapping dates or instruments between signal and labels.")
+    signal, label_1d, label_5d = align_and_mask_evaluation_inputs(signal, label_1d, label_5d)
 
     x = signal.astype(float).to_numpy()
     y1 = label_1d.astype(float).to_numpy()
@@ -628,6 +620,54 @@ def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame,
         },
         index=signal.index,
     )
+
+
+def load_evaluation_mask(signal: pd.DataFrame, ashare_cache_path: str | Path) -> pd.DataFrame:
+    normalized = _normalize_matrix(signal)
+    if normalized.empty:
+        raise ValueError("signal is empty")
+    start_ds = normalized.index.min().strftime("%Y%m%d")
+    end_ds = normalized.index.max().strftime("%Y%m%d")
+    cache_root = Path(ashare_cache_path)
+    base = _normalize_matrix(read_cache_array(cache_root / BASE_UNIVERSE_MASK_PATH, start_ds, end_ds, True))
+    trading = _normalize_matrix(read_cache_array(cache_root / TRADING_MASK_PATH, start_ds, end_ds, True))
+    dates = base.index.intersection(trading.index)
+    codes = base.columns.intersection(trading.columns)
+    base = base.reindex(index=dates, columns=codes)
+    trading = trading.reindex(index=dates, columns=codes)
+    current = base.notna() & base.ne(0) & trading.notna() & trading.ne(0)
+    return current.shift(-1).fillna(False)
+
+
+def align_and_mask_evaluation_inputs(
+    signal: pd.DataFrame,
+    label_1d: pd.DataFrame,
+    label_5d: pd.DataFrame,
+    evaluation_mask: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    frames = [_normalize_matrix(signal), _normalize_matrix(label_1d), _normalize_matrix(label_5d)]
+    dates = frames[0].index
+    codes = frames[0].columns
+    for frame in frames[1:]:
+        dates = dates.intersection(frame.index)
+        codes = codes.intersection(frame.columns)
+    if evaluation_mask is not None:
+        evaluation_mask = _normalize_matrix(evaluation_mask)
+        dates = dates.intersection(evaluation_mask.index)
+        codes = codes.intersection(evaluation_mask.columns)
+    if dates.empty or codes.empty:
+        raise ValueError("No overlapping dates or instruments between signal, labels, and masks.")
+    aligned = [frame.reindex(index=dates, columns=codes) for frame in frames]
+    if evaluation_mask is not None:
+        valid = evaluation_mask.reindex(index=dates, columns=codes).fillna(False).astype(bool)
+        aligned = [frame.where(valid) for frame in aligned]
+    return aligned[0], aligned[1], aligned[2]
+
+
+def _normalize_matrix(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = normalize_date_index(frame).copy()
+    normalized.columns = normalized.columns.astype(str).str.zfill(6)
+    return normalized.sort_index()
 
 
 def _read_label_for_signal(

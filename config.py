@@ -67,11 +67,10 @@ DEFAULT_FACTOR_PATHS = (
 
 
 DEFAULT_CONFIG = {
-        "constants": {
-            "cache_path": "data/Cache",
-            "output_root": str(COMB2_ROOT / "output"),
-            "checkpoint_root": None,
-        },
+    "constants": {
+        "cache_path": "data/Cache",
+        "output_root": str(COMB2_ROOT / "output"),
+    },
     "strategy": {
         "start_ds": 20160111,
         "end_ds": 20200101,
@@ -79,17 +78,12 @@ DEFAULT_CONFIG = {
     },
     "combo": {
         "paths": {
-            "base_dir": str(COMB2_ROOT),
-            "output_dir": str(COMB2_ROOT / "output"),
             "model_path": str(COMB2_ROOT / "lgbm_model.py"),
             "combo_base_path": None,
             "research_loader_path": None,
             "research_dataset_path": None,
-            "checkpoint_root": None,
         },
         "output": {
-            "alpha_history_path": str(COMB2_ROOT / "output" / "alpha_history.pt"),
-            "log_path": str(COMB2_ROOT / "output" / "train.log"),
             "enable_alpha_analysis": True,
         },
         "runtime": {
@@ -106,7 +100,6 @@ DEFAULT_CONFIG = {
             "torch_interop_threads": 1,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
-            "select_days": 100,
             "max_train_days": 2000,
             "verbose": False,
         },
@@ -130,12 +123,8 @@ DEFAULT_CONFIG = {
             "data_presets": (),
             "config_path": None,
         },
-        "defaults": {
-            "selection_module": None,
-        },
     },
     "backtest": {
-        "output_path": str(COMB2_ROOT / "output" / "backtest"),
         "daily_metrics_file": "daily_pnl.csv",
         "cash": 10000000.0,
         "fee_rate": 0.0015,
@@ -167,22 +156,15 @@ DTYPE_MAP = {
 PATH_FIELDS = {
     ("constants", "cache_path"),
     ("constants", "output_root"),
-    ("constants", "checkpoint_root"),
     ("strategy", "path"),
-    ("combo", "paths", "base_dir"),
-    ("combo", "paths", "output_dir"),
     ("combo", "paths", "model_path"),
     ("combo", "paths", "combo_base_path"),
     ("combo", "paths", "research_loader_path"),
     ("combo", "paths", "research_dataset_path"),
-    ("combo", "paths", "checkpoint_root"),
-    ("combo", "output", "alpha_history_path"),
-    ("combo", "output", "log_path"),
     ("combo", "loader", "ashare_data_path"),
     ("combo", "loader", "valid_path"),
     ("combo", "loader", "filtered_path"),
     ("combo", "loader", "base_universe_path"),
-    ("backtest", "output_path"),
     ("monitor", "output_path"),
 }
 
@@ -499,7 +481,7 @@ def _apply_constant_paths(config: dict) -> dict:
     output_root = Path(constants["output_root"])
 
     updated["combo"]["paths"]["output_dir"] = str(output_root)
-    updated["combo"]["paths"]["checkpoint_root"] = constants["checkpoint_root"]
+    updated["combo"]["paths"]["checkpoint_root"] = str(output_root / "checkpoints")
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
     loader_config = updated["combo"]["loader"]
@@ -521,7 +503,7 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     if data_attrs:
         normalized_config["combo"]["loader"].update(data_attrs)
 
-    resolved = _apply_constant_paths(normalized_config)
+    resolved = deepcopy(normalized_config)
     for path_key in PATH_FIELDS:
         section = resolved
         for key in path_key[:-1]:
@@ -529,6 +511,7 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         leaf_key = path_key[-1]
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
+    resolved = _apply_constant_paths(resolved)
 
     presets: list[str] = list(resolved["combo"].get("data", {}).get("presets", ()))
     data_items = _resolve_data_pack(
@@ -546,7 +529,45 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     resolved["combo"]["loader"]["data_items"] = tuple(data_items)
     resolved["combo"]["loader"]["data_presets"] = tuple(presets)
     resolved["combo"]["loader"]["config_path"] = str(base_dir.resolve())
+    _validate_config(resolved)
     return resolved
+
+
+def _validate_config(config: dict) -> None:
+    runtime = config["combo"]["runtime"]
+    nonnegative = ("trainDelay",)
+    positive = ("retDays", "tsDays", "max_train_days", "torch_threads", "torch_interop_threads")
+    for name in nonnegative:
+        if int(runtime[name]) < 0:
+            raise ValueError(f"combo.runtime.{name} must be nonnegative")
+    for name in positive:
+        if int(runtime[name]) <= 0:
+            raise ValueError(f"combo.runtime.{name} must be positive")
+    if runtime.get("load_chunk_days") is not None and int(runtime["load_chunk_days"]) <= 0:
+        raise ValueError("combo.runtime.load_chunk_days must be positive when set")
+    if int(runtime["max_train_days"]) < int(runtime["tsDays"]):
+        raise ValueError("combo.runtime.max_train_days must be at least tsDays")
+    smooth_rate = float(runtime["model_smooth_rate"])
+    if not 0.0 <= smooth_rate <= 1.0:
+        raise ValueError("combo.runtime.model_smooth_rate must be between 0 and 1")
+
+    loader = config["combo"]["loader"]
+    if int(loader["data_offset"]) < 0:
+        raise ValueError("combo.data.data_offset must be nonnegative")
+
+    strategy = config["strategy"]
+    if int(strategy["start_ds"]) > int(strategy["end_ds"]):
+        raise ValueError("strategy.start_ds must not be after end_ds")
+
+    backtest = config["backtest"]
+    if float(backtest["fee_rate"]) < 0:
+        raise ValueError("backtest.fee_rate must be nonnegative")
+    if not 0.0 < float(backtest["reserve_cash"]) <= 1.0:
+        raise ValueError("backtest.reserve_cash must be in (0, 1]")
+    if float(backtest["drawdown_stop"]) < 0:
+        raise ValueError("backtest.drawdown_stop must be nonnegative")
+    if int(backtest["cooldown_days"]) < 0:
+        raise ValueError("backtest.cooldown_days must be nonnegative")
 
 
 def _load_xml_config(path: str) -> dict:
@@ -567,8 +588,9 @@ def _load_xml_config(path: str) -> dict:
             "output": _parse_section_attributes(combo_element.find("output"), DEFAULT_CONFIG["combo"]["output"]),
             "runtime": _parse_section_attributes(combo_element.find("runtime"), DEFAULT_CONFIG["combo"]["runtime"]),
             "model": _parse_section_attributes(combo_element.find("model"), DEFAULT_CONFIG["combo"]["model"], allow_extra=True),
-            "defaults": _parse_section_attributes(combo_element.find("defaults"), DEFAULT_CONFIG["combo"]["defaults"]),
         }
+        if combo_element.find("defaults") is not None:
+            raise ValueError("<combo><defaults> is no longer supported")
         data_element = combo_element.find("data")
         if data_element is not None:
             combo["data"] = _parse_data_section(data_element) or {"attrs": {}, "imports": (), "items": ()}

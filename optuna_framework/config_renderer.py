@@ -21,7 +21,6 @@ PATH_PATCH_KEYS = {
     "config.strategy.@end_ds",
     "config.strategy.@path",
     "config.constants.@output_root",
-    "config.constants.@checkpoint_root",
     "config.combo.paths.@model_path",
     "config.combo.runtime.@snaptime",
 }
@@ -57,7 +56,6 @@ def render_config(
     _set_attr(root, "./strategy", "start_ds", run_paths.run_start_ds)
     _set_attr(root, "./strategy", "end_ds", run_paths.run_end_ds)
     _set_attr(root, "./constants", "output_root", str(run_paths.output_root))
-    _set_attr(root, "./constants", "checkpoint_root", str(run_paths.checkpoint_root))
     _set_attr(root, "./combo/runtime", "snaptime", run_paths.snaptime)
 
     fixed_overrides = {**config.fixed_overrides, **(extra_overrides or {})}

@@ -9,7 +9,7 @@ __pycache__/
 output**/
 checkpoints**/
 optuna_runs/
-build/protected_wheel/
+build/
 dist_protected/
 AGENTS.md
 pos_corr/

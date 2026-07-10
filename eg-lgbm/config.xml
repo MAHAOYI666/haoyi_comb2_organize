@@ -1,9 +1,9 @@
 <config>
-  <constants cache_path="/home/shared/data1/factorsim_data/Cache" output_root="output" checkpoint_root="checkpoints" />
+  <constants cache_path="/home/shared/data1/factorsim_data/Cache" output_root="output" />
   <strategy start_ds="20200101" end_ds="20200331" />
   <combo>
     <paths model_path="model.py" />
-    <runtime snaptime="example_lgbm" snap_ti="" seed="42" livetrading="false" trainDelay="1" retDays="5" tsDays="3" model_smooth_rate="0.7" model_keep_num="0" select_days="100" max_train_days="400" verbose="true" />
+    <runtime snaptime="example_lgbm" snap_ti="" seed="42" livetrading="false" trainDelay="0" retDays="5" tsDays="3" model_smooth_rate="0.7" model_keep_num="0" max_train_days="400" verbose="true" />
     <model device="cpu" hiddenSize="16" lr="0.05" epochs="100" num_leaves="31" feature_fraction="0.8" bagging_fraction="0.8" bagging_freq="1" min_data_in_leaf="100" num_threads="-1" />
     <data dtype="float16" data_start_ds="20160101" data_offset="1024">
       <item name="alpha.cyz_20231130_01" module="builtin.factorsim" path="/root/ml-data1-pvc/factorsim_data/Factor/FactorData/ZsimPool/cyz_20231130_01" role="factor" display_name="cyz_20231130_01" freq="1d" />

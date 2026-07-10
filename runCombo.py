@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 import importlib
 import importlib.util
 import json
@@ -47,6 +48,7 @@ import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
+EVAL_ROOT = ORGANIZE_ROOT / "evals"
 organize_root_path = str(ORGANIZE_ROOT)
 if organize_root_path not in sys.path:
     sys.path.insert(0, organize_root_path)
@@ -54,11 +56,13 @@ for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
         sys.path.insert(0, local_package_path)
+if str(EVAL_ROOT) not in sys.path:
+    sys.path.insert(0, str(EVAL_ROOT))
 
 from comb2 import ComboBase, LoaderConfig
 from src.DataLoader import ComboDataLoader, ComboTrainDataset
-from comb2_simbase import IndexMask, Memmaper2, fast
-from comb2_simbase.config import NAN_DTYPE
+from comb2_simbase import IndexMask, Memmaper2
+from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress
 
 
@@ -141,7 +145,7 @@ class Node:
         self.alpha = torch.zeros(instsz, dtype=config["loader"]["dtype"])
         self.alpha_history: dict[int, torch.Tensor] = {}
 
-        for section in ("paths", "runtime", "model", "output", "defaults"):
+        for section in ("paths", "runtime", "model", "output"):
             for key, value in config[section].items():
                 setattr(self, key, value)
 
@@ -150,6 +154,20 @@ class Node:
         loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
         loader_config["verbose"] = bool(getattr(self, "verbose", False))
         self.loader_config = LoaderConfig(**loader_config)
+
+
+class TeeStream:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, value: str) -> int:
+        for stream in self.streams:
+            stream.write(value)
+        return len(value)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
 
 
 def _print_metric_table(title: str, columns: list[tuple[str, str, int]]) -> None:
@@ -187,46 +205,13 @@ def print_live_metrics(meta: dict):
     _print_metric_table("[LIVE]", columns)
 
 
-BASE_UNIVERSE_MASK_PATH = "1d_StockMask2/StockMask2.BaseUnivMask"
-TRADING_MASK_PATH = "1d_StockMask2/StockMask2.LimitMask"
-
-
-def load_shifted_mask(mask_path: str, start_ds: int, end_ds: int, shift_n: int = -1) -> np.ndarray:
-    mask = Memmaper2(mask_path).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].values
-    if shift_n == 0:
-        return mask
-    if shift_n != -1:
-        raise ValueError(f"unsupported mask shift_n={shift_n}")
-
-    if mask.shape[0] == 1:
-        raise ValueError("need at least one array to concatenate")
-    shifted = np.full_like(mask, np.nan, dtype=np.float64)
-    if mask.shape[0] > 2:
-        shifted[1:-1] = mask[2:]
-    return shifted
-
-
-def apply_mask(y: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
-    mask_tensor = torch.as_tensor(mask, dtype=y.dtype, device=y.device)
-    return y * mask_tensor
-
-
-def process_label(y, start_ds: int, end_ds: int, ashare_data_path: str):
-    y = fast.purify(y)
-    base_mask = load_shifted_mask(f"{ashare_data_path}/{BASE_UNIVERSE_MASK_PATH}", start_ds, end_ds, shift_n=-1)
-    trading_mask = load_shifted_mask(f"{ashare_data_path}/{TRADING_MASK_PATH}", start_ds, end_ds, shift_n=-1)
-    y = apply_mask(y, base_mask)
-    y = apply_mask(y, trading_mask)
-    return y
-
-
 def get_backtest_label(ashare_data_path: str, period: str, start_ds: int, end_ds: int):
     label = Memmaper2(f"{ashare_data_path}/1d_DailyLabel/DailyLabel.vwap30_label{period}").load(
         start_ds=start_ds,
         end_ds=end_ds,
         df_type=True,
     ).dloc[:]
-    return label.mask(np.isnan(label), NAN_DTYPE)
+    return label.astype(float)
 
 
 def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFrame:
@@ -236,25 +221,13 @@ def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFra
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
-    x = alpha.values
-
-    label_1d = get_backtest_label(ashare_data_path, "1d", start_time, end_time).reindex(index=date_idx).values
-    label_5d = get_backtest_label(ashare_data_path, "5d", start_time, end_time).reindex(index=date_idx).values
-
-    x_masked = process_label(torch.tensor(x), start_time, end_time, ashare_data_path).numpy()
-    label_1d_masked = process_label(torch.tensor(label_1d), start_time, end_time, ashare_data_path).numpy()
-    label_5d_masked = process_label(torch.tensor(label_5d), start_time, end_time, ashare_data_path).numpy()
-
-    ic_1d = fast.corr(x_masked, label_1d_masked, dim=-1, keepdims=True)
-    ic_perc = fast.corr(fast.perc_long(x_masked), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
-    ic_rank = fast.corr(fast.rank(x_masked, dim=-1), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
-    ic_5d = fast.corr(x_masked, label_5d_masked, dim=-1, keepdims=True)
-    x_cov = (~np.isnan(x_masked) & ~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
-    label_cov = (~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
-    label_cov[label_cov == 0] = np.nan
-    coverage = x_cov / label_cov
-    daily_ic = np.concatenate([ic_1d, ic_5d, ic_rank, ic_perc, coverage[:, np.newaxis]], axis=-1)
-    return pd.DataFrame(daily_ic, index=date_idx, columns=["ic", "5dic", "rankic", "percic", "coverage"])
+    label_1d = get_backtest_label(ashare_data_path, "1d", start_time, end_time).reindex(index=date_idx)
+    label_5d = get_backtest_label(ashare_data_path, "5d", start_time, end_time).reindex(index=date_idx)
+    evaluation_mask = load_evaluation_mask(alpha, ashare_data_path)
+    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
+    daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
+    daily_ic.index = daily_ic.index.strftime("%Y%m%d").astype(int)
+    return daily_ic
 
 
 def dump_alpha_analysis(node: Node, combo_config: dict):
@@ -485,6 +458,16 @@ def main() -> int:
     if config_path is None:
         return 2
     organize_config = organize_config_module.load_config(config_path)
+    log_path = Path(organize_config["combo"]["output"]["log_path"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        stdout = TeeStream(sys.stdout, log_file)
+        stderr = TeeStream(sys.stderr, log_file)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            return run_loaded_config(organize_config, config_path)
+
+
+def run_loaded_config(organize_config: dict, config_path: str) -> int:
     configure_torch_threads(organize_config)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:

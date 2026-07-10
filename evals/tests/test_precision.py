@@ -5,7 +5,7 @@ import pandas as pd
 
 from comb_eval.formatting import output_frame_to_text
 from comb_eval.pnl import summarize_pnl
-from comb_eval.report import calculate_decile_daily_pnls
+from comb_eval.report import calculate_daily_ic_from_signal, calculate_decile_daily_pnls, load_evaluation_mask
 
 
 def test_summarize_pnl_keeps_full_precision_until_output() -> None:
@@ -120,3 +120,36 @@ def test_decile_backtest_ignores_constant_signal_rows() -> None:
     assert decile_daily["Q10"].loc[pd.Timestamp("2019-12-31"), "long"] == 0.0
     assert "20191231-20191231" not in q10_summary.index
     assert "20200102-20200103" in q10_summary.index
+
+
+def test_daily_ic_uses_common_signal_and_label_axes() -> None:
+    signal = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [3.0, 2.0, 1.0]],
+        index=[20200101, 20200102],
+        columns=["000001", "000002", "000003"],
+    )
+    label_1d = signal.copy()
+    label_5d = signal.loc[[20200102], ["000001", "000002", "000003"]]
+
+    daily_ic = calculate_daily_ic_from_signal(signal, label_1d, label_5d)
+
+    assert list(daily_ic.index) == [pd.Timestamp("2020-01-02")]
+    assert np.isclose(daily_ic.iloc[0]["ic"], 1.0)
+
+
+def test_evaluation_mask_combines_base_and_limit_then_shifts(monkeypatch) -> None:
+    dates = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"])
+    columns = ["000001", "000002"]
+    signal = pd.DataFrame(1.0, index=dates, columns=columns)
+    base = pd.DataFrame([[1, 1], [1, 0], [1, 1]], index=dates, columns=columns)
+    limit = pd.DataFrame([[1, 1], [1, 1], [0, 1]], index=dates, columns=columns)
+
+    def fake_read(path, start_ds, end_ds, df_type):
+        return base if str(path).endswith("BaseUnivMask") else limit
+
+    monkeypatch.setattr("comb_eval.report.read_cache_array", fake_read)
+    mask = load_evaluation_mask(signal, "/cache/AshareCache")
+
+    assert mask.loc[pd.Timestamp("2020-01-01")].tolist() == [True, False]
+    assert mask.loc[pd.Timestamp("2020-01-02")].tolist() == [False, True]
+    assert mask.loc[pd.Timestamp("2020-01-03")].tolist() == [False, False]
