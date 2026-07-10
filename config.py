@@ -488,9 +488,9 @@ def _apply_constant_paths(config: dict) -> dict:
     if loader_config.get("ashare_data_path") is None:
         loader_config["ashare_data_path"] = str(cache_path)
     if loader_config.get("valid_path") is None:
-        loader_config["valid_path"] = str(cache_path / "Ashare")
+        loader_config["valid_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.NoNewStockMask")
     if loader_config.get("filtered_path") is None:
-        loader_config["filtered_path"] = str(cache_path / "AshareFiltered")
+        loader_config["filtered_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.LimitMask")
     if loader_config.get("base_universe_path") is None:
         loader_config["base_universe_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")
     updated["backtest"]["output_path"] = str(output_root / "backtest")

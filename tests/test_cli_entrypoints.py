@@ -267,6 +267,9 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
     assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
     assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
+    assert parsed["combo"]["loader"]["valid_path"].endswith("1d_StockMask2/StockMask2.NoNewStockMask")
+    assert parsed["combo"]["loader"]["filtered_path"].endswith("1d_StockMask2/StockMask2.LimitMask")
+    assert parsed["combo"]["loader"]["base_universe_path"].endswith("1d_StockMask2/StockMask2.BaseUnivMask")
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
 
 

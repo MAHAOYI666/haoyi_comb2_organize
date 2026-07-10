@@ -346,8 +346,6 @@ class ResearchModel:
       dtype="float16"
       data_start_ds="20160101"
       data_offset="1024"
-      valid_path="/path/to/valid"
-      filtered_path="/path/to/filtered"
     >
       <item name="alpha.factor_1" module="builtin.factorsim" path="/path/to/factor_1" role="factor" />
       <item name="alpha.factor_2" module="builtin.factorsim" path="/path/to/factor_2" role="factor" />

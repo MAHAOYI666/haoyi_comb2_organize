@@ -167,9 +167,6 @@ runEval config.xml
       compression="none"
       data_start_ds="20160101"
       ashare_data_path=""
-      valid_path=""
-      filtered_path=""
-      base_universe_path=""
     >
       <item name="factor.example_1" path="example_factor_1" role="factor" display_name="example_factor_1" />
       <item name="factor.example_2" path="example_factor_2" role="factor" display_name="example_factor_2">
@@ -568,9 +565,6 @@ class ResearchModel:
   data_start_ds="20160101"
   data_offset="1024"
   ashare_data_path=""
-  valid_path=""
-  filtered_path=""
-  base_universe_path=""
 >
   <item name="factor.example_1" path="example_factor_1" role="factor" />
   <item name="label.default" path="vwap30_label1d" role="label" />
@@ -586,9 +580,8 @@ class ResearchModel:
 | `data_start_ds` | `20160101` | 数据业务起点。 |
 | `data_offset` | `1024` | 交易日轴起始偏移；会在构建 universe 时跳过更早的 mask/date 数据。通常保持默认，只有明确知道需要更早历史或更小 universe 起点时再改。 |
 | `ashare_data_path` | 空 | AshareCache 根目录；空值时从 `constants.cache_path` 派生。 |
-| `valid_path` | 空 | valid mask 路径；空值时从 AshareCache 派生。 |
-| `filtered_path` | 空 | filtered mask 路径；空值时从 AshareCache 派生。 |
-| `base_universe_path` | 空 | base universe mask 路径；空值时从 AshareCache 派生。 |
+
+股票池 mask 不需要配置：框架从 `constants.cache_path` 自动派生 `StockMask2.NoNewStockMask`、`StockMask2.LimitMask` 和 `StockMask2.BaseUnivMask`。
 
 压缩说明：
 

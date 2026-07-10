@@ -31,6 +31,7 @@ Changes:
 - Added config validation for training windows, thread counts, data offsets, smoothing, strategy dates, and backtest constraints. Negative `trainDelay`, non-positive `retDays`/`tsDays`, and training windows shorter than `tsDays` now fail during config loading.
 - Removed the selection-module API, `select_days`, `<combo><defaults>`, selection hooks, and package exports. Training-window calculation is now explicit in `ComboBase`, bounded directly by `trainDelay`, `retDays`, `tsDays`, and `max_train_days`.
 - Changed configured mask handling to fail immediately with `FileNotFoundError` when a non-empty mask path does not exist, instead of silently deferring the error or running without the requested mask.
+- Replaced obsolete `Ashare`/`AshareFiltered` mask defaults with cache-derived `StockMask2.NoNewStockMask` and `StockMask2.LimitMask`; the base universe continues to derive from `StockMask2.BaseUnivMask`.
 - Unified alpha IC calculation with the report implementation. Signals and 1-day/5-day labels are aligned on common dates and instruments and filtered by the shifted intersection of `BaseUnivMask` and `LimitMask`, so `runCombo` and evaluation reports use the same metrics and universe rules.
 - Corrected the example Torch IC loss to compute a masked, weighted Pearson correlation with valid centering and normalization; zero-weight instruments no longer affect the loss.
 - Changed `runCombo` to tee standard output and errors to the derived `train.log` while preserving console output.
