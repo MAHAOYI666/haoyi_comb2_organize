@@ -16,13 +16,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
+DISTRIBUTION_NAME = "combo2"
 
 PACKAGE_SOURCES = {
     "comb2_templates": REPO_ROOT / "comb2_templates",
     "comb2_simbase": REPO_ROOT / "vendor" / "comb2-simbase" / "comb2_simbase",
     "optuna_framework": REPO_ROOT / "optuna_framework",
     "comb_eval": REPO_ROOT / "evals" / "comb_eval",
-    "src": REPO_ROOT / "vendor" / "comb2" / "src",
     "comb2": REPO_ROOT / "vendor" / "comb2" / "comb2",
     "comb2_pcmaster": REPO_ROOT / "vendor" / "comb2-pcmaster" / "comb2_pcmaster",
     "comb2_metrics": REPO_ROOT / "vendor" / "comb2-metrics" / "comb2_metrics",
@@ -73,6 +73,7 @@ IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
     "comb2/__init__.py",
+    "comb2/codec/__init__.py",
     "comb2_templates/__init__.py",
     "comb2_simbase/__init__.py",
     "comb2_pcmaster/default_strategy.py",
@@ -81,8 +82,6 @@ ALLOWED_SOURCE_FILES = {
     "comb_eval/__init__.py",
     "optuna_framework/__init__.py",
     "optuna_framework/scripts/__init__.py",
-    "src/__init__.py",
-    "src/codec/__init__.py",
     "vendor/__init__.py",
 }
 PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
@@ -90,6 +89,7 @@ PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
 
 def main() -> None:
     args = parse_args()
+    version = read_version()
     python = resolve_path_arg(args.python)
     assert_python_313(python)
     dependencies = resolve_dependencies()
@@ -101,11 +101,12 @@ def main() -> None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        build_wheel(args, python, dependencies, build_root, stage_root, dist_dir)
+        build_wheel(args, version, python, dependencies, build_root, stage_root, dist_dir)
 
 
 def build_wheel(
     args: argparse.Namespace,
+    version: str,
     python: Path,
     dependencies: dict[str, object],
     build_root: Path,
@@ -118,7 +119,7 @@ def build_wheel(
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     prepare_stage(stage_root)
-    write_build_files(stage_root, args.name, args.version, dependencies)
+    write_build_files(stage_root, DISTRIBUTION_NAME, version, dependencies)
 
     if args.dry_run:
         print_plan(stage_root, dependencies, python)
@@ -130,12 +131,11 @@ def build_wheel(
     if args.no_build_isolation:
         command.append("--no-build-isolation")
     subprocess.run(command, cwd=stage_root, check=True)
-    name_variants = normalized_dist_name_variants(args.name)
     wheels = sorted(
         [
             path
             for path in dist_dir.glob("*.whl")
-            if any(path.name.startswith(f"{variant}-") for variant in name_variants)
+            if path.name.startswith(f"{DISTRIBUTION_NAME}-")
         ],
         key=lambda path: path.stat().st_mtime,
     )
@@ -148,15 +148,13 @@ def build_wheel(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for Combo2 and bundled vendor packages.")
+    parser = argparse.ArgumentParser(description="Build the Cython-protected combo2 wheel and bundled runtime packages.")
     parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
-    parser.add_argument("--name", default="Combo2", help="Wheel distribution name")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
     parser.add_argument("--dist-dir", type=Path, default=REPO_ROOT / "dist_protected", help="Output wheel directory")
     parser.add_argument("--dry-run", action="store_true", help="Prepare the build tree and print what would be compiled")
     parser.add_argument("--no-clean", action="store_true", help="Reuse the existing build root")
     parser.add_argument("--no-build-isolation", action="store_true", help="Build with packages already installed in --python")
-    parser.set_defaults(version=read_version())
     return parser.parse_args()
 
 
@@ -456,15 +454,6 @@ def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path) 
         print(f"  {dep}")
     for module, path in extensions:
         print(f"  {module}: {path}")
-
-
-def normalize_dist_name(name: str) -> str:
-    return name.replace("-", "_").replace(".", "_")
-
-
-def normalized_dist_name_variants(name: str) -> set[str]:
-    normalized = normalize_dist_name(name)
-    return {normalized, normalized.lower()}
 
 
 if __name__ == "__main__":

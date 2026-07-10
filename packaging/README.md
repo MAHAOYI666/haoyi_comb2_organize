@@ -31,7 +31,8 @@ python -m pip install dist_protected/combo2-<version>-cp313-cp313-linux_x86_64.w
 
 Exact release version and current install target are tracked in `../RELEASE.md`.
 
-The published distribution name is `Combo2`; wheel filenames are normalized to lowercase by packaging rules.
+The only published distribution name is `combo2`. The build script does not accept
+name or version overrides; its version is read exclusively from `../VERSION`.
 
 Run after installation:
 
@@ -58,7 +59,7 @@ The build compiles:
 - `vendor/comb2-simbase` (`comb2_simbase` import package)
 - `optuna_framework`
 - `comb_eval`
-- vendor packages: `src`, `comb2`, `comb2_pcmaster`, `comb2_metrics`
+- vendor packages: `comb2`, `comb2_pcmaster`, `comb2_metrics`
 - `vendor.perf_monitor`
 
 The script verifies that the resulting wheel does not contain protected `.py`

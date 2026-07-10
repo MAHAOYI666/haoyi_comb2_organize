@@ -59,8 +59,7 @@ for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"
 if str(EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(EVAL_ROOT))
 
-from comb2 import ComboBase, LoaderConfig
-from src.DataLoader import ComboDataLoader, ComboTrainDataset
+from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
 from comb2_simbase import IndexMask, Memmaper2
 from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress

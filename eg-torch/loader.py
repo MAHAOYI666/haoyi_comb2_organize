@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from comb2 import ComboDataLoader, FeatureGroups
-from src.op_utils import cs_zscore, nan_to_num, truncate
+from comb2.op_utils import cs_zscore, nan_to_num, truncate
 
 
 class ResearchLoader(ComboDataLoader):

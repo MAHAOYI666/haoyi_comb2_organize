@@ -27,7 +27,7 @@ Source-path validation:
 
 ```powershell
 $env:PYTHONPATH = "vendor/comb2"
-.\.venv\Scripts\python.exe -c "from src.codec import build_codec; print('ok')"
+.\.venv\Scripts\python.exe -c "from comb2.codec import build_codec; print('ok')"
 .\.venv\Scripts\python.exe -m pytest vendor/comb2/tests/test_codec.py
 ```
 

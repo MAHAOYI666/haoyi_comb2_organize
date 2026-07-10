@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
 import torch
 
 from config import load_config
-from src.DataLoader import ComboDataLoader, FeatureGroups, GroupCodec, LoaderConfig
-from src.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
-from src.codec import build_codec
+from comb2.DataLoader import ComboDataLoader, FeatureGroups, GroupCodec, LoaderConfig
+from comb2.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
+from comb2.codec import build_codec
 
 
 class FakeMask:
@@ -17,8 +18,8 @@ class FakeMask:
 
 
 def _patch_mask(monkeypatch):
-    import src.DataLoader as data_loader
-    import src.DataRegistry as data_registry
+    data_loader = importlib.import_module("comb2.DataLoader")
+    data_registry = importlib.import_module("comb2.DataRegistry")
 
     fake = FakeMask()
     monkeypatch.setattr(data_loader, "MASK", fake)

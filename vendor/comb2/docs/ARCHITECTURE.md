@@ -4,7 +4,7 @@ This document describes internal component boundaries. Researcher-facing configu
 
 ## DataRegistry
 
-`src/DataRegistry.py` owns data declaration, loading, alignment, item-level ops, and processed data cache.
+`comb2/DataRegistry.py` owns data declaration, loading, alignment, item-level ops, and processed data cache.
 
 Main types:
 
@@ -72,7 +72,7 @@ Item ops are limited to the whitelist above. `last/mean/std/sum/max/min` and `nb
 
 ## ComboDataLoader
 
-`src/DataLoader.py` owns model feature/label generation, prediction windows, masks, and cache orchestration.
+`comb2/DataLoader.py` owns model feature/label generation, prediction windows, masks, and cache orchestration.
 
 Main types:
 

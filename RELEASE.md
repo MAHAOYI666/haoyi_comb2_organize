@@ -7,10 +7,10 @@ version. This file records release notes, published artifacts, and install targe
 
 - Version: `0.1.7`
 - Release date: `2026-07-10`
-- Package name: `Combo2`
+- Package name: `combo2`
 - Protected wheel: `dist_protected/combo2-0.1.7-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `Combo2 0.1.7`
+- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.7`
 
 Install the current wheel:
 
@@ -22,7 +22,9 @@ python -m pip install dist_protected/combo2-0.1.7-cp313-cp313-linux_x86_64.whl
 
 Changes:
 
-- Added the repository-root `VERSION` file as the single source of truth for package versions. Protected-wheel builds and CI now read the version from this file, and CI runs the test suite before building.
+- Consolidated the framework implementation under the single `comb2` import package and removed the generic top-level `src` package from source and protected-wheel builds.
+- Made `isTrainDay` the sole training-calendar rule. Checkpoint age no longer suppresses or triggers training; only an exact target-date checkpoint skips an otherwise scheduled training run.
+- Fixed the published distribution name to `combo2`, removed build-time name overrides, and made the repository-root `VERSION` file the only build version source. CI reads the same identity and runs the test suite before building.
 - Consolidated runtime artifacts under `constants.output_root`. `train.log`, `alpha_history.pt`, `alpha.parquet`, checkpoints, backtest results, and evaluation reports now use fixed derived paths; redundant output and checkpoint path settings were removed from configs, examples, Optuna rendering, and documentation.
 - Fixed the complete `barra` preset on case-sensitive filesystems by mapping all 11 logical lowercase style names to their uppercase on-disk `BarraCNE5.*` filenames. The built-in size and book-to-price paths now follow the same convention, and the preset requires an `ashare_data_path` from which absolute paths can be derived.
 - Clarified training-date semantics and changed starter configs to `trainDelay=0`: no hidden framework offset is added, because labels retain their stored delay convention. `retDays` continues to align each factor date with the future-return window beginning on that date, while `tsDays` only controls the trailing feature window.

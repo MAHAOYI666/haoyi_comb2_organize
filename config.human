@@ -349,7 +349,7 @@ class ComboBase(BaseComboBase):
 | `ds` 含义 | 这里传入的是训练目标日 `target_ds`，不是当前回测循环日。若设置了 `trainDelay`，框架会先做日期偏移，再把偏移后的 `target_ds` 传进来。 |
 | 返回 `True` | 表示这个 `target_ds` 按你的规则属于训练日。 |
 | 返回 `False` | 表示这个 `target_ds` 按你的规则不属于训练日。 |
-| 最终是否训练 | 还会再经过 `needTrain(ds)` 的 checkpoint 判定；`isTrainDay()` 只负责训练日历规则本身。 |
+| 最终是否训练 | 完全由 `isTrainDay()` 决定训练日历；目标日期已有精确 checkpoint 时只复用该模型，不重复训练。 |
 
 写 `isTrainDay()` 时最常用的辅助能力：
 
@@ -367,12 +367,12 @@ class ComboBase(BaseComboBase):
 | 类名 | 必须叫 `ComboBase`。 |
 | 继承关系 | 必须继承 `comb2.ComboBase`。 |
 | `isTrainDay(ds)` | 只控制某个 `target_ds` 是否是训练日。 |
-| `needTrain(ds)` | 如果还要改 checkpoint 命中后的重训判定，可以进一步覆写它。 |
+| `needTrain(ds)` | 框架内部协调 `isTrainDay()` 与目标日期 checkpoint 复用，通常不需要覆写。 |
 
 建议：
 
 - 只改训练日规则时，优先覆写 `isTrainDay(ds)`。
-- 只有在你明确需要改变 checkpoint 复用或过期策略时，再覆写 `needTrain(ds)`。
+- 训练日历统一通过 `isTrainDay(ds)` 定义；不要通过 checkpoint 年龄间接控制训练日。
 - 保持方法签名不变，不要改 `ComboBase.__init__` 的输入协议。
 
 常见示例：

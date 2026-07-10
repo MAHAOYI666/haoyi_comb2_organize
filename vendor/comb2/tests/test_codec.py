@@ -9,10 +9,10 @@ import pandas as pd
 import torch
 import random
 
-from src.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
-from src.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig, MemmapMaskSource
-from src.DataRegistry import CANONICAL_BAR_TIMES, DataItem, DataRegistry, OpSpec, Universe
-from src.op_utils import cs_zscore, nan_to_num, nanmean, nanstd, normalize_by_max_abs, rank, truncate, winsorize_by_quantile
+from comb2.codec import FP4Codec, FP4_VALUES, FP8Codec, PassthroughCodec, build_codec
+from comb2.DataLoader import ComboDataLoader, FeatureGroups, LoaderConfig, MemmapMaskSource
+from comb2.DataRegistry import CANONICAL_BAR_TIMES, DataItem, DataRegistry, OpSpec, Universe
+from comb2.op_utils import cs_zscore, nan_to_num, nanmean, nanstd, normalize_by_max_abs, rank, truncate, winsorize_by_quantile
 
 
 FLOAT_DTYPES = (torch.float16, torch.float32, torch.float64, torch.bfloat16)
@@ -24,7 +24,7 @@ def test_nonempty_missing_mask_path_fails_fast(tmp_path) -> None:
 
 
 def test_train_delay_zero_does_not_add_framework_offset() -> None:
-    from src.ComboBase import ComboBase
+    from comb2.ComboBase import ComboBase
 
     combo = ComboBase.__new__(ComboBase)
     combo.trainDelay = 0
@@ -637,7 +637,7 @@ def test_config_accepts_runtime_seed(tmp_path) -> None:
 
 
 def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101,)
@@ -680,7 +680,7 @@ def test_combo_data_loader_applies_default_feature_global_preprocess(monkeypatch
 
 
 def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101,)
@@ -723,7 +723,7 @@ def test_combo_data_loader_preprocess_feature_hook_can_replace_default(monkeypat
 
 def test_config_to_loader_3d_factorsim_ops_pipeline_end_to_end(tmp_path, monkeypatch) -> None:
     from config import load_config
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101, 20200102, 20200103)
@@ -875,7 +875,7 @@ def test_op_utils_axis_aware_transforms() -> None:
 
 
 def test_combo_data_loader_preprocess_label_hook_can_replace_default(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101,)
@@ -1676,7 +1676,7 @@ def test_data_registry_builtin_factorsim_3d_requires_canonical_time_axis(tmp_pat
 
 
 def test_factorsim_reader_3d_loads_full_canonical_cube(tmp_path) -> None:
-    from src.DataRegistry import FactorsimReader
+    from comb2.DataRegistry import FactorsimReader
 
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "5m_Intv5mBar" / "Intv5mBar.close"
     times = np.array(CANONICAL_BAR_TIMES["5m"], dtype=np.int64)
@@ -1696,7 +1696,7 @@ def test_factorsim_reader_3d_loads_full_canonical_cube(tmp_path) -> None:
 
 
 def test_factorsim_reader_3d_reindexes_columns_to_universe(tmp_path) -> None:
-    from src.DataRegistry import FactorsimReader
+    from comb2.DataRegistry import FactorsimReader
 
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
     dates = np.array([20200102])
@@ -1781,7 +1781,7 @@ def test_data_registry_fails_when_3d_source_has_neither_nbar_nor_freq(tmp_path) 
 
 
 def test_factorsim_reader_3d_does_not_keep_source_cache(tmp_path) -> None:
-    from src.DataRegistry import FactorsimReader
+    from comb2.DataRegistry import FactorsimReader
 
     cache_dir = tmp_path / "cache_root" / "AshareCache" / "1m_Grid1mBar" / "Grid1mBar.close"
     data = np.arange(24, dtype=np.float64).reshape(8, 3)
@@ -1798,7 +1798,7 @@ def test_factorsim_reader_3d_does_not_keep_source_cache(tmp_path) -> None:
 
 
 def test_combo_data_loader_current_ti_masks_only_window_tail(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101, 20200102)
@@ -1860,7 +1860,7 @@ def test_combo_data_loader_current_ti_masks_only_window_tail(monkeypatch) -> Non
 
 
 def test_combo_data_loader_prefetch_syncs_current_ti_before_registry_load(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
+    from comb2 import DataLoader as data_loader_module
 
     class FakeMask:
         date = (20200101,)
@@ -1907,7 +1907,7 @@ def test_combo_data_loader_prefetch_syncs_current_ti_before_registry_load(monkey
 
 
 def test_combo_base_sets_random_seed_from_model_config(monkeypatch) -> None:
-    from src.ComboBase import ComboBase
+    from comb2.ComboBase import ComboBase
 
     calls = []
 
@@ -1972,8 +1972,8 @@ def test_combo_base_sets_random_seed_from_model_config(monkeypatch) -> None:
     assert ("torch", 42) in calls
 
 
-def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> None:
-    from src.ComboBase import ComboBase
+def test_combo_base_need_train_uses_only_train_calendar_and_exact_checkpoint(monkeypatch) -> None:
+    from comb2.ComboBase import ComboBase
 
     class DummyLoader:
         def __init__(self, config):
@@ -2035,16 +2035,23 @@ def test_combo_base_need_train_uses_stale_checkpoint_threshold(monkeypatch) -> N
     combo = DummyCombo(node)
     monkeypatch.setattr(combo, "isTrainDay", lambda ds: True)
     monkeypatch.setattr(combo, "_prev_date", lambda ds, offset=1: ds)
-    monkeypatch.setattr(combo, "LoadCheckpointModel", lambda save_dir, dt: 20200110)
+    checkpoint_day = 20200110
+    monkeypatch.setattr(combo, "LoadCheckpointModel", lambda save_dir, dt: checkpoint_day)
 
-    assert combo.needTrain(20200120) is False
+    assert combo.needTrain(20200120) is True
     assert combo.needTrain(20200150) is True
+
+    checkpoint_day = 20200120
+    assert combo.needTrain(20200120) is False
+
+    monkeypatch.setattr(combo, "isTrainDay", lambda ds: False)
+    assert combo.needTrain(20200150) is False
 
 
 def test_transform_feature_window_hook_applies_to_train_and_predict(monkeypatch) -> None:
-    from src import DataLoader as data_loader_module
-    from src.ComboBase import ComboBase
-    from src.DataLoader import ComboTrainDataset
+    from comb2 import DataLoader as data_loader_module
+    from comb2.ComboBase import ComboBase
+    from comb2.DataLoader import ComboTrainDataset
 
     class FakeMask:
         date = (20200101, 20200102, 20200103)

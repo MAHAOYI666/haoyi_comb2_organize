@@ -3,7 +3,7 @@
 `comb2-organize` 用来把 research 模型接到内置的 `comb2` 和 `comb2-pcmaster` 源码上，完成训练、信号生成和回测。
 
 发布记录、版本号和当前 wheel 安装目标统一记录在 `RELEASE.md`。
-发布包名统一为 `Combo2`；wheel 文件名会按 Python 打包规范显示为小写 `combo2-...`；仓库目录名和内部模块名保持现状。
+唯一发布包名为 `combo2`，版本号只从仓库根目录 `VERSION` 读取。
 
 ## 安装方式
 
@@ -13,7 +13,6 @@
 vendor/
   comb2/
     comb2/
-    src/
   comb2-pcmaster/
     comb2_pcmaster/
 ```

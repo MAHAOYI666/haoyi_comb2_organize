@@ -292,6 +292,8 @@ def test_version_file_is_the_build_default():
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    assert module.DISTRIBUTION_NAME == "combo2"
+    assert "src" not in module.PACKAGE_SOURCES
     assert module.read_version() == (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
