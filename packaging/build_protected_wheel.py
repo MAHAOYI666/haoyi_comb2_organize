@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import fcntl
+import hashlib
+import base64
+import os
 import shutil
 import subprocess
 import sys
@@ -10,13 +15,14 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+VERSION_FILE = REPO_ROOT / "VERSION"
+DISTRIBUTION_NAME = "combo2"
 
 PACKAGE_SOURCES = {
     "comb2_templates": REPO_ROOT / "comb2_templates",
     "comb2_simbase": REPO_ROOT / "vendor" / "comb2-simbase" / "comb2_simbase",
     "optuna_framework": REPO_ROOT / "optuna_framework",
     "comb_eval": REPO_ROOT / "evals" / "comb_eval",
-    "src": REPO_ROOT / "vendor" / "comb2" / "src",
     "comb2": REPO_ROOT / "vendor" / "comb2" / "comb2",
     "comb2_pcmaster": REPO_ROOT / "vendor" / "comb2-pcmaster" / "comb2_pcmaster",
     "comb2_metrics": REPO_ROOT / "vendor" / "comb2-metrics" / "comb2_metrics",
@@ -27,7 +33,6 @@ MODULE_SOURCES = {
     "runCombo": REPO_ROOT / "runCombo.py",
     "runEval": REPO_ROOT / "runEval.py",
     "comboRunner": REPO_ROOT / "comboRunner.py",
-    "runAblationByZero": REPO_ROOT / "runAblationByZero.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "comboHelloWorld": REPO_ROOT / "comboHelloWorld.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
@@ -38,7 +43,6 @@ ENTRY_POINTS = {
     "runEval": "runEval:main",
     "comb-run": "runCombo:main",
     "comb-combo-runner": "comboRunner:main",
-    "comb-ablation-zero": "runAblationByZero:main",
     "comb-pos-corr": "runPosCorr:main",
     "comb-eval": "comb_eval.cli:main",
     "combo-hello-world": "comboHelloWorld:main",
@@ -69,6 +73,7 @@ IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
     "comb2/__init__.py",
+    "comb2/codec/__init__.py",
     "comb2_templates/__init__.py",
     "comb2_simbase/__init__.py",
     "comb2_pcmaster/default_strategy.py",
@@ -77,8 +82,6 @@ ALLOWED_SOURCE_FILES = {
     "comb_eval/__init__.py",
     "optuna_framework/__init__.py",
     "optuna_framework/scripts/__init__.py",
-    "src/__init__.py",
-    "src/codec/__init__.py",
     "vendor/__init__.py",
 }
 PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
@@ -86,6 +89,7 @@ PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
 
 def main() -> None:
     args = parse_args()
+    version = read_version()
     python = resolve_path_arg(args.python)
     assert_python_313(python)
     dependencies = resolve_dependencies()
@@ -93,13 +97,29 @@ def main() -> None:
     stage_root = build_root / "protected_src"
     dist_dir = args.dist_dir.resolve()
 
+    lock_path = REPO_ROOT / "build" / ".protected_wheel.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        build_wheel(args, version, python, dependencies, build_root, stage_root, dist_dir)
+
+
+def build_wheel(
+    args: argparse.Namespace,
+    version: str,
+    python: Path,
+    dependencies: dict[str, object],
+    build_root: Path,
+    stage_root: Path,
+    dist_dir: Path,
+) -> None:
     if build_root.exists() and not args.no_clean:
         shutil.rmtree(build_root)
     stage_root.mkdir(parents=True, exist_ok=True)
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     prepare_stage(stage_root)
-    write_build_files(stage_root, args.name, args.version, dependencies)
+    write_build_files(stage_root, DISTRIBUTION_NAME, version, dependencies)
 
     if args.dry_run:
         print_plan(stage_root, dependencies, python)
@@ -111,25 +131,38 @@ def main() -> None:
     if args.no_build_isolation:
         command.append("--no-build-isolation")
     subprocess.run(command, cwd=stage_root, check=True)
-    wheels = sorted(dist_dir.glob(f"{normalize_dist_name(args.name)}-*.whl"), key=lambda path: path.stat().st_mtime)
+    wheels = sorted(
+        [
+            path
+            for path in dist_dir.glob("*.whl")
+            if path.name.startswith(f"{DISTRIBUTION_NAME}-")
+        ],
+        key=lambda path: path.stat().st_mtime,
+    )
     if not wheels:
         raise RuntimeError(f"no wheel produced in {dist_dir}")
     wheel = wheels[-1]
+    strip_wheel_extensions(wheel)
     verify_wheel(wheel)
     print(f"built protected wheel: {wheel}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a Cython-protected wheel for comb2_organize and bundled vendor packages.")
+    parser = argparse.ArgumentParser(description="Build the Cython-protected combo2 wheel and bundled runtime packages.")
     parser.add_argument("--python", type=Path, default=default_build_python(), help="Python 3.13 executable used to build the wheel")
-    parser.add_argument("--name", default="comb2_organize", help="Wheel distribution name")
-    parser.add_argument("--version", default="0.1.0", help="Wheel version")
     parser.add_argument("--build-root", type=Path, default=REPO_ROOT / "build" / "protected_wheel", help="Temporary build directory")
     parser.add_argument("--dist-dir", type=Path, default=REPO_ROOT / "dist_protected", help="Output wheel directory")
     parser.add_argument("--dry-run", action="store_true", help="Prepare the build tree and print what would be compiled")
     parser.add_argument("--no-clean", action="store_true", help="Reuse the existing build root")
     parser.add_argument("--no-build-isolation", action="store_true", help="Build with packages already installed in --python")
     return parser.parse_args()
+
+
+def read_version() -> str:
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    if not version:
+        raise ValueError(f"empty version file: {VERSION_FILE}")
+    return version
 
 
 def default_build_python() -> Path:
@@ -196,7 +229,7 @@ def prepare_stage(stage_root: Path) -> None:
 
     vendor_init = stage_root / "vendor" / "__init__.py"
     vendor_init.parent.mkdir(parents=True, exist_ok=True)
-    vendor_init.write_text('"""Vendor support package for compiled comb2_organize wheels."""\n', encoding="utf-8")
+    vendor_init.write_text('"""Vendor support package for compiled Combo2 wheels."""\n', encoding="utf-8")
 
 
 def copy_tree(source: Path, target: Path) -> None:
@@ -220,6 +253,7 @@ from pathlib import Path
 
 from Cython.Build import cythonize
 from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext as _build_ext
 from setuptools.command.build_py import build_py as _build_py
 
 
@@ -229,6 +263,43 @@ class build_py(_build_py):
         return [(pkg, mod, file) for pkg, mod, file in modules if mod == "__init__"]
 
 
+class build_ext(_build_ext):
+    def _ensure_extension_dirs(self, extensions):
+        for ext in extensions:
+            for source in ext.sources:
+                (Path(self.build_temp) / Path(source).parent).mkdir(parents=True, exist_ok=True)
+
+    def _wrap_compiler(self):
+        if getattr(self.compiler, "_comb2_dir_wrapper", False):
+            return
+
+        original_compile = self.compiler._compile
+
+        def compile_with_dirs(obj, src, ext, cc_args, extra_postargs, pp_opts):
+            Path(obj).parent.mkdir(parents=True, exist_ok=True)
+            return original_compile(obj, src, ext, cc_args, extra_postargs, pp_opts)
+
+        self.compiler._compile = compile_with_dirs
+
+        original_link_shared_object = self.compiler.link_shared_object
+
+        def link_shared_object_with_dirs(objects, output_libname, *args, **kwargs):
+            Path(output_libname).parent.mkdir(parents=True, exist_ok=True)
+            return original_link_shared_object(objects, output_libname, *args, **kwargs)
+
+        self.compiler.link_shared_object = link_shared_object_with_dirs
+        self.compiler._comb2_dir_wrapper = True
+
+    def build_extensions(self):
+        self._wrap_compiler()
+        self._ensure_extension_dirs(self.extensions)
+        super().build_extensions()
+
+    def build_extension(self, ext):
+        self._ensure_extension_dirs([ext])
+        super().build_extension(ext)
+
+
 extensions = [
 {format_extensions(extensions)}
 ]
@@ -236,7 +307,7 @@ extensions = [
 setup(
     name={name!r},
     version={version!r},
-    description="Protected binary wheel for comb2_organize",
+    description="Protected binary wheel for Combo2",
     python_requires=">=3.13,<3.14",
     packages={packages!r},
     ext_modules=cythonize(
@@ -247,7 +318,7 @@ setup(
         }},
         annotate=False,
     ),
-    cmdclass={{"build_py": build_py}},
+    cmdclass={{"build_py": build_py, "build_ext": build_ext}},
     entry_points={{"console_scripts": {CONSOLE_SCRIPTS!r}}},
     install_requires={install_requires!r},
     package_data={{
@@ -307,6 +378,57 @@ def require_compiler() -> None:
     raise RuntimeError("Cython extension build requires gcc or cc, but no compiler was found in PATH.")
 
 
+def require_strip() -> str:
+    strip_bin = shutil.which("strip")
+    if strip_bin:
+        return strip_bin
+    raise RuntimeError("protected wheel strip step requires `strip`, but it was not found in PATH.")
+
+
+def strip_wheel_extensions(wheel: Path) -> None:
+    strip_bin = require_strip()
+    work_dir = wheel.parent / f".strip_{wheel.stem}"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(work_dir)
+        for so_path in sorted(work_dir.rglob("*.so")):
+            subprocess.run([strip_bin, "--strip-unneeded", str(so_path)], check=True)
+        rewrite_wheel_from_dir(work_dir, wheel)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def rewrite_wheel_from_dir(work_dir: Path, wheel: Path) -> None:
+    dist_info_dirs = list(work_dir.glob("*.dist-info"))
+    if len(dist_info_dirs) != 1:
+        raise RuntimeError(f"expected exactly one .dist-info directory in {work_dir}, got {dist_info_dirs}")
+    dist_info = dist_info_dirs[0]
+    record_path = dist_info / "RECORD"
+    entries: list[tuple[str, str, str]] = []
+    if record_path.exists():
+        record_path.unlink()
+    for path in sorted(p for p in work_dir.rglob("*") if p.is_file()):
+        rel = path.relative_to(work_dir).as_posix()
+        digest = hashlib.sha256(path.read_bytes()).digest()
+        b64 = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+        size = str(path.stat().st_size)
+        entries.append((rel, f"sha256={b64}", size))
+    entries.append((record_path.relative_to(work_dir).as_posix(), "", ""))
+    with record_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerows(entries)
+    tmp_wheel = wheel.with_suffix(".tmp.whl")
+    if tmp_wheel.exists():
+        tmp_wheel.unlink()
+    with zipfile.ZipFile(tmp_wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(p for p in work_dir.rglob("*") if p.is_file()):
+            archive.write(path, arcname=path.relative_to(work_dir).as_posix())
+    os.replace(tmp_wheel, wheel)
+
+
 def verify_wheel(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         source_files = sorted(name for name in archive.namelist() if name.endswith(".py"))
@@ -332,10 +454,6 @@ def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path) 
         print(f"  {dep}")
     for module, path in extensions:
         print(f"  {module}: {path}")
-
-
-def normalize_dist_name(name: str) -> str:
-    return name.replace("-", "_").replace(".", "_")
 
 
 if __name__ == "__main__":

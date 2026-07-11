@@ -11,7 +11,7 @@ if str(EVALS_ROOT) not in sys.path:
 import pandas as pd
 
 from comb_eval.io import read_table
-from rundailypnl import DEFAULT_LABEL_PATH, _parse_df_type, calculate_daily_pnl
+from rundailypnl import _parse_df_type, _resolve_label_path, calculate_daily_pnl
 
 from _common import frame_to_text, write_frame, write_text
 
@@ -26,7 +26,8 @@ def main() -> None:
     parser.add_argument("new", help="New pnl path")
     parser.add_argument("--column", default="pnl", help="PnL column name")
     parser.add_argument("--weights", default=",".join(str(x) for x in DEFAULT_WEIGHTS), help="Comma-separated blend weights for new")
-    parser.add_argument("--label", default=DEFAULT_LABEL_PATH, help="Forward-return label path when inputs are signal files")
+    parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--label", help="Explicit forward-return label path when inputs are signal files")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
     parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
     parser.add_argument("--booksize", type=float, default=1e7, help="Booksize when converting signal inputs to pnl")
@@ -41,6 +42,7 @@ def main() -> None:
         args.base,
         args.column,
         label=args.label,
+        cache_path=args.cache_path,
         label_is_table=args.label_is_table,
         label_df_type=_parse_df_type(args.label_df_type),
         booksize=args.booksize,
@@ -52,6 +54,7 @@ def main() -> None:
         args.new,
         args.column,
         label=args.label,
+        cache_path=args.cache_path,
         label_is_table=args.label_is_table,
         label_df_type=_parse_df_type(args.label_df_type),
         booksize=args.booksize,
@@ -78,7 +81,8 @@ def _read_pnl_or_signal(
     path: str,
     column: str,
     *,
-    label: str,
+    label: str | None,
+    cache_path: str | None,
     label_is_table: bool,
     label_df_type: object,
     booksize: float,
@@ -89,9 +93,10 @@ def _read_pnl_or_signal(
     table = read_table(path, start=start, end=end)
     if column in table.columns:
         return table
+    label_path = _resolve_label_path(label, cache_path, "vwap30_label1d")
     return calculate_daily_pnl(
         path,
-        label,
+        label_path,
         label_is_table=label_is_table,
         label_df_type=label_df_type,
         booksize=booksize,

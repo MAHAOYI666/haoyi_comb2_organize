@@ -9,6 +9,16 @@ from .io import read_table
 from .schemas import MetricResult, TRADING_DAYS
 
 
+PERFORMANCE_COLUMNS = (
+    "ret_pct",
+    "longonly_ret_pct",
+    "ir",
+    "longonly_ir",
+    "sharpe",
+    "longonly_sharpe",
+)
+
+
 def sample_ir(values: pd.Series) -> float:
     values = values.dropna().astype(float)
     if len(values) < 2:
@@ -46,6 +56,7 @@ def period_label(df: pd.DataFrame) -> str:
 
 
 def normalize_pnl_columns(df: pd.DataFrame) -> pd.DataFrame:
+    original_columns = set(df.columns)
     rename = {
         "Date": "date",
         "PNL": "pnl",
@@ -66,13 +77,53 @@ def normalize_pnl_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Shortcount": "n_short",
         "shortcount": "n_short",
     }
-    return df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+    normalized = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+    return _complete_longonly_backtest_columns(normalized, original_columns=original_columns)
+
+
+def _complete_longonly_backtest_columns(df: pd.DataFrame, *, original_columns: set[str]) -> pd.DataFrame:
+    required = {"total_asset", "reserve_cash", "pnl", "trade_cost", "tvr_pct", "n_long"}
+    if not required.issubset(df.columns):
+        return df
+    if "short" in df.columns or "n_short" in df.columns:
+        return df
+
+    completed = df.copy()
+    long_value = (completed["total_asset"].astype(float) - completed["reserve_cash"].astype(float)).clip(lower=0.0)
+    if "long" not in completed.columns:
+        completed["long"] = long_value
+    completed["short"] = 0.0
+    completed["n_short"] = 0.0
+    if "tvr" in original_columns:
+        completed["tvr_pct"] = _combo_turnover_to_percent(completed["tvr_pct"])
+    if "sh_hld" not in completed.columns:
+        completed["sh_hld"] = completed["long"].abs() + completed["short"].abs()
+    if "sh_trd" not in completed.columns:
+        completed["sh_trd"] = completed["tvr_pct"].astype(float) / 100.0 * completed["sh_hld"].astype(float)
+    if "longonly_pnl" not in completed.columns:
+        completed["longonly_pnl"] = completed["pnl"]
+    if "longonly_tradecost" not in completed.columns:
+        completed["longonly_tradecost"] = completed["trade_cost"]
+    if "longonly_tvr_pct" not in completed.columns:
+        completed["longonly_tvr_pct"] = completed["tvr_pct"]
+    return completed
+
+
+def _combo_turnover_to_percent(values: pd.Series) -> pd.Series:
+    numeric = values.astype(float)
+    finite_abs = numeric.replace([np.inf, -np.inf], np.nan).abs().dropna()
+    if finite_abs.empty:
+        return numeric
+    if float(finite_abs.quantile(0.95)) <= 5.0:
+        return numeric * 100.0
+    return numeric
 
 
 def summarize_pnl(path: str | Path | pd.DataFrame, start: str | None = None, end: str | None = None) -> MetricResult:
     df = normalize_pnl_columns(read_table(path, start=start, end=end))
     rows = [_summarize_pnl_group(period, group) for period, group in period_groups(df, include_all=False)]
     table = pd.DataFrame(rows).set_index("period")
+    table = _drop_empty_periods(table)
     table.loc["ALL"] = _average_all_row(table)
     return MetricResult("pnl", table, {"input": str(path), "start": start, "end": end})
 
@@ -171,12 +222,22 @@ def _summarize_pnl_group(period: str, df: pd.DataFrame) -> dict[str, float | int
 
 
 def _average_all_row(table: pd.DataFrame) -> pd.Series:
+    if table.empty:
+        return pd.Series({column: np.nan for column in table.columns}, dtype=float)
     row = table.mean(numeric_only=True)
     if "tdays" in table.columns:
         row["tdays"] = table["tdays"].sum()
     if "days" in table.columns:
         row["days"] = table["days"].sum()
     return row
+
+
+def _drop_empty_periods(table: pd.DataFrame) -> pd.DataFrame:
+    columns = [column for column in PERFORMANCE_COLUMNS if column in table.columns]
+    if not columns:
+        return table
+    has_metric = np.isfinite(table[columns].astype(float)).any(axis=1)
+    return table.loc[has_metric].copy()
 
 
 def _series(df: pd.DataFrame, column: str, default: pd.Series | None = None) -> pd.Series:

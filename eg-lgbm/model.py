@@ -13,13 +13,14 @@ class ResearchModel:
         self.config = config
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 16))
-        self.num_features = int(config.get("num_features", 1))
+        self.num_features = int(config.get("num_features_by_freq", {}).get("1d", config.get("num_features", 1)))
         self.learning_rate = float(config.get("lr", 0.05))
         self.num_boost_round = int(config.get("epochs", 100))
         self.trainii: torch.Tensor | None = None
         self.model: lgb.Booster | None = None
 
     def _flatten_feature(self, x: torch.Tensor) -> np.ndarray:
+        x = x["1d"]
         if x.dim() == 4:
             x = x[-1]
         if x.dim() != 3:
@@ -78,12 +79,7 @@ class ResearchModel:
     def predict(self, x_window: torch.Tensor) -> torch.Tensor:
         if self.model is None:
             raise ValueError("model is not fitted")
-        if x_window.dim() == 3:
-            x = self._flatten_feature(x_window)
-        elif x_window.dim() == 4:
-            x = self._flatten_feature(x_window)
-        else:
-            raise ValueError(f"expected 3D or 4D feature tensor, got shape={tuple(x_window.shape)}")
+        x = self._flatten_feature(x_window)
         pred = self.model.predict(x)
         return torch.as_tensor(pred, dtype=self.dtype)
 

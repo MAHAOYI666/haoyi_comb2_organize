@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 import importlib
 import importlib.util
 import json
@@ -47,6 +48,7 @@ import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
+EVAL_ROOT = ORGANIZE_ROOT / "evals"
 organize_root_path = str(ORGANIZE_ROOT)
 if organize_root_path not in sys.path:
     sys.path.insert(0, organize_root_path)
@@ -54,11 +56,13 @@ for local_package_root in (VENDOR_ROOT / "comb2", VENDOR_ROOT / "comb2-pcmaster"
     local_package_path = str(local_package_root)
     if local_package_path not in sys.path:
         sys.path.insert(0, local_package_path)
+if str(EVAL_ROOT) not in sys.path:
+    sys.path.insert(0, str(EVAL_ROOT))
 
-from comb2 import ComboBase, LoaderConfig
-from src.DataLoader import ComboDataLoader, ComboTrainDataset
-from comb2_simbase import IndexMask, Memmaper2, fast
-from comb2_simbase.config import NAN_DTYPE
+from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
+from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase.cache_layout import daily_label_path
+from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress
 
 
@@ -74,6 +78,25 @@ def _load_organize_config_module():
 
 
 organize_config_module = _load_organize_config_module()
+
+
+def load_combo_base_class(combo_config: dict) -> type[ComboBase]:
+    combo_base_path = combo_config["paths"].get("combo_base_path")
+    if not combo_base_path:
+        return ComboBase
+    custom_path = Path(combo_base_path).expanduser().resolve()
+    if not custom_path.exists():
+        raise FileNotFoundError(f"combo base file not found: {custom_path}")
+    spec = importlib.util.spec_from_file_location(f"comb2_research_combo_base_{custom_path.stem}", custom_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    if not hasattr(module, "ComboBase"):
+        raise AttributeError(f"{custom_path} must define ComboBase")
+    custom_cls = getattr(module, "ComboBase")
+    if not isinstance(custom_cls, type) or not issubclass(custom_cls, ComboBase):
+        raise TypeError(f"ComboBase in {custom_path} must inherit from comb2.ComboBase")
+    return custom_cls
 
 
 def _parse_positive_int(name: str, value: Any) -> int:
@@ -117,20 +140,36 @@ def configure_torch_threads(organize_config: dict):
 
 
 class Node:
-    def __init__(self, config: dict):
+    def __init__(self, organize_config: dict):
+        config = organize_config["combo"]
         instsz = len(IndexMask().code)
         self.alpha = torch.zeros(instsz, dtype=config["loader"]["dtype"])
         self.alpha_history: dict[int, torch.Tensor] = {}
 
-        for section in ("paths", "runtime", "model", "output", "defaults"):
+        for section in ("paths", "runtime", "model", "output"):
             for key, value in config[section].items():
                 setattr(self, key, value)
 
         self.model_config = dict(config["model"])
         loader_fields = {field.name for field in fields(LoaderConfig)}
         loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
+        loader_config["cache_path"] = organize_config["constants"]["cache_path"]
         loader_config["verbose"] = bool(getattr(self, "verbose", False))
         self.loader_config = LoaderConfig(**loader_config)
+
+
+class TeeStream:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, value: str) -> int:
+        for stream in self.streams:
+            stream.write(value)
+        return len(value)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
 
 
 def _print_metric_table(title: str, columns: list[tuple[str, str, int]]) -> None:
@@ -168,79 +207,35 @@ def print_live_metrics(meta: dict):
     _print_metric_table("[LIVE]", columns)
 
 
-BASE_UNIVERSE_MASK_PATH = "1d_StockMask2/StockMask2.BaseUnivMask"
-TRADING_MASK_PATH = "1d_StockMask2/StockMask2.LimitMask"
-
-
-def load_shifted_mask(mask_path: str, start_ds: int, end_ds: int, shift_n: int = -1) -> np.ndarray:
-    mask = Memmaper2(mask_path).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:].values
-    if shift_n == 0:
-        return mask
-    if shift_n != -1:
-        raise ValueError(f"unsupported mask shift_n={shift_n}")
-
-    if mask.shape[0] == 1:
-        raise ValueError("need at least one array to concatenate")
-    shifted = np.full_like(mask, np.nan, dtype=np.float64)
-    if mask.shape[0] > 2:
-        shifted[1:-1] = mask[2:]
-    return shifted
-
-
-def apply_mask(y: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
-    mask_tensor = torch.as_tensor(mask, dtype=y.dtype, device=y.device)
-    return y * mask_tensor
-
-
-def process_label(y, start_ds: int, end_ds: int, ashare_data_path: str):
-    y = fast.purify(y)
-    base_mask = load_shifted_mask(f"{ashare_data_path}/{BASE_UNIVERSE_MASK_PATH}", start_ds, end_ds, shift_n=-1)
-    trading_mask = load_shifted_mask(f"{ashare_data_path}/{TRADING_MASK_PATH}", start_ds, end_ds, shift_n=-1)
-    y = apply_mask(y, base_mask)
-    y = apply_mask(y, trading_mask)
-    return y
-
-
-def get_backtest_label(ashare_data_path: str, period: str, start_ds: int, end_ds: int):
-    label = Memmaper2(f"{ashare_data_path}/1d_DailyLabel/DailyLabel.vwap30_label{period}").load(
+def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int):
+    label = Memmaper2(daily_label_path(cache_path, f"vwap30_label{period}")).load(
         start_ds=start_ds,
         end_ds=end_ds,
         df_type=True,
     ).dloc[:]
-    return label.mask(np.isnan(label), NAN_DTYPE)
+    return label.astype(float)
 
 
-def calculate_alpha_ic(alpha: pd.DataFrame, ashare_data_path: str) -> pd.DataFrame:
+def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str) -> pd.DataFrame:
     if alpha.index.nlevels > 1:
         alpha = alpha.reset_index("times", drop=True).sort_index()
     date_idx = alpha.index.astype(int)
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
-    x = alpha.values
-
-    label_1d = get_backtest_label(ashare_data_path, "1d", start_time, end_time).reindex(index=date_idx).values
-    label_5d = get_backtest_label(ashare_data_path, "5d", start_time, end_time).reindex(index=date_idx).values
-
-    x_masked = process_label(torch.tensor(x), start_time, end_time, ashare_data_path).numpy()
-    label_1d_masked = process_label(torch.tensor(label_1d), start_time, end_time, ashare_data_path).numpy()
-    label_5d_masked = process_label(torch.tensor(label_5d), start_time, end_time, ashare_data_path).numpy()
-
-    ic_1d = fast.corr(x_masked, label_1d_masked, dim=-1, keepdims=True)
-    ic_perc = fast.corr(fast.perc_long(x_masked), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
-    ic_rank = fast.corr(fast.rank(x_masked, dim=-1), fast.rank(label_1d_masked, dim=-1), dim=-1, keepdims=True)
-    ic_5d = fast.corr(x_masked, label_5d_masked, dim=-1, keepdims=True)
-    x_cov = (~np.isnan(x_masked) & ~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
-    label_cov = (~np.isnan(label_1d_masked)).sum(axis=1).astype(float)
-    label_cov[label_cov == 0] = np.nan
-    coverage = x_cov / label_cov
-    daily_ic = np.concatenate([ic_1d, ic_5d, ic_rank, ic_perc, coverage[:, np.newaxis]], axis=-1)
-    return pd.DataFrame(daily_ic, index=date_idx, columns=["ic", "5dic", "rankic", "percic", "coverage"])
+    label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
+    label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    evaluation_mask = load_evaluation_mask(alpha, cache_path)
+    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
+    daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
+    daily_ic.index = daily_ic.index.strftime("%Y%m%d").astype(int)
+    return daily_ic
 
 
-def dump_alpha_analysis(node: Node, combo_config: dict):
+def dump_alpha_analysis(node: Node, organize_config: dict):
     if not node.alpha_history:
         return
+    combo_config = organize_config["combo"]
     output_dir = Path(combo_config["paths"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     alpha_history_path = Path(combo_config["output"]["alpha_history_path"])
@@ -256,8 +251,7 @@ def dump_alpha_analysis(node: Node, combo_config: dict):
     alpha_path = output_dir / "alpha.parquet"
     alpha.to_parquet(alpha_path)
 
-    ashare_data_path = combo_config["loader"]["ashare_data_path"]
-    daily_ic = calculate_alpha_ic(alpha, ashare_data_path)
+    daily_ic = calculate_alpha_ic(alpha, organize_config["constants"]["cache_path"])
     daily_ic_path = output_dir / "daily_ic"
     daily_ic.to_csv(daily_ic_path, sep="\t", na_rep="NAN")
     print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
@@ -300,6 +294,7 @@ class ExperimentRunner:
         self.monitor = monitor
         self.config_path = str(Path(config_path).expanduser().resolve()) if config_path else None
         self.live_mode = bool(self.combo_config["runtime"].get("livetrading", False))
+        self.combo_base_cls = load_combo_base_class(self.combo_config)
         self.node: Node | None = None
         self.combo: ComboBase | None = None
         self.codes: pd.Index | None = None
@@ -307,9 +302,9 @@ class ExperimentRunner:
         self.live_output_dir = Path(self.combo_config["paths"]["output_dir"]) / "live"
 
     def setup(self):
-        self.node = Node(self.combo_config)
+        self.node = Node(self.organize_config)
         self.node.monitor = self.monitor
-        self.combo = ComboBase(self.node)
+        self.combo = self.combo_base_cls(self.node)
         if self.monitor.enabled:
             install_research_model_decorators(self.monitor, self.combo.research_model_cls)
         self.codes = pd.Index([str(code).zfill(6) for code in IndexMask().code], name="code")
@@ -351,7 +346,7 @@ class ExperimentRunner:
         if not self.combo_config["output"].get("enable_alpha_analysis", True):
             print("[IC] alpha analysis disabled by config")
             return
-        dump_alpha_analysis(self.node, self.combo_config)
+        dump_alpha_analysis(self.node, self.organize_config)
 
     def live_step(self, date_int: int, alpha) -> dict:
         if self.combo.model is None or int(self.combo.model_dt) < 0:
@@ -465,6 +460,16 @@ def main() -> int:
     if config_path is None:
         return 2
     organize_config = organize_config_module.load_config(config_path)
+    log_path = Path(organize_config["combo"]["output"]["log_path"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        stdout = TeeStream(sys.stdout, log_file)
+        stderr = TeeStream(sys.stderr, log_file)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            return run_loaded_config(organize_config, config_path)
+
+
+def run_loaded_config(organize_config: dict, config_path: str) -> int:
     configure_torch_threads(organize_config)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:

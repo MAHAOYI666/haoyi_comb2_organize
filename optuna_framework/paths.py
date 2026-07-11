@@ -110,7 +110,7 @@ def _build_run_paths(
         score_start_ds, score_end_ds = _coerce_window(score_window, "score_window")
     run_dir = run_dir.resolve()
     output_root = (run_dir / "output").resolve()
-    checkpoint_root = (run_dir / "checkpoints").resolve()
+    checkpoint_root = (output_root / "checkpoints").resolve()
     return RunPaths(
         study_root=study_root,
         run_dir=run_dir,
@@ -139,4 +139,3 @@ def _coerce_window(window: tuple[int, int], name: str) -> tuple[int, int]:
     if start_ds > end_ds:
         raise ValueError(f"{name} start_ds must be <= end_ds: {start_ds}-{end_ds}")
     return start_ds, end_ds
-

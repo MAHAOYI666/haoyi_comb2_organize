@@ -7,7 +7,6 @@ variables:
   COMBO2_DIST_DIR: dist_protected
   COMBO2_PUBLISH_DIR: /home/shared/data2/codes/factorsimteam/combo/combo2
   COMBO2_BUILD_EXTRA_ARGS: ""
-  COMBO2_WHEEL_VERSION: "0.1.0"
 
 
 build:
@@ -122,7 +121,7 @@ build:
         exit 1
       fi
 
-      "${COMBO2_PYTHON}" packaging/build_protected_wheel.py --python "${COMBO2_PYTHON}" --name combo2 --version "${COMBO2_WHEEL_VERSION}" --dist-dir "${COMBO2_DIST_DIR}" ${COMBO2_BUILD_EXTRA_ARGS}
+      "${COMBO2_PYTHON}" packaging/build_protected_wheel.py --python "${COMBO2_PYTHON}" --dist-dir "${COMBO2_DIST_DIR}" ${COMBO2_BUILD_EXTRA_ARGS}
       mkdir -p "${COMBO2_PUBLISH_DIR}"
       cp -v "${COMBO2_DIST_DIR}"/combo2-*.whl "${COMBO2_PUBLISH_DIR}/"
   artifacts:

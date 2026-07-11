@@ -3,12 +3,19 @@ from __future__ import annotations
 from copy import deepcopy
 import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 import xml.etree.ElementTree as ET
 
 import torch
 
 ORGANIZE_ROOT = Path(__file__).resolve().parent
+LOCAL_SIMBASE_ROOT = ORGANIZE_ROOT / "vendor" / "comb2-simbase"
+if LOCAL_SIMBASE_ROOT.is_dir() and str(LOCAL_SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(LOCAL_SIMBASE_ROOT))
+
+from comb2_simbase.cache_layout import daily_label_path
+
 VENDOR_ROOT = ORGANIZE_ROOT / "vendor"
 COMB2_ROOT = VENDOR_ROOT / "comb2"
 PCM_ROOT = VENDOR_ROOT / "comb2-pcmaster"
@@ -31,7 +38,7 @@ def _default_strategy_path() -> str:
 def _builtin_factor_item(path: str) -> dict[str, Any]:
     return {
         "name": f"alpha.{path}",
-        "module": "builtin.factor",
+        "module": "builtin.factorsim",
         "path": path,
         "role": "factor",
         "mode": "read_dump",
@@ -41,10 +48,10 @@ def _builtin_factor_item(path: str) -> dict[str, Any]:
     }
 
 
-def _builtin_label_item(path: str = "label1d") -> dict[str, Any]:
+def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
     return {
         "name": "label.default",
-        "module": "builtin.label",
+        "module": "builtin.factorsim",
         "path": path,
         "role": "label",
         "mode": "read_dump",
@@ -69,9 +76,7 @@ DEFAULT_FACTOR_PATHS = (
 DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
-        "factor_root": "data/Factor/FactorData",
         "output_root": str(COMB2_ROOT / "output"),
-        "checkpoint_root": None,
     },
     "strategy": {
         "start_ds": 20160111,
@@ -80,31 +85,28 @@ DEFAULT_CONFIG = {
     },
     "combo": {
         "paths": {
-            "base_dir": str(COMB2_ROOT),
-            "output_dir": str(COMB2_ROOT / "output"),
             "model_path": str(COMB2_ROOT / "lgbm_model.py"),
+            "combo_base_path": None,
             "research_loader_path": None,
             "research_dataset_path": None,
-            "checkpoint_root": None,
         },
         "output": {
-            "alpha_history_path": str(COMB2_ROOT / "output" / "alpha_history.pt"),
-            "log_path": str(COMB2_ROOT / "output" / "train.log"),
             "enable_alpha_analysis": True,
         },
         "runtime": {
             "snaptime": "mlp_minimal",
+            "snap_ti": None,
+            "seed": None,
+            "deterministic": False,
             "livetrading": False,
             "trainDelay": 0,
             "retDays": 1,
             "tsDays": 8,
             "load_chunk_days": None,
-            "processed_feature_cache": False,
             "torch_threads": 64,
             "torch_interop_threads": 1,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
-            "select_days": 100,
             "max_train_days": 2000,
             "verbose": False,
         },
@@ -116,25 +118,16 @@ DEFAULT_CONFIG = {
             "attrs": {},
         },
         "loader": {
-            "ashare_data_path": None,
             "dtype": torch.float16,
             "compression": "none",
             "data_start_ds": 20160101,
             "data_offset": 1024,
-            "valid_path": None,
-            "filtered_path": None,
-            "base_universe_path": None,
             "data_items": (),
             "data_presets": (),
-            "factor_root": None,
             "config_path": None,
-        },
-        "defaults": {
-            "selection_module": None,
         },
     },
     "backtest": {
-        "output_path": str(COMB2_ROOT / "output" / "backtest"),
         "daily_metrics_file": "daily_pnl.csv",
         "cash": 10000000.0,
         "fee_rate": 0.0015,
@@ -165,39 +158,39 @@ DTYPE_MAP = {
 
 PATH_FIELDS = {
     ("constants", "cache_path"),
-    ("constants", "factor_root"),
     ("constants", "output_root"),
-    ("constants", "checkpoint_root"),
     ("strategy", "path"),
-    ("combo", "paths", "base_dir"),
-    ("combo", "paths", "output_dir"),
     ("combo", "paths", "model_path"),
+    ("combo", "paths", "combo_base_path"),
     ("combo", "paths", "research_loader_path"),
     ("combo", "paths", "research_dataset_path"),
-    ("combo", "paths", "checkpoint_root"),
-    ("combo", "output", "alpha_history_path"),
-    ("combo", "output", "log_path"),
-    ("combo", "loader", "ashare_data_path"),
-    ("combo", "loader", "valid_path"),
-    ("combo", "loader", "filtered_path"),
-    ("combo", "loader", "base_universe_path"),
-    ("backtest", "output_path"),
     ("monitor", "output_path"),
 }
 
 DATA_PATH_FIELDS = {"path", "config_path"}
 BUILTIN_DATA_PRESETS = {"barra"}
+DATA_FREQ_ORDER = ("1d", "5m", "1m")
+SUPPORTED_DATA_FREQS = set(DATA_FREQ_ORDER)
+SUPPORTED_DATA_OPS = {
+    "cs_zscore",
+    "zscore",
+    "rank",
+    "truncate",
+    "nan_to_num",
+    "fillna",
+    "winsorize_by_quantile",
+    "normalize_by_max_abs",
+    "rolling_mean",
+    "rolling_std",
+    "neut",
+}
 DATA_ATTR_DEFAULTS = {
     key: DEFAULT_CONFIG["combo"]["loader"][key]
     for key in (
-        "ashare_data_path",
         "dtype",
         "compression",
         "data_start_ds",
         "data_offset",
-        "valid_path",
-        "filtered_path",
-        "base_universe_path",
     )
 }
 
@@ -282,6 +275,9 @@ def _parse_feature_ops(feature_element: ET.Element) -> tuple[dict[str, Any], ...
         name = op_element.attrib.get("name")
         if not name:
             raise ValueError(f"<op> under <{feature_element.tag}> requires name")
+        op_name = name.split("(", 1)[0].strip().lower()
+        if op_name not in SUPPORTED_DATA_OPS:
+            raise ValueError(f"unsupported data op: {name}")
         params = {key: _parse_scalar(value) for key, value in op_element.attrib.items() if key != "name"}
         ops.append({"name": name, "params": params})
     return tuple(ops)
@@ -294,7 +290,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     config_path = attrs.pop("config_path", None)
     mode = attrs.pop("mode", "read_dump")
     role = attrs.pop("role", "aux")
-    module = attrs.pop("module", None)
+    module = attrs.pop("module", "builtin.factorsim")
     legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
     if legacy_keys:
         extra = ", ".join(sorted(legacy_keys))
@@ -302,13 +298,25 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     if not name:
         raise ValueError("<item> requires name")
     if not module:
-        raise ValueError(f"<item name='{name}'> requires module")
+        module = "builtin.factorsim"
+    if "nbar" in attrs:
+        raise ValueError(f"<item name='{name}'> uses unsupported attribute nbar")
+    role = str(role).lower()
+    freq = str(attrs.pop("freq", "1d") or "1d").strip().lower()
+    if freq not in SUPPORTED_DATA_FREQS:
+        supported = ", ".join(DATA_FREQ_ORDER)
+        raise ValueError(f"<item name='{name}'> has unsupported freq={freq!r}; expected one of {supported}")
+    if role == "label" and freq != "1d":
+        raise ValueError(f"<item name='{name}'> role='label' only supports freq='1d'")
+    if role == "label" and not path:
+        path = "vwap30_label1d"
     params = {key: _parse_scalar(value) for key, value in attrs.items()}
+    params["freq"] = freq
     return {
         "name": str(name),
         "module": str(module),
         "path": path,
-        "role": str(role),
+        "role": role,
         "mode": mode,
         "config_path": config_path,
         "ops": _parse_feature_ops(item_element),
@@ -368,7 +376,15 @@ def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     return str(path.resolve())
 
 
-def _resolve_data_item_path(value: str | None, *, module: str, field: str, factor_root: str, base_dir: Path) -> str | None:
+def _resolve_data_item_path(
+    value: str | None,
+    *,
+    module: str,
+    role: str,
+    field: str,
+    cache_path: str,
+    base_dir: Path,
+) -> str | None:
     if value is None:
         return None
     path = Path(value).expanduser()
@@ -377,12 +393,10 @@ def _resolve_data_item_path(value: str | None, *, module: str, field: str, facto
         normalized_module = normalized_module.removeprefix("builtin.")
     if path.is_absolute():
         return str(path.resolve())
-    if field == "path" and normalized_module == "factor":
-        return str((Path(factor_root) / path).resolve())
     if field == "path" and normalized_module == "barra_style":
         return value
-    if field == "path" and normalized_module == "label" and value == "label1d":
-        return value
+    if field == "path" and str(role).strip().lower() == "label":
+        return str(daily_label_path(cache_path, str(value)).resolve())
     return str((base_dir / path).resolve())
 
 
@@ -398,7 +412,7 @@ def _resolve_data_pack(
     parsed: dict[str, Any],
     *,
     base_dir: Path,
-    factor_root: str,
+    cache_path: str,
     seen_paths: set[tuple[str, tuple[str, ...] | None]],
     presets: list[str],
 ) -> list[dict[str, Any]]:
@@ -427,7 +441,7 @@ def _resolve_data_pack(
         nested_items = _resolve_data_pack(
             nested,
             base_dir=nested_path.parent,
-            factor_root=factor_root,
+            cache_path=cache_path,
             seen_paths=seen_paths,
             presets=nested_presets,
         )
@@ -444,8 +458,9 @@ def _resolve_data_pack(
             resolved_item[field] = _resolve_data_item_path(
                 resolved_item.get(field),
                 module=module,
+                role=str(resolved_item.get("role", "aux")),
                 field=field,
-                factor_root=factor_root,
+                cache_path=cache_path,
                 base_dir=base_dir,
             )
         resolved_items.append(resolved_item)
@@ -455,22 +470,13 @@ def _resolve_data_pack(
 def _apply_constant_paths(config: dict) -> dict:
     updated = deepcopy(config)
     constants = updated["constants"]
-    cache_path = Path(constants["cache_path"]) / "AshareCache"
+    cache_path = Path(constants["cache_path"])
     output_root = Path(constants["output_root"])
 
     updated["combo"]["paths"]["output_dir"] = str(output_root)
-    updated["combo"]["paths"]["checkpoint_root"] = constants["checkpoint_root"]
+    updated["combo"]["paths"]["checkpoint_root"] = str(output_root / "checkpoints")
     updated["combo"]["output"]["alpha_history_path"] = str(output_root / "alpha_history.pt")
     updated["combo"]["output"]["log_path"] = str(output_root / "train.log")
-    loader_config = updated["combo"]["loader"]
-    if loader_config.get("ashare_data_path") is None:
-        loader_config["ashare_data_path"] = str(cache_path)
-    if loader_config.get("valid_path") is None:
-        loader_config["valid_path"] = str(cache_path / "Ashare")
-    if loader_config.get("filtered_path") is None:
-        loader_config["filtered_path"] = str(cache_path / "AshareFiltered")
-    if loader_config.get("base_universe_path") is None:
-        loader_config["base_universe_path"] = str(cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")
     updated["backtest"]["output_path"] = str(output_root / "backtest")
     return updated
 
@@ -481,7 +487,7 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     if data_attrs:
         normalized_config["combo"]["loader"].update(data_attrs)
 
-    resolved = _apply_constant_paths(normalized_config)
+    resolved = deepcopy(normalized_config)
     for path_key in PATH_FIELDS:
         section = resolved
         for key in path_key[:-1]:
@@ -489,13 +495,13 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         leaf_key = path_key[-1]
         if leaf_key in section:
             section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
+    resolved = _apply_constant_paths(resolved)
 
-    factor_root = resolved["constants"]["factor_root"]
     presets: list[str] = list(resolved["combo"].get("data", {}).get("presets", ()))
     data_items = _resolve_data_pack(
         resolved["combo"].get("data", {"imports": (), "items": ()}),
         base_dir=base_dir,
-        factor_root=factor_root,
+        cache_path=resolved["constants"]["cache_path"],
         seen_paths=set(),
         presets=presets,
     )
@@ -506,9 +512,46 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     }
     resolved["combo"]["loader"]["data_items"] = tuple(data_items)
     resolved["combo"]["loader"]["data_presets"] = tuple(presets)
-    resolved["combo"]["loader"]["factor_root"] = factor_root
     resolved["combo"]["loader"]["config_path"] = str(base_dir.resolve())
+    _validate_config(resolved)
     return resolved
+
+
+def _validate_config(config: dict) -> None:
+    runtime = config["combo"]["runtime"]
+    nonnegative = ("trainDelay",)
+    positive = ("retDays", "tsDays", "max_train_days", "torch_threads", "torch_interop_threads")
+    for name in nonnegative:
+        if int(runtime[name]) < 0:
+            raise ValueError(f"combo.runtime.{name} must be nonnegative")
+    for name in positive:
+        if int(runtime[name]) <= 0:
+            raise ValueError(f"combo.runtime.{name} must be positive")
+    if runtime.get("load_chunk_days") is not None and int(runtime["load_chunk_days"]) <= 0:
+        raise ValueError("combo.runtime.load_chunk_days must be positive when set")
+    if int(runtime["max_train_days"]) < int(runtime["tsDays"]):
+        raise ValueError("combo.runtime.max_train_days must be at least tsDays")
+    smooth_rate = float(runtime["model_smooth_rate"])
+    if not 0.0 <= smooth_rate <= 1.0:
+        raise ValueError("combo.runtime.model_smooth_rate must be between 0 and 1")
+
+    loader = config["combo"]["loader"]
+    if int(loader["data_offset"]) < 0:
+        raise ValueError("combo.data.data_offset must be nonnegative")
+
+    strategy = config["strategy"]
+    if int(strategy["start_ds"]) > int(strategy["end_ds"]):
+        raise ValueError("strategy.start_ds must not be after end_ds")
+
+    backtest = config["backtest"]
+    if float(backtest["fee_rate"]) < 0:
+        raise ValueError("backtest.fee_rate must be nonnegative")
+    if not 0.0 < float(backtest["reserve_cash"]) <= 1.0:
+        raise ValueError("backtest.reserve_cash must be in (0, 1]")
+    if float(backtest["drawdown_stop"]) < 0:
+        raise ValueError("backtest.drawdown_stop must be nonnegative")
+    if int(backtest["cooldown_days"]) < 0:
+        raise ValueError("backtest.cooldown_days must be nonnegative")
 
 
 def _load_xml_config(path: str) -> dict:
@@ -529,8 +572,9 @@ def _load_xml_config(path: str) -> dict:
             "output": _parse_section_attributes(combo_element.find("output"), DEFAULT_CONFIG["combo"]["output"]),
             "runtime": _parse_section_attributes(combo_element.find("runtime"), DEFAULT_CONFIG["combo"]["runtime"]),
             "model": _parse_section_attributes(combo_element.find("model"), DEFAULT_CONFIG["combo"]["model"], allow_extra=True),
-            "defaults": _parse_section_attributes(combo_element.find("defaults"), DEFAULT_CONFIG["combo"]["defaults"]),
         }
+        if combo_element.find("defaults") is not None:
+            raise ValueError("<combo><defaults> is no longer supported")
         data_element = combo_element.find("data")
         if data_element is not None:
             combo["data"] = _parse_data_section(data_element) or {"attrs": {}, "imports": (), "items": ()}

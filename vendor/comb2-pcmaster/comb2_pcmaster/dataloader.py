@@ -8,13 +8,20 @@ if str(SIMBASE_ROOT) not in sys.path:
     sys.path.insert(0, str(SIMBASE_ROOT))
 
 from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase.cache_layout import (
+    BASE_UNIVERSE_MASK_NAME,
+    FILTERED_MASK_NAME,
+    SUSPEND_MASK_NAME,
+    ashare_cache_path,
+    stock_mask_path,
+)
 
 
 class DataLoader:
     def __init__(self, signal_path: str = "", cache_path: str = ""):
         self.signal_path = signal_path
         self.cache_path = Path(cache_path)
-        self.ashare_cache_path = self.cache_path / "AshareCache"
+        self.ashare_cache_path = ashare_cache_path(self.cache_path)
         self.trade_date = sorted(IndexMask().date)
         self.date = None
 
@@ -39,10 +46,10 @@ class DataLoader:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyFdm" / "DailyFdm.mkt_cap")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
     def get_suspend(self, start_ds, end_ds) -> pd.DataFrame:
-        return Memmaper2(str(self.ashare_cache_path / "1d_StockMask2" / "StockMask2.SuspendStock")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+        return Memmaper2(str(stock_mask_path(self.cache_path, SUSPEND_MASK_NAME))).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
     def get_limit(self, start_ds, end_ds) -> pd.DataFrame:
-        return Memmaper2(str(self.ashare_cache_path / "1d_StockMask2" / "StockMask2.LimitMask")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+        return Memmaper2(str(stock_mask_path(self.cache_path, FILTERED_MASK_NAME))).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
     def get_base(self, start_ds, end_ds) -> pd.DataFrame:
-        return Memmaper2(str(self.ashare_cache_path / "1d_StockMask2" / "StockMask2.BaseUnivMask")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+        return Memmaper2(str(stock_mask_path(self.cache_path, BASE_UNIVERSE_MASK_NAME))).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]

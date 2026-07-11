@@ -3,6 +3,8 @@
 Build a Cython-based wheel that hides implementation modules as native `.so`
 extensions while keeping only minimal package `__init__.py` wrappers.
 
+The wheel version is read from the repository-root `VERSION` file by default.
+
 Dry run:
 
 ```bash
@@ -24,8 +26,13 @@ dist_protected/*.whl
 Install the wheel in a Python 3.13 environment:
 
 ```bash
-python -m pip install dist_protected/comb2_organize-0.1.0-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-<version>-cp313-cp313-linux_x86_64.whl
 ```
+
+Exact release version and current install target are tracked in `../RELEASE.md`.
+
+The only published distribution name is `combo2`. The build script does not accept
+name or version overrides; its version is read exclusively from `../VERSION`.
 
 Run after installation:
 
@@ -40,7 +47,7 @@ The numpy pin follows `../aresium/pdm.lock`; pandas and pyarrow follow the
 Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
 `python3.13` is not on `PATH`, pass an absolute path with `--python`.
 
-The resulting wheel contains all local comb2_organize runtime code. Third-party
+The resulting wheel contains all local Combo2 runtime code. Third-party
 packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
 psutil, and Plotly are not bundled into the wheel; they are declared in the
 wheel metadata so `pip install` can resolve and install them for the target
@@ -48,11 +55,11 @@ Python 3.13 environment.
 
 The build compiles:
 
-- `config`, `runCombo`, `runEval`, `comboRunner`, `runAblationByZero`, `runPosCorr`
+- `config`, `runCombo`, `runEval`, `comboRunner`, `runPosCorr`
 - `vendor/comb2-simbase` (`comb2_simbase` import package)
 - `optuna_framework`
 - `comb_eval`
-- vendor packages: `src`, `comb2`, `comb2_pcmaster`, `comb2_metrics`
+- vendor packages: `comb2`, `comb2_pcmaster`, `comb2_metrics`
 - `vendor.perf_monitor`
 
 The script verifies that the resulting wheel does not contain protected `.py`
@@ -73,5 +80,4 @@ Installed commands include:
 - `comb-run`
 - `comb-eval`
 - `comb-combo-runner`
-- `comb-ablation-zero`
 - `comb-pos-corr`

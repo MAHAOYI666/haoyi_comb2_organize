@@ -12,6 +12,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from comb2_simbase.cache_layout import (
+    BASE_UNIVERSE_MASK_NAME,
+    FILTERED_MASK_NAME,
+    daily_label_path,
+    stock_mask_path,
+)
+
 warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
 
 from .exposure import compute_barra_style_exposure
@@ -64,7 +71,7 @@ class ConfigEvalArtifacts:
     label_df_type: object
     booksize: float
     tradecost_ratio: float
-    ashare_cache_path: Path
+    cache_path: Path
 
 
 @dataclass
@@ -122,6 +129,8 @@ def run_config_evaluation(
     skip_exposure: bool = False,
 ) -> ConfigEvalResult:
     config = _load_organize_config(config_path)
+    eval_start = start or _strategy_date(config, "start_ds")
+    eval_end = end or _strategy_date(config, "end_ds")
     artifacts = _resolve_artifacts(
         Path(config_path).expanduser().resolve(),
         config,
@@ -138,12 +147,14 @@ def run_config_evaluation(
     artifacts.report_dir.mkdir(parents=True, exist_ok=True)
 
     messages: list[str] = []
-    alpha = _read_alpha(artifacts.alpha_path, start=start, end=end)
+    alpha = _read_alpha(artifacts.alpha_path, start=eval_start, end=eval_end)
     if alpha.empty:
         raise ValueError(f"alpha has no rows after date filtering: {artifacts.alpha_path}")
 
     label_1d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
     label_5d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
+    evaluation_mask = load_evaluation_mask(alpha, artifacts.cache_path)
+    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
     daily_pnl = calculate_daily_pnl_from_signal(
         alpha,
@@ -152,8 +163,8 @@ def run_config_evaluation(
         tradecost_ratio=artifacts.tradecost_ratio,
     )
 
-    ic_result = summarize_ic(daily_ic, start=start, end=end, normalize_names=True)
-    pnl_result = summarize_pnl_with_benchmark(daily_pnl, pnlzz500_path, start=start, end=end)
+    ic_result = summarize_ic(daily_ic, start=eval_start, end=eval_end, normalize_names=True)
+    pnl_result = summarize_pnl_with_benchmark(daily_pnl, pnlzz500_path, start=eval_start, end=eval_end)
     ic_summary = ic_result.table if ic_result is not None else None
     pnl_summary = pnl_result.table if pnl_result is not None else None
     ic_checks = evaluate_result(ic_result) if ic_result is not None else None
@@ -172,7 +183,7 @@ def run_config_evaluation(
                 booksize=artifacts.booksize,
                 tradecost_ratio=artifacts.tradecost_ratio,
             )
-            decile_summary = summarize_decile_daily_pnls(decile_daily, start=start, end=end)
+            decile_summary = summarize_decile_daily_pnls(decile_daily, start=eval_start, end=eval_end)
             top10_excess = compute_top10_excess(decile_daily, daily_pnl, artifacts.booksize)
         except Exception as exc:  # pragma: no cover - depends on local data/cache availability
             messages.append(f"decile backtest unavailable: {exc}")
@@ -184,10 +195,10 @@ def run_config_evaluation(
         try:
             exposure = compute_barra_style_exposure(
                 alpha,
-                start_ds=int(start) if start is not None else None,
-                end_ds=int(end) if end is not None else None,
+                start_ds=int(eval_start) if eval_start is not None else None,
+                end_ds=int(eval_end) if eval_end is not None else None,
                 mode=0,
-                ashare_cache_path=artifacts.ashare_cache_path,
+                cache_path=artifacts.cache_path,
             )
             exposure_summary = summarize_exposure(exposure)
         except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
@@ -203,6 +214,8 @@ def run_config_evaluation(
         exposure_summary=exposure_summary,
         top10_excess=top10_excess,
         messages=messages,
+        start=eval_start,
+        end=eval_end,
     )
     plot_signal_analysis(
         artifacts.plot_path,
@@ -245,6 +258,13 @@ def check_config_outputs(config_path: str | Path) -> ConfigOutputCheck:
         output_root=output_root,
         files=files,
     )
+
+
+def _strategy_date(config: dict, key: str) -> str | None:
+    value = config.get("strategy", {}).get(key)
+    if value in (None, ""):
+        return None
+    return str(value)
 
 
 def calculate_daily_pnl_from_signal(
@@ -316,9 +336,14 @@ def calculate_decile_daily_pnls(
     tradecost_ratio: float = 0.0,
 ) -> dict[str, pd.DataFrame]:
     signal = normalize_date_index(signal)
+    signal_values = signal.astype(float)
     percentile = signal.rank(axis=1, pct=True, method="first").to_numpy(dtype=float)
+    finite_count = np.isfinite(signal_values.to_numpy()).sum(axis=1)
+    row_min = signal_values.min(axis=1, skipna=True).to_numpy(dtype=float)
+    row_max = signal_values.max(axis=1, skipna=True).to_numpy(dtype=float)
+    has_cross_sectional_signal = (finite_count >= 2) & np.isfinite(row_min) & np.isfinite(row_max) & (row_min < row_max)
     buckets = np.full(percentile.shape, -1, dtype=np.int16)
-    valid = np.isfinite(percentile)
+    valid = np.isfinite(percentile) & has_cross_sectional_signal[:, None]
     buckets[valid] = np.minimum((percentile[valid] * 10).astype(np.int16), 9)
 
     output: dict[str, pd.DataFrame] = {}
@@ -519,7 +544,7 @@ def _resolve_artifacts(
         if tradecost_ratio is not None
         else _tradecost_ratio_from_fee(config["backtest"].get("fee_rate", 0.0))
     )
-    ashare_cache_path = Path(config["combo"]["loader"]["ashare_data_path"]).expanduser().resolve()
+    cache_path = Path(config["constants"]["cache_path"]).expanduser().resolve()
     return ConfigEvalArtifacts(
         config_path=config_path,
         output_root=output_root,
@@ -533,7 +558,7 @@ def _resolve_artifacts(
         label_df_type=label_df_type,
         booksize=resolved_booksize,
         tradecost_ratio=resolved_tradecost_ratio,
-        ashare_cache_path=ashare_cache_path,
+        cache_path=cache_path,
     )
 
 
@@ -565,11 +590,11 @@ def _file_status(name: str, path: Path) -> OutputFileStatus:
 
 
 def _default_label_path(config: dict[str, Any]) -> Path:
-    return Path(config["combo"]["loader"]["ashare_data_path"]) / "1d_DailyLabel" / "DailyLabel.vwap30_label1d"
+    return daily_label_path(config["constants"]["cache_path"], "vwap30_label1d")
 
 
 def _default_label_5d_path(config: dict[str, Any]) -> Path:
-    return Path(config["combo"]["loader"]["ashare_data_path"]) / "1d_DailyLabel" / "DailyLabel.vwap30_label5d"
+    return daily_label_path(config["constants"]["cache_path"], "vwap30_label5d")
 
 
 def _tradecost_ratio_from_fee(fee_rate: float) -> float:
@@ -582,19 +607,7 @@ def _read_alpha(path: Path, *, start: str | None, end: str | None) -> pd.DataFra
 
 
 def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame, label_5d: pd.DataFrame) -> pd.DataFrame:
-    signal = normalize_date_index(signal)
-    label_1d = normalize_date_index(label_1d)
-    label_5d = normalize_date_index(label_5d)
-    signal.columns = signal.columns.astype(str).str.zfill(6)
-    label_1d.columns = label_1d.columns.astype(str).str.zfill(6)
-    label_5d.columns = label_5d.columns.astype(str).str.zfill(6)
-    signal, label_1d = signal.align(label_1d, join="inner", axis=0)
-    signal, label_1d = signal.align(label_1d, join="inner", axis=1)
-    signal, label_5d = signal.align(label_5d, join="inner", axis=0)
-    signal, label_5d = signal.align(label_5d, join="inner", axis=1)
-    label_5d = label_5d.reindex(index=signal.index, columns=signal.columns)
-    if signal.empty or label_1d.empty or label_5d.empty:
-        raise ValueError("No overlapping dates or instruments between signal and labels.")
+    signal, label_1d, label_5d = align_and_mask_evaluation_inputs(signal, label_1d, label_5d)
 
     x = signal.astype(float).to_numpy()
     y1 = label_1d.astype(float).to_numpy()
@@ -612,6 +625,53 @@ def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame,
         },
         index=signal.index,
     )
+
+
+def load_evaluation_mask(signal: pd.DataFrame, cache_path: str | Path) -> pd.DataFrame:
+    normalized = _normalize_matrix(signal)
+    if normalized.empty:
+        raise ValueError("signal is empty")
+    start_ds = normalized.index.min().strftime("%Y%m%d")
+    end_ds = normalized.index.max().strftime("%Y%m%d")
+    base = _normalize_matrix(read_cache_array(stock_mask_path(cache_path, BASE_UNIVERSE_MASK_NAME), start_ds, end_ds, True))
+    trading = _normalize_matrix(read_cache_array(stock_mask_path(cache_path, FILTERED_MASK_NAME), start_ds, end_ds, True))
+    dates = base.index.intersection(trading.index)
+    codes = base.columns.intersection(trading.columns)
+    base = base.reindex(index=dates, columns=codes)
+    trading = trading.reindex(index=dates, columns=codes)
+    current = base.notna() & base.ne(0) & trading.notna() & trading.ne(0)
+    return current.shift(-1).fillna(False)
+
+
+def align_and_mask_evaluation_inputs(
+    signal: pd.DataFrame,
+    label_1d: pd.DataFrame,
+    label_5d: pd.DataFrame,
+    evaluation_mask: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    frames = [_normalize_matrix(signal), _normalize_matrix(label_1d), _normalize_matrix(label_5d)]
+    dates = frames[0].index
+    codes = frames[0].columns
+    for frame in frames[1:]:
+        dates = dates.intersection(frame.index)
+        codes = codes.intersection(frame.columns)
+    if evaluation_mask is not None:
+        evaluation_mask = _normalize_matrix(evaluation_mask)
+        dates = dates.intersection(evaluation_mask.index)
+        codes = codes.intersection(evaluation_mask.columns)
+    if dates.empty or codes.empty:
+        raise ValueError("No overlapping dates or instruments between signal, labels, and masks.")
+    aligned = [frame.reindex(index=dates, columns=codes) for frame in frames]
+    if evaluation_mask is not None:
+        valid = evaluation_mask.reindex(index=dates, columns=codes).fillna(False).astype(bool)
+        aligned = [frame.where(valid) for frame in aligned]
+    return aligned[0], aligned[1], aligned[2]
+
+
+def _normalize_matrix(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = normalize_date_index(frame).copy()
+    normalized.columns = normalized.columns.astype(str).str.zfill(6)
+    return normalized.sort_index()
 
 
 def _read_label_for_signal(
@@ -647,6 +707,8 @@ def _write_outputs(
     exposure_summary: pd.DataFrame | None,
     top10_excess: pd.DataFrame | None,
     messages: list[str],
+    start: str | None,
+    end: str | None,
 ) -> None:
     frames = {
         "ic_summary.csv": ic_summary,
@@ -667,6 +729,8 @@ def _write_outputs(
         "plot_path": str(artifacts.plot_path),
         "label_path": str(artifacts.label_path),
         "label_5d_path": str(artifacts.label_5d_path),
+        "start": start,
+        "end": end,
         "messages": messages,
     }
     (artifacts.report_dir / "report.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")

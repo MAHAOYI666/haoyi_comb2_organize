@@ -6,13 +6,19 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pandas as pd
+import pytest
+import torch
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT / "evals"), env.get("PYTHONPATH", "")])
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT / "evals"), str(REPO_ROOT / "vendor" / "comb2-simbase"), env.get("PYTHONPATH", "")]
+    )
     return subprocess.run(
         [sys.executable, *args],
         cwd=REPO_ROOT,
@@ -26,7 +32,14 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 def run_cli_in(cwd: Path, *args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT / "evals"), str(REPO_ROOT), env.get("PYTHONPATH", "")])
+    env["PYTHONPATH"] = os.pathsep.join(
+        [
+            str(REPO_ROOT / "evals"),
+            str(REPO_ROOT / "vendor" / "comb2-simbase"),
+            str(REPO_ROOT),
+            env.get("PYTHONPATH", ""),
+        ]
+    )
     return subprocess.run(
         [sys.executable, *args],
         cwd=cwd,
@@ -53,12 +66,112 @@ def test_run_combo_help_and_missing_config():
 def test_run_eval_help_and_missing_config():
     help_proc = run_cli("runEval.py", "-h")
     assert help_proc.returncode == 0
-    assert "Evaluate an existing" in help_proc.stdout
+    assert "Evaluate comb2 config outputs or local parquet/csv artifacts" in help_proc.stdout
 
     missing_proc = run_cli("runEval.py")
     assert missing_proc.returncode == 2
     assert "missing config.xml" in missing_proc.stderr
     assert "Traceback" not in missing_proc.stderr
+
+
+def test_run_eval_specialized_modes(tmp_path):
+    dates = pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-06"])
+    left = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [1.0, 3.0, 5.0], [2.0, 4.0, 6.0]],
+        index=dates,
+        columns=["000001", "000002", "000003"],
+    )
+    right = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 2.0, 1.0]],
+        index=dates,
+        columns=left.columns,
+    )
+    left_path = tmp_path / "left.parquet"
+    right_path = tmp_path / "right.parquet"
+    left.to_parquet(left_path)
+    right.to_parquet(right_path)
+
+    corr_proc = run_cli("runEval.py", "--corr", str(left_path), str(right_path), "--min-valid", "2", "--top-pct", "50")
+    assert corr_proc.returncode == 0
+    assert "avg_corr" in corr_proc.stdout
+    assert "avg_long_overlap" in corr_proc.stdout
+
+    daily_ic = pd.DataFrame(
+        {
+            "ic": [0.01, 0.02, 0.03],
+            "5dic": [0.02, 0.03, 0.04],
+            "rankic": [0.03, 0.04, 0.05],
+            "percic": [0.04, 0.05, 0.06],
+            "coverage": [1.0, 1.0, 1.0],
+        },
+        index=dates,
+    )
+    daily_ic_path = tmp_path / "daily_ic.csv"
+    daily_ic.to_csv(daily_ic_path)
+    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--normalize-names")
+    assert sim_proc.returncode == 0
+    assert "1d_IC.avg" in sim_proc.stdout
+
+    daily_pnl = pd.DataFrame(
+        {
+            "pnl": [100.0, -50.0, 80.0],
+            "long": [10000.0, 10000.0, 10000.0],
+            "short": [-10000.0, -10000.0, -10000.0],
+            "sh_hld": [20000.0, 20000.0, 20000.0],
+            "sh_trd": [1000.0, 1000.0, 1000.0],
+            "n_long": [2, 2, 2],
+            "n_short": [1, 1, 1],
+            "longonly_pnl": [60.0, 20.0, 40.0],
+        },
+        index=dates,
+    )
+    daily_pnl_path = tmp_path / "daily_pnl.csv"
+    daily_pnl.to_csv(daily_pnl_path)
+    pnl_proc = run_cli("runEval.py", "--pnl", str(daily_pnl_path))
+    assert pnl_proc.returncode == 0
+    assert "ret_pct" in pnl_proc.stdout
+
+    new_pnl = daily_pnl.copy()
+    new_pnl["longonly_pnl"] = [80.0, 50.0, 90.0]
+    new_pnl_path = tmp_path / "new_daily_pnl.csv"
+    new_pnl.to_csv(new_pnl_path)
+    va_proc = run_cli("runEval.py", "--va", str(daily_pnl_path), str(new_pnl_path), "--weights", "0.1,0.2")
+    assert va_proc.returncode == 0
+    assert "0.10" in va_proc.stdout
+
+
+def test_run_eval_single_modes_reject_config(tmp_path):
+    daily_ic = pd.DataFrame(
+        {"ic": [0.01], "5dic": [0.02], "rankic": [0.03], "percic": [0.04], "coverage": [1.0]},
+        index=pd.to_datetime(["2020-01-02"]),
+    )
+    daily_ic_path = tmp_path / "daily_ic.parquet"
+    daily_ic.to_parquet(daily_ic_path)
+    config_path = tmp_path / "config.xml"
+    config_path.write_text("<config />\n", encoding="utf-8")
+
+    sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--config", str(config_path))
+    assert sim_proc.returncode == 2
+    assert "single-item mode" in sim_proc.stderr
+
+
+def test_run_eval_corr_defaults_to_last_240_days(tmp_path):
+    dates = pd.date_range("2020-01-01", periods=300, freq="B")
+    columns = ["000001", "000002", "000003"]
+    left = pd.DataFrame([[1.0, 2.0, 3.0]] * len(dates), index=dates, columns=columns)
+    right = left.copy()
+    right.iloc[:60] = [3.0, 2.0, 1.0]
+
+    left_path = tmp_path / "left_300.parquet"
+    right_path = tmp_path / "right_300.parquet"
+    left.to_parquet(left_path)
+    right.to_parquet(right_path)
+
+    corr_proc = run_cli("runEval.py", "--corr", str(left_path), str(right_path), "--min-valid", "2")
+    assert corr_proc.returncode == 0
+    assert "corr_days: 240" in corr_proc.stdout
+    assert "n_days: 240" in corr_proc.stdout
+    assert "avg_corr: 1.00" in corr_proc.stdout
 
 
 def test_combo_runner_help_and_missing_config():
@@ -69,17 +182,6 @@ def test_combo_runner_help_and_missing_config():
     missing_proc = run_cli("comboRunner.py")
     assert missing_proc.returncode == 2
     assert "config.xml not found" in missing_proc.stderr
-    assert "Traceback" not in missing_proc.stderr
-
-
-def test_ablation_help_and_missing_config():
-    help_proc = run_cli("runAblationByZero.py", "-h")
-    assert help_proc.returncode == 0
-    assert "zero-ablation" in help_proc.stdout
-
-    missing_proc = run_cli("runAblationByZero.py")
-    assert missing_proc.returncode == 2
-    assert "missing config file" in missing_proc.stderr
     assert "Traceback" not in missing_proc.stderr
 
 
@@ -130,16 +232,38 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "class ResearchModel" in model_text
     assert "class AlphaStrategy" not in model_text
     assert "adaptive_hidden_size" in model_text
+    assert "FeatureGroups" in model_text
+
+    import importlib.util
+
+    model_spec = importlib.util.spec_from_file_location("generated_combo_model", tmp_path / "Model.py")
+    model_module = importlib.util.module_from_spec(model_spec)
+    assert model_spec.loader is not None
+    model_spec.loader.exec_module(model_module)
+    loss = model_module.ICLoss()(
+        torch.tensor([[1.0, 2.0, 100.0]]),
+        torch.tensor([[2.0, 4.0, -100.0]]),
+        torch.tensor([[1.0, 1.0, 0.0]]),
+    )
+    assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6)
 
     config_text = (tmp_path / "config.xml").read_text(encoding="utf-8")
     assert 'model_path="Model.py"' in config_text
+    assert 'combo_base_path=""' in config_text
     assert 'trainDelay="0"' in config_text
     assert 'hidden_size=' not in config_text
     assert 'fc_size=' not in config_text
     assert 'path="example_factor"' in config_text
-    assert 'path="label1d"' in config_text
+    assert 'path="vwap30_label1d"' in config_text
     root = ET.fromstring(config_text)
     assert root.find("./strategy").get("path") is None
+    assert set(root.find("./constants").attrib) == {"cache_path", "output_root"}
+    assert "output_dir" not in root.find("./combo/paths").attrib
+    assert "checkpoint_root" not in root.find("./combo/paths").attrib
+    assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
+    assert set(root.find("./combo/data").attrib) == {"dtype", "compression", "data_start_ds"}
+    assert "output_path" not in root.find("./backtest").attrib
+    assert root.find("./combo/defaults") is None
 
     from config import DEFAULT_CONFIG, load_config
 
@@ -148,8 +272,114 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["strategy"]["path"] == DEFAULT_CONFIG["strategy"]["path"]
     assert Path(parsed["strategy"]["path"]).is_file()
     assert parsed["strategy"]["path"].endswith("comb2_pcmaster/default_strategy.py")
+    assert parsed["combo"]["paths"]["combo_base_path"] is None
     assert parsed["combo"]["runtime"]["trainDelay"] == 0
+    assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
+    assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
+    assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
+    assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
+    assert set(parsed["combo"]["loader"]) == {
+        "dtype",
+        "compression",
+        "data_start_ds",
+        "data_offset",
+        "data_items",
+        "data_presets",
+        "config_path",
+    }
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
+
+
+def test_config_validates_runtime_values_and_constants_schema(tmp_path):
+    from config import load_config
+
+    invalid_delay = tmp_path / "invalid-delay.xml"
+    invalid_delay.write_text('<config><combo><runtime trainDelay="-1" /></combo></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="trainDelay must be nonnegative"):
+        load_config(str(invalid_delay))
+
+    unknown_constant = tmp_path / "unknown-constant.xml"
+    unknown_constant.write_text('<config><constants custom_path="value" /></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
+        load_config(str(unknown_constant))
+
+
+def test_version_file_is_the_build_default():
+    import importlib.util
+
+    script = REPO_ROOT / "packaging/build_protected_wheel.py"
+    spec = importlib.util.spec_from_file_location("combo2_build", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert module.DISTRIBUTION_NAME == "combo2"
+    assert "src" not in module.PACKAGE_SOURCES
+    assert module.read_version() == (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def test_run_combo_tees_output_to_derived_train_log(tmp_path, monkeypatch, capsys):
+    import runCombo
+
+    config_path = tmp_path / "config.xml"
+    config_path.write_text(
+        '<config><constants output_root="run-output" /><combo><paths model_path="Model.py" /></combo></config>',
+        encoding="utf-8",
+    )
+
+    def fake_run(config, resolved_config_path):
+        print("train log marker")
+        return 0
+
+    monkeypatch.setattr(runCombo, "run_loaded_config", fake_run)
+    monkeypatch.setattr(sys, "argv", ["runCombo", str(config_path)])
+
+    assert runCombo.main() == 0
+    assert "train log marker" in capsys.readouterr().out
+    assert (tmp_path / "run-output/train.log").read_text(encoding="utf-8") == "train log marker\n"
+
+
+def test_run_combo_loads_custom_combo_base(tmp_path):
+    combo_base_path = tmp_path / "combo_base.py"
+    combo_base_path.write_text(
+        """
+from __future__ import annotations
+
+from comb2 import ComboBase as BaseComboBase
+
+
+class ComboBase(BaseComboBase):
+    def isTrainDay(self, ds: int) -> bool:
+        print(f"[CUSTOM-TRAIN-DAY] ds={ds}")
+        return False
+""",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.xml"
+    config_path.write_text(
+        f"""
+<config>
+  <combo>
+    <paths
+      model_path="Model.py"
+      combo_base_path="{combo_base_path}"
+    />
+  </combo>
+</config>
+""",
+        encoding="utf-8",
+    )
+
+    from config import load_config
+    from runCombo import load_combo_base_class
+
+    parsed = load_config(str(config_path))
+    combo_base_cls = load_combo_base_class(parsed["combo"])
+
+    assert combo_base_cls.__name__ == "ComboBase"
+    assert combo_base_cls is not load_combo_base_class({"paths": {"combo_base_path": None}})
+
+    combo = combo_base_cls.__new__(combo_base_cls)
+    assert combo.isTrainDay(20160111) is False
 
     overwrite = run_cli_in(tmp_path, str(REPO_ROOT / "comboHelloWorld.py"), "-y")
     assert overwrite.returncode == 2

@@ -5,27 +5,28 @@ import sys
 from pathlib import Path
 
 EVALS_ROOT = Path(__file__).resolve().parents[1]
-if str(EVALS_ROOT) not in sys.path:
-    sys.path.insert(0, str(EVALS_ROOT))
+REPO_ROOT = EVALS_ROOT.parent
+for local_path in (EVALS_ROOT, REPO_ROOT / "vendor" / "comb2-simbase"):
+    if str(local_path) not in sys.path:
+        sys.path.insert(0, str(local_path))
 
 import numpy as np
 import pandas as pd
+
+from comb2_simbase.cache_layout import daily_label_path
 
 from comb_eval.ic import summarize_ic
 from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
 
 from _common import frame_to_text, write_frame, write_text
 
-DEFAULT_LABEL_1D_PATH = "/home/jovyan/ml-data1-pvc/factorsim_data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d"
-DEFAULT_LABEL_5D_PATH = "/home/jovyan/ml-data1-pvc/factorsim_data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label5d"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run local signal IC evaluation and summarize the result.")
     parser.add_argument("path", help="Signal path by default, or daily IC path with --input-is-ic")
     parser.add_argument("--input-is-ic", action="store_true", help="Treat input as an existing daily IC dump")
-    parser.add_argument("--label-1d", default=DEFAULT_LABEL_1D_PATH, help="1d forward-return label path")
-    parser.add_argument("--label-5d", default=DEFAULT_LABEL_5D_PATH, help="5d forward-return label path")
+    parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--label-1d", help="Explicit 1d forward-return label path")
+    parser.add_argument("--label-5d", help="Explicit 5d forward-return label path")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
     parser.add_argument("--label-1d-is-table", action="store_true", help="Read --label-1d as csv/tsv/parquet instead of Memmaper2 cache")
     parser.add_argument("--label-5d-is-table", action="store_true", help="Read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
@@ -41,10 +42,12 @@ def main() -> None:
         daily_ic = read_table(args.path, start=args.start, end=args.end)
         normalize_names = args.normalize_names
     else:
+        label_1d_path = _resolve_label_path(args.label_1d, args.cache_path, "vwap30_label1d")
+        label_5d_path = _resolve_label_path(args.label_5d, args.cache_path, "vwap30_label5d")
         daily_ic = calculate_daily_ic(
             args.path,
-            args.label_1d,
-            args.label_5d,
+            label_1d_path,
+            label_5d_path,
             label_1d_is_table=args.label_1d_is_table,
             label_5d_is_table=args.label_5d_is_table,
             label_df_type=_parse_df_type(args.label_df_type),
@@ -63,6 +66,14 @@ def main() -> None:
     print(text)
     if args.summary_output:
         write_text(text + "\n", args.summary_output)
+
+
+def _resolve_label_path(label: str | None, cache_path: str | None, label_name: str) -> Path:
+    if label:
+        return Path(label).expanduser()
+    if not cache_path:
+        raise ValueError(f"signal input requires --cache-path or an explicit --label-{label_name[-2:]}")
+    return daily_label_path(cache_path, label_name)
 
 
 def calculate_daily_ic(
