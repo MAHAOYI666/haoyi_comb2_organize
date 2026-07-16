@@ -5,18 +5,45 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Release
 
-- Version: `0.1.7`
+- Version: `0.1.9`
 - Release date: `2026-07-10`
 - Package name: `combo2`
-- Protected wheel: `dist_protected/combo2-0.1.7-cp313-cp313-linux_x86_64.whl`
+- Protected wheel: `dist_protected/combo2-0.1.9-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.7`
+- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.9`
 
 Install the current wheel:
 
 ```bash
-python -m pip install dist_protected/combo2-0.1.7-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-0.1.9-cp313-cp313-linux_x86_64.whl
 ```
+
+## Unreleased
+
+Changes:
+
+- Added CAP correlation to full configuration evaluation. It aligns alpha with the market cap available on the same trading day, cross-sectionally ranks market cap, and correlates it with median-centered, separately normalized long/short alpha weights.
+- Added `cap_corr_summary.csv` with annual and all-sample `cap_corr.avg`, `cap_corr.ir`, and `cap_corr.std` values. CAP correlation is also included in CLI text output and the signal-analysis summary panel.
+- Extended `--skip-exposure` to skip both Barra-style exposure and CAP correlation. The report continues when either cache-backed exposure calculation is unavailable and records the reason in its messages.
+- Added focused CAP-correlation tests for same-day market-cap alignment and all-sample aggregation, and updated evaluation documentation and CLI coverage for the layered-IC public names.
+
+## 0.1.9
+
+Changes:
+
+- Finalized the public layered-IC names: daily files now write `lic` and `layerspread`; normalized summaries expose `lIC.avg`, `lIC.ir`, and `layerSpread.avg`; the report and signal-summary chart label the IR as `lIR`.
+- Removed percentile IC (`percic`) from daily metric generation, normalized summaries, report key columns, charts, CLI output, and L1/L2 evaluation rules. Existing `percic`/`percIC` columns are ignored when an IC file is summarized.
+- Updated `runEval --sim --normalize-names` to map `lic` to `lIC` and `layerspread` to `layerSpread`. It also accepts the prior normalized `layeric` column name as `lIC`; downstream consumers should replace any dependence on `percic` with the layered metrics.
+- Centralized daily IC calculation so the simulation tool and full evaluation report produce the same `ic`, `5dic`, `rankic`, `lic`, `layerspread`, and coverage fields.
+- Kept the existing L1/L2 cutoff values while moving the layered check to `lIC.avg`; these thresholds should be recalibrated against historical layered-IC distributions before being treated as a new baseline.
+
+## 0.1.8
+
+Changes:
+
+- Introduced layered IC as the replacement for percentile IC in overall evaluation. On each date, valid alpha and 1-day forward-return pairs are placed into ten equal-frequency alpha layers (Q1--Q10); the metric is the correlation between layer number and each layer's mean return.
+- Added the daily layered IC, its cross-date mean and information ratio, and the `layerSpread` Q10--Q1 mean-return difference to IC summaries and the signal-analysis report.
+- Preserved a literal Q10--Q1 interpretation: tied alpha values are never split between layers, and dates that cannot form all ten non-empty layers are excluded from layered-IC and spread aggregation.
 
 ## 0.1.7
 

@@ -8,7 +8,11 @@ import pandas as pd
 
 from comb2_simbase.cache_layout import BARRA_STYLE_DIRNAME, BARRA_STYLE_PREFIX, ashare_cache_path
 
-from .io import read_cache_array
+from .io import normalize_date_index, read_cache_array
+from .pnl import period_groups, sample_ir
+
+
+MARKET_CAP_RELATIVE_PATH = Path("1d_DailyFdm") / "DailyFdm.mkt_cap"
 
 
 def compute_style_factor_exposure(
@@ -82,6 +86,52 @@ def compute_barra_style_exposure(
     return exposure
 
 
+def compute_cap_corr(
+    signal: pd.DataFrame,
+    cache_path: str | Path,
+    start_ds: int | None = None,
+    end_ds: int | None = None,
+) -> pd.Series:
+    """Return daily CAP correlations using market cap available on the signal date.
+
+    The signal is first transformed into a dollar-neutral long/short weight vector:
+    cross-sectionally median-center it, then normalize the positive and negative
+    legs to one gross unit each.  The resulting weights are correlated with that
+    day's cross-sectionally ranked market caps.
+    """
+    signal_df = _normalize_cap_corr_frame(signal)
+    resolved_start = int(signal_df.index.min()) if start_ds is None else int(start_ds)
+    resolved_end = int(signal_df.index.max()) if end_ds is None else int(end_ds)
+    filtered_signal = signal_df.loc[(signal_df.index >= resolved_start) & (signal_df.index <= resolved_end)]
+    if filtered_signal.empty:
+        raise ValueError("Signal has no observations in the requested date range.")
+
+    market_cap_path = ashare_cache_path(cache_path) / MARKET_CAP_RELATIVE_PATH
+    market_cap = _normalize_cap_corr_frame(_load_cache_frame(market_cap_path, resolved_start, resolved_end))
+    common_dates = filtered_signal.index.intersection(market_cap.index).sort_values()
+    common_codes = filtered_signal.columns.intersection(market_cap.columns).sort_values()
+    if common_dates.empty or common_codes.empty:
+        raise ValueError("No overlapping dates/codes between signal and market cap.")
+
+    signal_values = filtered_signal.reindex(index=common_dates, columns=common_codes).to_numpy(dtype=np.float32, copy=False)
+    market_cap_values = market_cap.reindex(index=common_dates, columns=common_codes).to_numpy(dtype=np.float32, copy=False)
+    weights = _long_short_weights(signal_values, market_cap_values)
+    ranked_market_cap = pd.DataFrame(market_cap_values).rank(axis=1).to_numpy(dtype=np.float32)
+    corr, _ = _compute_daily_exposure(weights, ranked_market_cap)
+    index = pd.to_datetime(common_dates.astype(str), format="%Y%m%d")
+    return pd.Series(corr, index=index, name="cap_corr")
+
+
+def summarize_cap_corr(cap_corr: pd.Series) -> pd.DataFrame:
+    """Summarize daily CAP correlation by calendar year and over all valid days."""
+    if not isinstance(cap_corr, pd.Series):
+        raise TypeError("cap_corr must be a pandas Series.")
+    daily = normalize_date_index(cap_corr.rename("cap_corr").to_frame())["cap_corr"].astype(float)
+    rows = [_cap_corr_summary_row(period, group["cap_corr"]) for period, group in period_groups(daily.to_frame(), include_all=False)]
+    rows.append(_cap_corr_summary_row("ALL", daily))
+    return pd.DataFrame(rows).set_index("period")
+
+
 def _compute_daily_exposure(signal: np.ndarray, style: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     finite = np.isfinite(signal) & np.isfinite(style)
     nobs = finite.sum(axis=1)
@@ -108,6 +158,28 @@ def _compute_daily_exposure(signal: np.ndarray, style: np.ndarray) -> tuple[np.n
     return corr, beta
 
 
+def _long_short_weights(signal: np.ndarray, market_cap: np.ndarray) -> np.ndarray:
+    weights = np.full(signal.shape, np.nan, dtype=np.float32)
+    for row_idx in range(signal.shape[0]):
+        valid = np.isfinite(signal[row_idx]) & np.isfinite(market_cap[row_idx])
+        if valid.sum() < 3:
+            continue
+        alpha = signal[row_idx, valid].astype(np.float64, copy=False)
+        centered = alpha - np.median(alpha)
+        long_sum = centered[centered > 0].sum()
+        short_sum = -centered[centered < 0].sum()
+        if long_sum <= 0.0 or short_sum <= 0.0:
+            continue
+
+        row_weights = np.zeros_like(centered, dtype=np.float64)
+        positive = centered > 0
+        negative = centered < 0
+        row_weights[positive] = centered[positive] / long_sum
+        row_weights[negative] = centered[negative] / short_sum
+        weights[row_idx, valid] = row_weights
+    return weights
+
+
 def _normalize_exposure_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(frame, pd.DataFrame):
         raise TypeError("signal/style factor input must be a pandas DataFrame.")
@@ -120,6 +192,23 @@ def _normalize_exposure_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized.columns = pd.Index(normalized.columns.astype(str), name="code")
     normalized = normalized[~normalized.index.duplicated(keep="last")]
     return normalized.sort_index()
+
+
+def _normalize_cap_corr_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = _normalize_exposure_frame(frame)
+    normalized.columns = pd.Index(normalized.columns.astype(str).str.zfill(6), name="code")
+    return normalized
+
+
+def _cap_corr_summary_row(period: str, values: pd.Series) -> dict[str, float | int | str]:
+    valid = values.dropna().astype(float)
+    return {
+        "period": period,
+        "days": int(len(valid)),
+        "cap_corr.avg": float(valid.mean()) if not valid.empty else np.nan,
+        "cap_corr.ir": sample_ir(valid),
+        "cap_corr.std": float(valid.std(ddof=1)) if len(valid) >= 2 else np.nan,
+    }
 
 
 def _coerce_int_dates(index: pd.Index) -> np.ndarray:

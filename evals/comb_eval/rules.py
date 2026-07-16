@@ -44,7 +44,7 @@ IC_L1: RuleSet = {
     "barra10d_IC.avg": (">=", 0.015),
     "barra10d_IC.ir": (">=", 0.42),
     "rankic.avg": (">=", 0.011),
-    "percic.avg": (">=", 0.009),
+    "lIC.avg": (">=", 0.009),
 }
 
 IC_L2: RuleSet = {
@@ -62,7 +62,7 @@ IC_L2: RuleSet = {
     "barra10d_IC.avg": (">=", 0.013),
     "barra10d_IC.ir": (">=", 0.30),
     "rankic.avg": (">=", 0.009),
-    "percic.avg": (">=", 0.007),
+    "lIC.avg": (">=", 0.007),
 }
 
 

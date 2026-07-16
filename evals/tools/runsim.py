@@ -10,13 +10,13 @@ for local_path in (EVALS_ROOT, REPO_ROOT / "vendor" / "comb2-simbase"):
     if str(local_path) not in sys.path:
         sys.path.insert(0, str(local_path))
 
-import numpy as np
 import pandas as pd
 
 from comb2_simbase.cache_layout import daily_label_path
 
 from comb_eval.ic import summarize_ic
 from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
+from comb_eval.report import calculate_daily_ic_from_signal
 
 from _common import frame_to_text, write_frame, write_text
 
@@ -102,24 +102,7 @@ def calculate_daily_ic(
     if signal.empty or label_1d.empty or label_5d.empty:
         raise ValueError("No overlapping dates or instruments between signal and labels.")
 
-    x = signal.astype(float).to_numpy()
-    y1 = label_1d.astype(float).to_numpy()
-    y5 = label_5d.astype(float).to_numpy()
-    valid_1d = np.isfinite(x) & np.isfinite(y1)
-    label_count = np.sum(np.isfinite(y1), axis=1).astype(float)
-    label_count[label_count == 0] = np.nan
-
-    daily_ic = pd.DataFrame(
-        {
-            "ic": _row_corr(x, y1),
-            "5dic": _row_corr(x, y5),
-            "rankic": _row_corr(_row_rank(x), _row_rank(y1)),
-            "percic": _row_corr(_row_percentile(x), _row_rank(y1)),
-            "coverage": np.sum(valid_1d, axis=1) / label_count,
-        },
-        index=signal.index,
-    )
-    return daily_ic
+    return calculate_daily_ic_from_signal(signal, label_1d, label_5d)
 
 
 def _read_label(
@@ -139,29 +122,6 @@ def _read_label(
     if isinstance(data, pd.DataFrame):
         return normalize_date_index(data).astype(float)
     return pd.DataFrame(data, index=signal.index[: len(data)], columns=signal.columns[: data.shape[1]]).astype(float)
-
-
-def _row_corr(left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    valid = np.isfinite(left) & np.isfinite(right)
-    count = valid.sum(axis=1)
-    left_masked = np.where(valid, left, np.nan)
-    right_masked = np.where(valid, right, np.nan)
-    left_mean = np.nanmean(left_masked, axis=1, keepdims=True)
-    right_mean = np.nanmean(right_masked, axis=1, keepdims=True)
-    left_centered = np.where(valid, left - left_mean, 0.0)
-    right_centered = np.where(valid, right - right_mean, 0.0)
-    numerator = np.sum(left_centered * right_centered, axis=1)
-    denominator = np.sqrt(np.sum(left_centered * left_centered, axis=1) * np.sum(right_centered * right_centered, axis=1))
-    corr = np.divide(numerator, denominator, out=np.full(left.shape[0], np.nan), where=(count >= 2) & (denominator > 0))
-    return corr
-
-
-def _row_rank(values: np.ndarray) -> np.ndarray:
-    return pd.DataFrame(values).rank(axis=1).to_numpy()
-
-
-def _row_percentile(values: np.ndarray) -> np.ndarray:
-    return pd.DataFrame(values).rank(axis=1, pct=True).to_numpy()
 
 
 def _parse_df_type(value: str) -> object:
