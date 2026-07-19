@@ -1,4 +1,4 @@
-"""Atomic ``trial_meta.json`` state management."""
+﻿"""Atomic ``trial_meta.json`` state management."""
 
 from __future__ import annotations
 
@@ -93,3 +93,4 @@ def _meta_path(trial_dir: str | Path) -> Path:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+

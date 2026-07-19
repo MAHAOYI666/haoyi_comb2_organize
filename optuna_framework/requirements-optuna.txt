@@ -1,3 +1,0 @@
-optuna>=3.0
-psutil
-plotly

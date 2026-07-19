@@ -1,4 +1,4 @@
-"""Manual Phase A Optuna study runner."""
+"""Manual Phase A Optuna study runner for detailed configs."""
 
 from __future__ import annotations
 
@@ -13,18 +13,10 @@ if __package__ in (None, ""):
 
 from optuna_framework.aggregators import final_objective, load_baseline_thresholds, require_tuning_period_baseline
 from optuna_framework.config_renderer import render_config
-from optuna_framework.paths import build_trial_run_paths, resolve_study_root
+from optuna_framework.paths import build_trial_run_paths
 from optuna_framework.runner import InferenceRunError, build_run_command, run_inference
-from optuna_framework.scripts._script_common import adapter_for_name, print_command
-from optuna_framework.studies.eg_torch_v1 import (
-    ADAPTER_NAME,
-    BASELINE_CONFIG_PATH,
-    FIXED_OVERRIDES,
-    N_TRIALS_DEFAULT,
-    SCORING_WINDOW,
-    STUDY_NAME,
-    TUNING_RUN_WINDOW,
-)
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args, print_command
+from optuna_framework.search_space import ConfigDrivenAdapter
 from optuna_framework.study_utils import (
     append_resource_metric,
     cleanup_bad_trial_artifacts,
@@ -38,16 +30,12 @@ from optuna_framework.study_utils import (
 from optuna_framework.trial_meta import init_trial_meta, update_trial_state, update_window
 
 
-OPTUNA_STUDY_NAME = "eg_torch_v1"
-
-
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-
     parser = argparse.ArgumentParser(description="Run Phase A Optuna search.")
+    add_common_config_args(parser)
+    add_plan_check_arg(parser)
     parser.add_argument("--dry-run", action="store_true", help="Print planned study setup without running optimize")
-    parser.add_argument("--study-root", default=None, help="Override default study root")
-    parser.add_argument("--n-trials", type=int, default=N_TRIALS_DEFAULT, help="Override trial count")
+    parser.add_argument("--n-trials", type=int, default=None, help="Override trial count")
     parser.add_argument("--cleanup-bad-trials", action="store_true", help="Remove heavyweight artifacts for rejected trials")
     return parser.parse_args()
 
@@ -59,11 +47,11 @@ def storage_url(study_root: Path, filename: str = "study.db") -> str:
     return "sqlite:///" + str(db_path).replace("\\", "/")
 
 
-def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
+def make_objective(config: Any, cleanup_bad_trials: bool = False) -> Any:
     """Create the Optuna objective closure."""
 
-    adapter = adapter_for_name(ADAPTER_NAME)
-    threshold_path = study_root / "baseline" / "baseline_thresholds.json"
+    adapter = ConfigDrivenAdapter(config)
+    threshold_path = config.study_root / "baseline" / "baseline_thresholds.json"
     thresholds = load_baseline_thresholds(threshold_path)
     require_tuning_period_baseline(thresholds)
 
@@ -77,11 +65,11 @@ def make_objective(study_root: Path, cleanup_bad_trials: bool = False) -> Any:
 
         params = adapter.suggest_params(trial)
         materialized = adapter.materialize_params(params)
-        trial_dir = study_root / "trials" / f"trial_{trial.number:05d}"
+        trial_dir = config.study_root / "trials" / f"trial_{trial.number:05d}"
         init_trial_meta(trial_dir, trial.number, materialized)
         try:
-            run_paths = build_trial_run_paths(study_root, trial.number, TUNING_RUN_WINDOW, SCORING_WINDOW)
-            render_config(BASELINE_CONFIG_PATH, run_paths, adapter, params, FIXED_OVERRIDES)
+            run_paths = build_trial_run_paths(config.study_root, trial.number, config.tuning_run_window, config.scoring_window)
+            render_config(config, run_paths, adapter, params)
             metrics = run_inference(run_paths)
             update_window(trial_dir, "complete", metrics.to_dict())
             score = metrics.sharpe_idx
@@ -121,37 +109,35 @@ def make_callback(study_root: Path) -> Any:
 
 
 def run_phase_a(args: argparse.Namespace) -> None:
-    """Run the formal Phase A study."""
-
-    study_root = resolve_study_root(args.study_root, STUDY_NAME)
-    adapter = adapter_for_name(ADAPTER_NAME)
+    config = load_config_from_args(args)
+    ensure_plan_for_args(config, args, dry_run=args.dry_run)
+    adapter = ConfigDrivenAdapter(config)
+    n_trials = config.n_trials_default if args.n_trials is None else int(args.n_trials)
     if args.dry_run:
-        print(f"[DRY-RUN] Phase A study_root={study_root}")
-        print(f"[DRY-RUN] storage={storage_url(study_root)}")
-        print(f"[DRY-RUN] n_trials={args.n_trials} n_jobs=1")
-        print(f"[DRY-RUN] run_window={TUNING_RUN_WINDOW[0]}-{TUNING_RUN_WINDOW[1]}")
-        print(f"[DRY-RUN] scoring_window={SCORING_WINDOW[0]}-{SCORING_WINDOW[1]}")
-        run_paths = build_trial_run_paths(study_root, 0, TUNING_RUN_WINDOW, SCORING_WINDOW)
+        print(f"[DRY-RUN] Phase A study_root={config.study_root}")
+        print(f"[DRY-RUN] storage={storage_url(config.study_root)}")
+        print(f"[DRY-RUN] n_trials={n_trials} n_jobs=1")
+        print(f"[DRY-RUN] run_window={config.tuning_run_window[0]}-{config.tuning_run_window[1]}")
+        print(f"[DRY-RUN] scoring_window={config.scoring_window[0]}-{config.scoring_window[1]}")
+        run_paths = build_trial_run_paths(config.study_root, 0, config.tuning_run_window, config.scoring_window)
         print_command("[DRY-RUN] trial_00000", run_paths.config_path, build_run_command(run_paths.config_path))
         return
 
-    study_root.mkdir(parents=True, exist_ok=True)
-    study = create_study(OPTUNA_STUDY_NAME, storage_url(study_root), smoke=False)
+    config.study_root.mkdir(parents=True, exist_ok=True)
+    study = create_study(config.optuna_name, storage_url(config.study_root), smoke=False)
     maybe_enqueue_baseline(study, adapter.baseline_params())
-    remaining = max(0, int(args.n_trials) - completed_history_count(study))
+    remaining = max(0, n_trials - completed_history_count(study))
     optimize_study(
         study,
-        make_objective(study_root, cleanup_bad_trials=args.cleanup_bad_trials),
+        make_objective(config, cleanup_bad_trials=args.cleanup_bad_trials),
         remaining,
-        callbacks=[make_callback(study_root)],
+        callbacks=[make_callback(config.study_root)],
     )
-    write_study_reports(study, study_root)
-    export_optuna_visualizations(study, study_root)
+    write_study_reports(study, config.study_root)
+    export_optuna_visualizations(study, config.study_root)
 
 
 def main() -> None:
-    """Script entry point."""
-
     run_phase_a(parse_args())
 
 

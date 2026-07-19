@@ -11,7 +11,7 @@ from optuna_framework.metrics_parser import WindowMetrics
 
 
 HARD_FILTER_MISSING_MESSAGE = (
-    "baseline_thresholds.json not found. 请先手动运行 run_baseline.py 生成 baseline_thresholds.json"
+    "baseline_thresholds.json not found. Please run run_baseline.py first."
 )
 
 TUNING_PERIOD_MISSING_MESSAGE = (
@@ -21,7 +21,7 @@ TUNING_PERIOD_MISSING_MESSAGE = (
 
 FACTOR_AUDIT_TEMPLATE = (
     "# Factor Audit\n\n"
-    "因子时间合规性已由用户确认：2024/2025 命名仅为版本代号，不代表使用了未来信息。\n"
+    "Factor time-safety review placeholder. Confirm factor naming and data availability before production use.\n"
 )
 
 
@@ -110,3 +110,4 @@ def ensure_factor_audit_template(study_root: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(FACTOR_AUDIT_TEMPLATE, encoding="utf-8")
     return path
+

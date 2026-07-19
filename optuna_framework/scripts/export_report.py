@@ -1,4 +1,4 @@
-"""Export a markdown report from completed manual workflow artifacts."""
+"""Export a markdown report from completed detailed workflow artifacts."""
 
 from __future__ import annotations
 
@@ -13,61 +13,51 @@ if __package__ in (None, ""):
 
     bootstrap_repo_imports()
 
-from optuna_framework.paths import resolve_study_root
-from optuna_framework.studies.eg_torch_v1 import (
-    ADAPTER_NAME,
-    BASELINE_CONFIG_PATH,
-    FIXED_OVERRIDES,
-    FULL_RUN_WINDOW,
-    SCORING_WINDOW,
-    STUDY_NAME,
-    TUNING_RUN_WINDOW,
-)
+from optuna_framework.scripts._script_common import add_common_config_args, add_plan_check_arg, ensure_plan_for_args, load_config_from_args
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-
-    parser = argparse.ArgumentParser(description="Export Optuna workflow REPORT.md.")
+    parser = argparse.ArgumentParser(description="Export detailed Optuna workflow REPORT.md.")
+    add_common_config_args(parser)
+    add_plan_check_arg(parser)
     parser.add_argument("--dry-run", action="store_true", help="Print report path without writing")
-    parser.add_argument("--study-root", default=None, help="Override default study root")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Export or print the report target."""
-
     args = parse_args()
-    study_root = resolve_study_root(args.study_root, STUDY_NAME)
-    report_path = study_root / "REPORT.md"
+    config = load_config_from_args(args)
+    ensure_plan_for_args(config, args, dry_run=args.dry_run)
+    report_path = config.study_root / "REPORT.md"
     if args.dry_run:
         print(f"[DRY-RUN] report_path={report_path}")
         return
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(_build_report(study_root), encoding="utf-8")
+    report_path.write_text(_build_report(config), encoding="utf-8")
     print(f"report={report_path}")
 
 
-def _build_report(study_root: Path) -> str:
-    baseline = _read_json(study_root / "baseline" / "baseline_thresholds.json")
-    phase_b = _read_json(study_root / "phase_b" / "results.json")
-    phase_c = _read_json(study_root / "phase_c" / "results.json")
-    top10 = _read_csv(study_root / "reports" / "top10.csv")
-    trials = _read_csv(study_root / "reports" / "trials.csv")
-    title = "Optuna eg_torch_v1 report"
+def _build_report(config) -> str:
+    baseline = _read_json(config.study_root / "baseline" / "baseline_thresholds.json")
+    phase_b = _read_json(config.study_root / "phase_b" / "results.json")
+    phase_c = _read_json(config.study_root / "phase_c" / "results.json")
+    top10 = _read_csv(config.study_root / "reports" / "top10.csv")
+    trials = _read_csv(config.study_root / "reports" / "trials.csv")
+    title = f"Optuna {config.study_name} report"
     if phase_c is not None and not any(item.get("accepted") for item in phase_c):
         title = "no improvement found"
     lines = [f"# {title}", ""]
     lines.append("## Experiment")
-    lines.append(f"- study: {STUDY_NAME}")
-    lines.append(f"- adapter: {ADAPTER_NAME}")
-    lines.append(f"- baseline config: {BASELINE_CONFIG_PATH}")
-    lines.append(f"- fixed_overrides: `{FIXED_OVERRIDES}`")
+    lines.append(f"- study: {config.study_name}")
+    lines.append(f"- optuna_name: {config.optuna_name}")
+    lines.append(f"- config: {config.config_path}")
+    lines.append(f"- baseline config: {config.baseline_config_path}")
+    lines.append(f"- fixed_overrides: `{config.fixed_overrides}`")
     lines.append("")
     lines.append("## Windows")
-    lines.append(f"- baseline and Phase C run: {FULL_RUN_WINDOW[0]}-{FULL_RUN_WINDOW[1]}")
-    lines.append(f"- Phase A/B run: {TUNING_RUN_WINDOW[0]}-{TUNING_RUN_WINDOW[1]}")
-    lines.append(f"- Phase A/B scoring: {SCORING_WINDOW[0]}-{SCORING_WINDOW[1]}")
+    lines.append(f"- baseline and Phase C run: {config.full_run_window[0]}-{config.full_run_window[1]}")
+    lines.append(f"- Phase A/B run: {config.tuning_run_window[0]}-{config.tuning_run_window[1]}")
+    lines.append(f"- Phase A/B scoring: {config.scoring_window[0]}-{config.scoring_window[1]}")
     lines.append("")
     lines.append("## Baseline")
     if baseline:

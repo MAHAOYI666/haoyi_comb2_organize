@@ -1,14 +1,21 @@
 __pycache__/
 *.py[cod]
 
+.pytest_cache/
+.mindfs/
+
 .venv/
-.pdm-build/
-.pdm-python
 .python-version
-pdm.lock
-pyproject.toml
 output**/
 checkpoints**/
 optuna_runs/
+build/
+dist_protected/
 AGENTS.md
+pos_corr/
+manual_logs/
 
+haoyi_models/
+correlation.py
+runFactorCorr.py
+*.txt

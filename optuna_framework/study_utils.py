@@ -195,3 +195,4 @@ def _write_top10(trials_csv: Path, output_csv: Path) -> None:
     ranked["value"] = pd.to_numeric(ranked["value"], errors="coerce")
     ranked = ranked.dropna(subset=["value"]).sort_values("value", ascending=False).head(10)
     ranked.to_csv(output_csv, index=False)
+

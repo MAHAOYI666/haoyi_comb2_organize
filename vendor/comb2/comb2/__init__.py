@@ -1,11 +1,15 @@
 from .ComboBase import ComboBase
-from .DataLoader import LoaderConfig
-from .selection import DefaultSelectionModule, SelectionModule, SelectionPlan
+from .DataLoader import ComboDataLoader, ComboTrainDataset, FeatureGroups, LoaderConfig
+from .DataRegistry import DataItem, DataRegistry, OpSpec, Universe
 
 __all__ = [
     "ComboBase",
-    "DefaultSelectionModule",
+    "ComboDataLoader",
+    "ComboTrainDataset",
+    "DataItem",
+    "DataRegistry",
+    "FeatureGroups",
     "LoaderConfig",
-    "SelectionModule",
-    "SelectionPlan",
+    "OpSpec",
+    "Universe",
 ]

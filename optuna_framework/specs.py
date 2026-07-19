@@ -1,4 +1,4 @@
-"""Typed runtime path records shared by the Optuna search framework."""
+﻿"""Typed runtime path records shared by the Optuna search framework."""
 
 from __future__ import annotations
 
@@ -47,3 +47,4 @@ class RunPaths:
         """Return the objective/scoring window."""
 
         return (self.score_start_ds, self.score_end_ds)
+

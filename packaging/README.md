@@ -1,0 +1,83 @@
+# Protected Wheel Build
+
+Build a Cython-based wheel that hides implementation modules as native `.so`
+extensions while keeping only minimal package `__init__.py` wrappers.
+
+The wheel version is read from the repository-root `VERSION` file by default.
+
+Dry run:
+
+```bash
+python packaging/build_protected_wheel.py --python python3.13 --dry-run
+```
+
+Build:
+
+```bash
+python packaging/build_protected_wheel.py --python python3.13
+```
+
+Download artifact:
+
+```text
+dist_protected/*.whl
+```
+
+Install the wheel in a Python 3.13 environment:
+
+```bash
+python -m pip install dist_protected/combo2-<version>-cp313-cp313-linux_x86_64.whl
+```
+
+Exact release version and current install target are tracked in `../RELEASE.md`.
+
+The only published distribution name is `combo2`. The build script does not accept
+name or version overrides; its version is read exclusively from `../VERSION`.
+
+Run after installation:
+
+```bash
+runCombo config.xml
+runEval config.xml
+```
+
+The build uses Python 3.13 for the wheel ABI and writes pinned third-party
+dependency metadata that is compatible with Python 3.13 Linux x86_64 wheels.
+The numpy pin follows `../aresium/pdm.lock`; pandas and pyarrow follow the
+Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
+`python3.13` is not on `PATH`, pass an absolute path with `--python`.
+
+The resulting wheel contains all local Combo2 runtime code. Third-party
+packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
+psutil, and Plotly are not bundled into the wheel; they are declared in the
+wheel metadata so `pip install` can resolve and install them for the target
+Python 3.13 environment.
+
+The build compiles:
+
+- `config`, `runCombo`, `runEval`, `comboRunner`, `runPosCorr`
+- `vendor/comb2-simbase` (`comb2_simbase` import package)
+- `optuna_framework`
+- `comb_eval`
+- vendor packages: `comb2`, `comb2_pcmaster`, `comb2_metrics`
+- `vendor.perf_monitor`
+
+The script verifies that the resulting wheel does not contain protected `.py`
+sources, except for minimal package `__init__.py` files needed for reliable
+Python package imports.
+
+Requirements:
+
+- Python 3.13 ABI compatible with the deployment target
+- `Cython`, `setuptools`, and `wheel` are declared in the generated build metadata
+- a C compiler available as `gcc` or `cc`
+
+Installed commands include:
+
+- `combo-hello-world`
+- `runCombo`
+- `runEval`
+- `comb-run`
+- `comb-eval`
+- `comb-combo-runner`
+- `comb-pos-corr`

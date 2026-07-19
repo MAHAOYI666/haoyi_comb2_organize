@@ -2,17 +2,31 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from factorsim import IndexMask
-from factorsim.tushare_tool.tusharesql import Querytool
+
+SIMBASE_ROOT = Path(__file__).resolve().parents[3] / "vendor" / "comb2-simbase"
+if str(SIMBASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIMBASE_ROOT))
+
+from comb2_simbase import IndexMask
+from comb2_simbase.benchmark import load_index_benchmark
 from .dataloader import DataLoader
 from .strategy import StrategyBase
+
+
+def _load_pyplot():
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        return None
+    return plt
 
 
 @dataclass
@@ -29,6 +43,9 @@ class BacktestNode:
     cache_path: str = ""
     verbose: bool = False
     universe: str = "base"
+    execution_price: str = "vwap30"
+    drawdown_stop: float = 0.0
+    cooldown_days: int = 0
     holdings: pd.Series | None = None
     last_hold: pd.Series | None = None
     yesterday: int | None = None
@@ -37,8 +54,8 @@ class BacktestNode:
     asset_history: list[list[float]] = field(default_factory=list)
     position_history: list[pd.DataFrame] = field(default_factory=list)
     hold_history: list[pd.Series] = field(default_factory=list)
-    fig: plt.Figure | None = None
-    ax: plt.Axes | None = None
+    fig: Any | None = None
+    ax: Any | None = None
     daily_metrics_written: bool = False
     prev_total_asset: float | None = None
 
@@ -79,7 +96,12 @@ class DailyBacktest:
 
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
-        self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+        if self.node.execution_price == "vwap30":
+            self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+        elif self.node.execution_price == "open":
+            self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds).ffill()
+        else:
+            raise ValueError(f"Unknown execution_price: {self.node.execution_price}")
         self.close_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds).ffill()
         self.market_cap = self.dataloader.get_market_cap(self.node.start_ds, self.node.end_ds).ffill()
         self.suspend = self.dataloader.get_suspend(self.node.start_ds, self.node.end_ds)
@@ -97,6 +119,8 @@ class DailyBacktest:
         self.node.fig, self.node.ax = None, None
         self.node.daily_metrics_written = False
         self.node.prev_total_asset = None
+        self.equity_peak = float(self.node.cash)
+        self.cooldown_left = 0
         self.cash = float(self.node.cash)
         self.daily_metrics_path = os.path.join(self.node.output_path, self.node.daily_metrics_file)
         self.pnl_summary_path = os.path.join(self.node.output_path, "pnl_summary.csv")
@@ -150,16 +174,12 @@ class DailyBacktest:
             print(message)
 
     def _fetch_benchmark_data(self) -> pd.DataFrame:
-        pro = Querytool()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            bench_raw = pro.index_daily(
-                ts_code="000905.SH",
-                target_columns=["close"],
-                start_date=self.node.start_ds,
-                end_date=self.node.end_ds,
-            )
-        return pd.DataFrame(bench_raw).copy()
+        return load_index_benchmark(
+            self.node.cache_path,
+            start_ds=self.node.start_ds,
+            end_ds=self.node.end_ds,
+            ts_code="000905.SH",
+        )
 
     def step(self, date: int, alpha: pd.Series | np.ndarray) -> dict:
         date = self._align_date(date)
@@ -168,9 +188,21 @@ class DailyBacktest:
 
         self._advance_from_previous_close(date)
         vwap_today = self.vwap_data.loc[date]
+        pre_trade_total = self._total_asset(vwap_today)
+        stop_triggered = False
+        if self.node.drawdown_stop > 0 and pre_trade_total / self.equity_peak - 1.0 <= -self.node.drawdown_stop:
+            stop_triggered = True
+            self.cooldown_left = max(self.cooldown_left, int(self.node.cooldown_days))
+            self.equity_peak = float(pre_trade_total)
+
         signals = self._coerce_alpha(alpha).fillna(0.0)
-        signal_masked = signals * self.universe.loc[date].fillna(0.0)
-        target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
+        if stop_triggered or self.cooldown_left > 0:
+            target_weight = pd.Series(dtype=float)
+            if not stop_triggered:
+                self.cooldown_left -= 1
+        else:
+            signal_masked = signals * self.universe.loc[date].fillna(0.0)
+            target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
         self.node.position_history.append(pd.DataFrame([target_weight], index=[date], columns=self.universe.columns))
         tvr_cost = 0.0
 
@@ -206,20 +238,21 @@ class DailyBacktest:
                     cost = b_value * (1 + self.node.fee_rate)
                     trade_cost += buy_lots * price_per_100_shares * self.node.fee_rate
                     self.cash -= cost
-                    self.node.holdings[stock] += buy_lots * 100
+                    self.node.holdings.loc[stock] = self.node.holdings.loc[stock] + buy_lots * 100
                     tvr_cost += b_value
             elif value_diff < 0:
                 sell_value = -value_diff
-                shares_to_sell = min(self.node.holdings[stock], (sell_value // price_per_100_shares + 1) * 100)
+                shares_to_sell = min(self.node.holdings.loc[stock], (sell_value // price_per_100_shares + 1) * 100)
                 s_value = shares_to_sell * price_per_share
                 proceeds = s_value * (1 - self.node.fee_rate)
                 trade_cost += s_value * self.node.fee_rate
                 self.cash += proceeds
-                self.node.holdings[stock] -= shares_to_sell
+                self.node.holdings.loc[stock] = self.node.holdings.loc[stock] - shares_to_sell
                 tvr_cost += s_value
 
         close_today = self.close_data.loc[date]
         total = self._total_asset(close_today)
+        self.equity_peak = max(self.equity_peak, float(total))
         pnl = 0.0 if self.node.prev_total_asset is None else float(total - self.node.prev_total_asset)
         self.node.prev_total_asset = float(total)
         tvr = float(tvr_cost / target_value.sum()) if target_value.sum() != 0 else 0.0
@@ -271,6 +304,9 @@ class DailyBacktest:
         return summary
 
     def setup_plot(self, title, xlabel, ylabel):
+        plt = _load_pyplot()
+        if plt is None:
+            raise RuntimeError("matplotlib is required to draw backtest plots")
         self.node.fig, self.node.ax = plt.subplots(figsize=(10, 6))
         self.node.ax.set_title(title, fontsize=14)
         self.node.ax.set_xlabel(xlabel, fontsize=12)
@@ -279,13 +315,18 @@ class DailyBacktest:
         self.node.fig.tight_layout()
 
     def save_plot(self, name):
+        plt = _load_pyplot()
         self.node.ax.legend()
         self.node.ax.tick_params(axis="x", rotation=45)
         self.node.fig.savefig(os.path.join(self.node.output_path, name))
-        plt.close(self.node.fig)
+        if plt is not None:
+            plt.close(self.node.fig)
 
     def draw(self):
         if self.asset_history.empty:
+            return
+        if _load_pyplot() is None:
+            warnings.warn("matplotlib is not installed; skipping backtest plots", RuntimeWarning)
             return
         x = [pd.to_datetime(str(date), format="%Y%m%d") for date in list(self.asset_history.index)]
         bench_data = self._fetch_benchmark_data()
@@ -326,7 +367,7 @@ class DailyBacktest:
             df.index = pd.to_datetime(df.index.astype(str), format="%Y%m%d", errors="coerce")
         elif not np.issubdtype(df.index.dtype, np.datetime64):
             df.index = pd.to_datetime(df.index, errors="coerce")
-        df = df[(df.index >= pd.to_datetime(str(sdate))) & (df.index <= pd.to_datetime(str(edate)))]
+        df = df.loc[(df.index >= pd.to_datetime(str(sdate))) & (df.index <= pd.to_datetime(str(edate)))].copy()
         if df.empty:
             empty = pd.DataFrame()
             empty.to_csv(self.pnl_summary_path)
@@ -352,9 +393,9 @@ class DailyBacktest:
         bench_close = bench_data.reindex(df.index)["close"].astype(float).ffill()
         bench_ret = bench_close.pct_change().fillna(0.0)
 
-        df["pnl"] = df["total_asset"].diff().fillna(0.0)
-        df["ret"] = df["pnl"] / booksize
-        df["li_ret"] = df["ret"] - bench_ret
+        pnl = df["total_asset"].diff().fillna(0.0)
+        ret = pnl / booksize
+        df = df.assign(pnl=pnl, ret=ret, li_ret=ret - bench_ret)
 
         rows = []
         labels = []
