@@ -137,6 +137,39 @@ def test_daily_ic_uses_common_signal_and_label_axes() -> None:
     assert np.isclose(daily_ic.iloc[0]["ic"], 1.0)
 
 
+def test_daily_lic_and_spread_use_equal_frequency_alpha_layers() -> None:
+    signal = pd.DataFrame(
+        [np.arange(1.0, 21.0)],
+        index=pd.to_datetime(["2020-01-02"]),
+        columns=[f"{code:06d}" for code in range(1, 21)],
+    )
+    label = signal * 0.01
+
+    daily_ic = calculate_daily_ic_from_signal(signal, label, label)
+
+    assert np.isclose(daily_ic.iloc[0]["lic"], 1.0)
+    assert np.isclose(daily_ic.iloc[0]["layerspread"], 0.18)
+    assert "percic" not in daily_ic.columns
+
+
+def test_daily_layer_ic_drops_dates_that_cannot_form_all_ten_layers() -> None:
+    signal = pd.DataFrame(
+        [[1.0] * 10 + [2.0] * 10],
+        index=pd.to_datetime(["2020-01-02"]),
+        columns=[f"{code:06d}" for code in range(1, 21)],
+    )
+    label = pd.DataFrame(
+        [np.arange(1.0, 21.0)],
+        index=signal.index,
+        columns=signal.columns,
+    )
+
+    daily_ic = calculate_daily_ic_from_signal(signal, label, label)
+
+    assert np.isnan(daily_ic.iloc[0]["lic"])
+    assert np.isnan(daily_ic.iloc[0]["layerspread"])
+
+
 def test_evaluation_mask_combines_base_and_limit_then_shifts(monkeypatch) -> None:
     dates = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"])
     columns = ["000001", "000002"]

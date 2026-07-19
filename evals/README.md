@@ -9,7 +9,7 @@
 - `correlation`: 计算 pnl correlation、position correlation、trade correlation，以及 pool 级别的 `maxcorr` / `avgcorr` / `topcorrN`。
 - `value_add`: 计算 guidance-style `IR_candidate - corr * IR_solid`、pool value-add 和 netting residual。
 - `constraints`: 本地实现 short-side equalization、universe coverage、trading-limit exposure 检查。
-- `exposure`: 计算 signal 对 Barra 风格因子的日频暴露，支持相关暴露和回归 beta 暴露两种口径。
+- `exposure`: 计算 signal 对 Barra 风格因子的日频暴露，并计算对当日可得市值的 CAP corr。
 - `eval`: 对 `pnl` / `ic` 汇总结果执行本地 L1/L2 阈值检查。
 
 ## CLI
@@ -50,12 +50,13 @@ ic_checks.csv
 pnl_checks.csv
 decile_summary.csv
 barra_exposure_summary.csv
+cap_corr_summary.csv
 top10_excess.csv
 signal_analysis.png
 report.json
 ```
 
-其中 `signal_analysis.png` 是信号综合长图，包含 IC 统计、PNL 统计、信号 10 分位数时间序列、10 组分组回测、Barra 风格暴露范围，以及 top10% 回测相对基准的累计超额收益。PNL 与分组回测使用与 `evals/tools/rundailypnl.py` 相同的本地 daily-pnl 逻辑，IC 从 1d/5d label 重新计算。
+其中 `signal_analysis.png` 是信号综合长图，包含 IC 统计、PNL 统计、信号 10 分位数时间序列、10 组分组回测、Barra 风格暴露范围、CAP corr 汇总，以及 top10% 回测相对基准的累计超额收益。PNL 与分组回测使用与 `evals/tools/rundailypnl.py` 相同的本地 daily-pnl 逻辑，IC 从 1d/5d label 重新计算。总体评估会输出分层指标 `lIC`：每天将有效 alpha 按等频分成 Q1--Q10，对各层的平均 1d forward return 与层号求相关；汇总中的 `lIC.avg`、`lIC.ir` 分别是跨日均值和日频 IR，`layerSpread.avg` 是 Q10--Q1 平均收益差。为保持 Q10--Q1 的严格含义，若 alpha 并列导致当天无法形成完整 10 层，该日的这三项均不计入汇总。
 
 常用可选项：
 
@@ -127,10 +128,10 @@ PNL Long Short Return Holdvalue Tradevalue Longcount Shortcount
 也兼容 `comb2_organize` 输出，使用 `--normalize-names` 时会把：
 
 ```text
-ic 5dic rankic percic coverage
+ic 5dic rankic lic layerspread coverage
 ```
 
-映射为 `1d_IC 5d_IC rankic percic coverage`。
+映射为 `1d_IC 5d_IC rankic lIC layerSpread coverage`。新生成的评估结果使用 `lIC`。
 
 ### matrix
 
@@ -165,3 +166,8 @@ position / trade / alpha matrix 支持 csv/tsv/parquet。需要日期索引或 `
      - `end_ds`: 结束日期，默认自动匹配 signal 与 Barra 的最长交集
      - `mode`: `0` 为相关暴露，`1` 为 beta 暴露
    - 返回值是 `date x style` 的 DataFrame，列名为 `BETA/BTOP/...`
+
+3. `compute_cap_corr(signal, cache_path=..., start_ds=None, end_ds=None)`
+   - 从 `AshareCache/1d_DailyFdm/DailyFdm.mkt_cap` 读取 alpha 当日可得的市值。
+   - 先以 signal 当日截面中位数构造多空分别归一化的权重，再与截面 rank 市值求 Pearson 相关。
+   - 返回按同日对齐的日频 `cap_corr` Series；`summarize_cap_corr` 输出年度与全样本汇总。

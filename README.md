@@ -124,7 +124,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 <output_root>/alpha.parquet
 ```
 
-如果缺失或为空，会打印不齐全的文件列表并退出。齐全后会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算 IC、PNL、分组回测，并在 `<output_root>/eval_report/` 下生成 summary、检查表和 `signal_analysis.png` 长图，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`。
+如果缺失或为空，会打印不齐全的文件列表并退出。齐全后会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算 IC、PNL、分组回测、Barra 暴露和 CAP corr，并在 `<output_root>/eval_report/` 下生成 summary、检查表和 `signal_analysis.png` 长图，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`。
 
 默认会从 `constants.cache_path/AshareCache/1d_DailyLabel` 读取 `DailyLabel.vwap30_label1d` 和 `DailyLabel.vwap30_label5d`。如果要显式指定本地 label 表：
 
@@ -232,3 +232,55 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 - `vendor/comb2`：临时内置的 `comb2` 源码
 - `vendor/comb2-pcmaster`：临时内置的 `comb2-pcmaster` 源码
 - `vendor/perf_monitor.py`：可选性能监控模块
+
+## 第 1 轮 2026-07-10 - Eval 分层 IC
+
+### 目标
+
+以分层单调性 `layerIC` 取代总体评估中的 `percic`，并同步提供 `layerIC.ir` 与 Q10--Q1 收益差。
+
+### 已读材料 / 输入澄清
+
+已读取 `config.human`、本 README 和 `evals/README.md`。用户已明确分层定义、使用当前交易掩码和有效 alpha/label 样本，并要求替换 eval 中 `percic` 的位置；无未决实现选择。
+
+### 实现
+
+复用 `runEval` 既有的 alpha、label 与交易掩码对齐流程。在有效样本中使用不拆分并列值的 10 等频桶；不能形成完整 Q1--Q10 的日期记为缺失，从而保持 `layerSpread=Q10-Q1` 的严格口径。IC 汇总、检查规则、报告关键列、图表和文档均改用 `layerIC` / `layerSpread`；历史 `percic` 文件仍可由单项 `--sim` 模式读取。
+
+### 主指标与后续
+
+主指标为 `layerIC.avg`，辅助输出为 `layerIC.ir` 和 `layerSpread.avg`。L1/L2 的数值阈值暂沿用被替代的 `percic.avg` 阈值，后续应基于历史样本的分布和通过率重新校准；本轮不涉及训练、模型或基线变更。
+
+## 第 2 轮 2026-07-10 - 发布 0.1.8
+
+### 目标 / 输入澄清
+
+用户要求将版本调整为 `0.1.8`，编译受保护 wheel 并安装到当前 `python3`。本轮复用了仓库根目录 `VERSION` 和 `packaging/build_protected_wheel.py` 的既有发布流程，不涉及训练、模型、配置或评估定义变更。
+
+### 实现 / 验证
+
+版本源更新为 `0.1.8`，并同步更新 `RELEASE.md`。构建环境使用 `/root/autodl/local-gcc`，其 `bin` 和 `lib` 已写入 `~/.bashrc`；生成并验证 `dist_protected/combo2-0.1.8-cp313-cp313-linux_x86_64.whl`，随后以当前 Python 3.13 的 `pip --no-deps --force-reinstall` 替换已安装的 `combo2 0.1.7`。
+
+## 第 3 轮 2026-07-10 - lIC / lIR
+
+### 目标 / 输入澄清
+
+用户要求将分层 IC 的公开名称改为 `lIC` / `lIR`，并移除 percentile IC。
+
+### 实现 / 验证
+
+日频字段改为 `lic`，原生汇总为 `lIC.avg` 与 `lIC.ir`；`percic` 已从生成、汇总和单项输入处理中移除。构建并安装 `combo2 0.1.9`，源码测试与项目 `eval.py` 入口均通过；候选模型的 ALL 行为 `lIC=0.345341`、`lIR=0.629311`。
+
+## 第 4 轮 2026-07-15 - Eval CAP Corr
+
+### 目标 / 输入澄清
+
+为 `runEval config.xml` 加入 CAP corr。用户确认市值与 alpha 按同一交易日对齐，只使用当日可得市值；不沿用旧实现的下一交易日市值偏移。
+
+### 实现
+
+复用总体评估已经应用 BaseUniv/Limit、label 和 alpha 的对齐结果，读取 `AshareCache/1d_DailyFdm/DailyFdm.mkt_cap`。每日市值做截面 rank；alpha 做中位数中心化并按多头、空头分别归一化，再求 Pearson 相关。评估报告新增 `cap_corr_summary.csv`，输出年度及全样本的均值、日频 IR 和标准差，并在命令行文本和长图摘要展示；`--skip-exposure` 同时跳过 Barra 与 CAP 指标。
+
+### 验证 / Handoff
+
+新增同日对齐和全样本日频加权汇总测试。`python3 -m pytest -q evals/tests/test_exposure.py evals/tests/test_precision.py evals/tests/test_correlation.py` 通过（12 passed），`python3 -m pytest -q tests evals/tests` 也已完成。全仓收集仍受未跟踪目录 `0714.search.bad.performance/` 中同名 `test_model.*.py` 冲突影响。

@@ -17,13 +17,16 @@ def normalize_ic_columns(df: pd.DataFrame) -> pd.DataFrame:
         "5dic": "5d_IC",
         "10dic": "10d_IC",
         "rankic": "rankic",
-        "percic": "percic",
+        "lic": "lIC",
+        "layeric": "lIC",
+        "layerspread": "layerSpread",
     }
     return df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
 
 def summarize_ic(path: str | Path | pd.DataFrame, start: str | None = None, end: str | None = None, normalize_names: bool = False) -> MetricResult:
     df = read_table(path, start=start, end=end)
+    df = df.drop(columns=["percic", "percIC"], errors="ignore")
     if normalize_names:
         df = normalize_ic_columns(df)
     coverage = df.pop("coverage") if "coverage" in df.columns else None
