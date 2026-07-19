@@ -21,7 +21,7 @@ from comb2_simbase.cache_layout import (
 
 warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
 
-from .exposure import compute_barra_style_exposure
+from .exposure import compute_barra_style_exposure, compute_cap_corr, summarize_cap_corr
 from .formatting import output_frame_to_text
 from .ic import summarize_ic
 from .io import normalize_date_index, read_cache_array, read_matrix
@@ -51,8 +51,9 @@ IC_KEY_COLUMNS = [
     "5d_IC.ir",
     "rankic.avg",
     "rankic.ir",
-    "percic.avg",
-    "percic.ir",
+    "lIC.avg",
+    "lIC.ir",
+    "layerSpread.avg",
     "coverage.avg",
 ]
 
@@ -83,6 +84,7 @@ class ConfigEvalResult:
     pnl_checks: pd.DataFrame | None
     decile_summary: pd.DataFrame | None
     exposure_summary: pd.DataFrame | None
+    cap_corr_summary: pd.DataFrame | None
     top10_excess: pd.DataFrame | None
     messages: list[str]
 
@@ -189,8 +191,9 @@ def run_config_evaluation(
             messages.append(f"decile backtest unavailable: {exc}")
 
     exposure_summary = None
+    cap_corr_summary = None
     if skip_exposure:
-        messages.append("Barra exposure skipped by --skip-exposure")
+        messages.append("Barra exposure and CAP correlation skipped by --skip-exposure")
     else:
         try:
             exposure = compute_barra_style_exposure(
@@ -203,6 +206,16 @@ def run_config_evaluation(
             exposure_summary = summarize_exposure(exposure)
         except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
             messages.append(f"Barra exposure unavailable: {exc}")
+        try:
+            cap_corr = compute_cap_corr(
+                alpha,
+                start_ds=int(eval_start) if eval_start is not None else None,
+                end_ds=int(eval_end) if eval_end is not None else None,
+                cache_path=artifacts.cache_path,
+            )
+            cap_corr_summary = summarize_cap_corr(cap_corr)
+        except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
+            messages.append(f"CAP correlation unavailable: {exc}")
 
     _write_outputs(
         artifacts,
@@ -212,6 +225,7 @@ def run_config_evaluation(
         pnl_checks=pnl_checks,
         decile_summary=decile_summary,
         exposure_summary=exposure_summary,
+        cap_corr_summary=cap_corr_summary,
         top10_excess=top10_excess,
         messages=messages,
         start=eval_start,
@@ -227,6 +241,7 @@ def run_config_evaluation(
         decile_daily=decile_daily,
         decile_summary=decile_summary,
         exposure_summary=exposure_summary,
+        cap_corr_summary=cap_corr_summary,
         top10_excess=top10_excess,
         messages=messages,
         booksize=artifacts.booksize,
@@ -240,6 +255,7 @@ def run_config_evaluation(
         pnl_checks=pnl_checks,
         decile_summary=decile_summary,
         exposure_summary=exposure_summary,
+        cap_corr_summary=cap_corr_summary,
         top10_excess=top10_excess,
         messages=messages,
     )
@@ -436,6 +452,7 @@ def plot_signal_analysis(
     decile_daily: dict[str, pd.DataFrame],
     decile_summary: pd.DataFrame | None,
     exposure_summary: pd.DataFrame | None,
+    cap_corr_summary: pd.DataFrame | None,
     top10_excess: pd.DataFrame | None,
     messages: list[str],
     booksize: float,
@@ -455,7 +472,7 @@ def plot_signal_analysis(
     fig.suptitle("Signal Evaluation Report", fontsize=20, fontweight="bold")
 
     ax_summary = fig.add_subplot(grid[0])
-    _plot_summary_text(ax_summary, alpha, ic_summary, pnl_summary, decile_summary, exposure_summary, messages)
+    _plot_summary_text(ax_summary, alpha, ic_summary, pnl_summary, decile_summary, exposure_summary, cap_corr_summary, messages)
 
     ax_ic = fig.add_subplot(grid[1])
     _plot_ic_stats(ax_ic, daily_ic)
@@ -613,6 +630,7 @@ def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame,
     y1 = label_1d.astype(float).to_numpy()
     y5 = label_5d.astype(float).to_numpy()
     valid_1d = np.isfinite(x) & np.isfinite(y1)
+    layer_ic, layer_spread = _row_layer_metrics(x, y1)
     label_count = np.sum(np.isfinite(y1), axis=1).astype(float)
     label_count[label_count == 0] = np.nan
     return pd.DataFrame(
@@ -620,7 +638,8 @@ def calculate_daily_ic_from_signal(signal: pd.DataFrame, label_1d: pd.DataFrame,
             "ic": _row_corr(x, y1),
             "5dic": _row_corr(x, y5),
             "rankic": _row_corr(_row_rank(x), _row_rank(y1)),
-            "percic": _row_corr(_row_percentile(x), _row_rank(y1)),
+            "lic": layer_ic,
+            "layerspread": layer_spread,
             "coverage": np.sum(valid_1d, axis=1) / label_count,
         },
         index=signal.index,
@@ -705,6 +724,7 @@ def _write_outputs(
     pnl_checks: pd.DataFrame | None,
     decile_summary: pd.DataFrame | None,
     exposure_summary: pd.DataFrame | None,
+    cap_corr_summary: pd.DataFrame | None,
     top10_excess: pd.DataFrame | None,
     messages: list[str],
     start: str | None,
@@ -717,6 +737,7 @@ def _write_outputs(
         "pnl_checks.csv": pnl_checks,
         "decile_summary.csv": decile_summary,
         "barra_exposure_summary.csv": exposure_summary,
+        "cap_corr_summary.csv": cap_corr_summary,
         "top10_excess.csv": top10_excess,
     }
     for filename, frame in frames.items():
@@ -765,6 +786,9 @@ def config_eval_to_text(result: ConfigEvalResult) -> str:
     if result.exposure_summary is not None:
         lines.append("\n[barra.exposure.summary]")
         lines.append(output_frame_to_text(result.exposure_summary))
+    if result.cap_corr_summary is not None:
+        lines.append("\n[cap_corr.summary]")
+        lines.append(output_frame_to_text(result.cap_corr_summary))
     return "\n".join(lines)
 
 
@@ -775,6 +799,7 @@ def _plot_summary_text(
     pnl_summary: pd.DataFrame | None,
     decile_summary: pd.DataFrame | None,
     exposure_summary: pd.DataFrame | None,
+    cap_corr_summary: pd.DataFrame | None,
     messages: list[str],
 ) -> None:
     ax.axis("off")
@@ -787,6 +812,10 @@ def _plot_summary_text(
     if ic_summary is not None and "ALL" in ic_summary.index:
         row = ic_summary.loc["ALL"]
         lines.append(f"IC ALL: 1d avg={_value(row, '1d_IC.avg'):.4f}, 1d ir={_value(row, '1d_IC.ir'):.4f}, rank avg={_value(row, 'rankic.avg'):.4f}")
+        lines.append(
+            f"Layer ALL: lIC={_value(row, 'lIC.avg'):.4f}, lIR={_value(row, 'lIC.ir'):.4f}, "
+            f"Q10-Q1={_value(row, 'layerSpread.avg'):.4f}"
+        )
     if pnl_summary is not None and "ALL" in pnl_summary.index:
         row = pnl_summary.loc["ALL"]
         lines.append(f"PNL ALL: ret={_value(row, 'ret_pct'):.2f}%, ir={_value(row, 'ir'):.4f}, sharpe={_value(row, 'sharpe'):.2f}, tvr={_value(row, 'tvr_pct'):.2f}%")
@@ -796,6 +825,9 @@ def _plot_summary_text(
     if exposure_summary is not None:
         strongest = exposure_summary["mean"].abs().sort_values(ascending=False).head(3)
         lines.append("Largest mean Barra exposure: " + ", ".join(f"{idx}={value:.3f}" for idx, value in strongest.items()))
+    if cap_corr_summary is not None and "ALL" in cap_corr_summary.index:
+        row = cap_corr_summary.loc["ALL"]
+        lines.append(f"CAP corr ALL: avg={_value(row, 'cap_corr.avg'):.4f}, ir={_value(row, 'cap_corr.ir'):.4f}")
     if messages:
         lines.append("Notes: " + " | ".join(messages[:4]))
     ax.text(0.01, 0.95, "\n".join(lines), va="top", ha="left", fontsize=12, family="monospace")
@@ -807,7 +839,7 @@ def _plot_ic_stats(ax, daily_ic: pd.DataFrame | None) -> None:
         _plot_unavailable(ax, "IC data unavailable")
         return
     daily_ic = normalize_date_index(daily_ic)
-    for column in ["ic", "5dic", "rankic", "percic", "1d_IC", "5d_IC"]:
+    for column in ["ic", "5dic", "rankic", "lic", "1d_IC", "5d_IC", "lIC"]:
         if column in daily_ic.columns:
             ax.plot(daily_ic.index, daily_ic[column].astype(float).rolling(20, min_periods=1).mean(), label=f"{column} 20d")
     ax.axhline(0.0, color="black", linewidth=0.9)
@@ -974,8 +1006,39 @@ def _row_rank(values: np.ndarray) -> np.ndarray:
     return pd.DataFrame(values).rank(axis=1).to_numpy()
 
 
-def _row_percentile(values: np.ndarray) -> np.ndarray:
-    return pd.DataFrame(values).rank(axis=1, pct=True).to_numpy()
+def _row_layer_metrics(
+    signal: np.ndarray,
+    forward_return: np.ndarray,
+    *,
+    layer_count: int = 10,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return daily monotonicity IC and Q10-Q1 spread for equal-frequency alpha layers.
+
+    Ties are never split across layers. If ties leave fewer than ``layer_count``
+    non-empty buckets, the date is excluded so the spread remains literal Q10-Q1.
+    """
+    layer_ic = np.full(signal.shape[0], np.nan, dtype=float)
+    layer_spread = np.full(signal.shape[0], np.nan, dtype=float)
+    layer_numbers = np.arange(1, layer_count + 1, dtype=float)
+
+    for row_idx in range(signal.shape[0]):
+        valid = np.isfinite(signal[row_idx]) & np.isfinite(forward_return[row_idx])
+        if valid.sum() < layer_count:
+            continue
+        alpha = signal[row_idx, valid]
+        returns = forward_return[row_idx, valid]
+        buckets = np.asarray(pd.qcut(alpha, q=layer_count, labels=False, duplicates="drop"))
+        if not np.isfinite(buckets).all():
+            continue
+        buckets = buckets.astype(np.intp, copy=False)
+        if not np.array_equal(np.unique(buckets), np.arange(layer_count)):
+            continue
+
+        layer_returns = np.array([returns[buckets == bucket].mean() for bucket in range(layer_count)], dtype=float)
+        layer_ic[row_idx] = _row_corr(layer_numbers[None, :], layer_returns[None, :])[0]
+        layer_spread[row_idx] = layer_returns[-1] - layer_returns[0]
+
+    return layer_ic, layer_spread
 
 
 def _select_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

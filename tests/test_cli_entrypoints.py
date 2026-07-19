@@ -101,7 +101,7 @@ def test_run_eval_specialized_modes(tmp_path):
             "ic": [0.01, 0.02, 0.03],
             "5dic": [0.02, 0.03, 0.04],
             "rankic": [0.03, 0.04, 0.05],
-            "percic": [0.04, 0.05, 0.06],
+            "lic": [0.04, 0.05, 0.06],
             "coverage": [1.0, 1.0, 1.0],
         },
         index=dates,
@@ -111,6 +111,8 @@ def test_run_eval_specialized_modes(tmp_path):
     sim_proc = run_cli("runEval.py", "--sim", str(daily_ic_path), "--normalize-names")
     assert sim_proc.returncode == 0
     assert "1d_IC.avg" in sim_proc.stdout
+    assert "lIC.avg" in sim_proc.stdout
+    assert "percic.avg" not in sim_proc.stdout
 
     daily_pnl = pd.DataFrame(
         {
@@ -142,7 +144,7 @@ def test_run_eval_specialized_modes(tmp_path):
 
 def test_run_eval_single_modes_reject_config(tmp_path):
     daily_ic = pd.DataFrame(
-        {"ic": [0.01], "5dic": [0.02], "rankic": [0.03], "percic": [0.04], "coverage": [1.0]},
+        {"ic": [0.01], "5dic": [0.02], "rankic": [0.03], "lic": [0.04], "coverage": [1.0]},
         index=pd.to_datetime(["2020-01-02"]),
     )
     daily_ic_path = tmp_path / "daily_ic.parquet"

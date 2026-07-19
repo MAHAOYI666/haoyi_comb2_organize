@@ -1070,8 +1070,11 @@ runEval --overall --config config.xml
 - IC/PNL checks
 - 10 分组回测
 - Barra exposure summary
+- CAP corr summary
 - top10 excess
 - `signal_analysis.png` 长图
+
+IC summary 中的分层主指标为 `lIC`：逐日按有效 alpha 等频分为 Q1--Q10，将每层平均 1d forward return 与层号求相关。`lIC.avg` 是跨日均值，`lIC.ir` 是跨日均值除以日频标准差；精简汇总展示为 `lIC` 和 `lIR`。`layerSpread.avg` 是 Q10--Q1 的平均收益差。若并列 alpha 使当天不能形成完整十层，该日的分层指标记为缺失，不进入汇总。
 
 默认输出：
 
@@ -1083,6 +1086,7 @@ runEval --overall --config config.xml
   pnl_checks.csv
   decile_summary.csv
   barra_exposure_summary.csv
+  cap_corr_summary.csv
   top10_excess.csv
   signal_analysis.png
   report.json
@@ -1098,6 +1102,8 @@ runEval config.xml --report-dir /tmp/eval_report
 runEval config.xml --plot-output /tmp/signal_analysis.png
 runEval config.xml --label vwap30_label1d.csv --label-is-table --label-5d vwap30_label5d.csv --label-5d-is-table
 ```
+
+`--skip-exposure` 会同时跳过 Barra exposure 和 CAP corr。
 
 ### 19.2 sim: IC 类评估
 
@@ -1178,6 +1184,8 @@ runEval --exposure alpha.parquet --cache-path /path/to/Cache --exposure-mode 1
 ```
 
 `0` 表示截面相关暴露，`1` 表示 beta 暴露。输出各 Barra 风格的 `min/mean/max/std`。
+
+总体评估还会生成 `cap_corr_summary.csv`：使用 alpha 当日可得的 `AshareCache/1d_DailyFdm/DailyFdm.mkt_cap`，与已应用总体评估股票池和交易掩码的 alpha 按相同日期、股票代码对齐。市值逐日做截面 rank；alpha 逐日减中位数并将多头、空头分别归一化后，与 rank 市值计算日频 Pearson 相关。输出每年和全样本的 `cap_corr.avg`、`cap_corr.ir`、`cap_corr.std`。
 
 ### 19.6 va: value-add
 
