@@ -43,6 +43,18 @@ class DataLoader:
     def get_close(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.close")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
+    def get_returns(self, start_ds, end_ds) -> pd.DataFrame:
+        return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.pct_chg")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_index_weight(self, start_ds, end_ds, ts_code="000905.SH") -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_IndexWeight" / f"IndexWeight.{ts_code}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_barra_style(self, name, start_ds, end_ds) -> pd.DataFrame:
+        filename = str(name).upper()
+        path = self.ashare_cache_path / "1d_BarraCNE5" / f"BarraCNE5.{filename}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
     def get_market_cap(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyFdm" / "DailyFdm.mkt_cap")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 

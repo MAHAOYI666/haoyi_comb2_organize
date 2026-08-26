@@ -36,6 +36,7 @@ class BacktestNode:
     output_path: str
     strategy_path: str
     strategy_class: str
+    strategy_config: dict[str, Any]
     cash: float
     fee_rate: float
     reserve_cash: float
@@ -82,10 +83,7 @@ class DailyBacktest:
         spec.loader.exec_module(module)
         strategy_class = getattr(module, class_name, None)
         return strategy_class(
-            strategy_config={
-                "strategy_path": file_path,
-                "strategy_class": class_name,
-            },
+            strategy_config=dict(self.node.strategy_config),
             dataloader=self.dataloader,
         )
 
@@ -207,6 +205,7 @@ class DailyBacktest:
                 self.cooldown_left -= 1
         else:
             signal_masked = signals * self.universe.loc[date].fillna(0.0)
+            self.dataloader.date = date
             target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
         self.node.position_history.append(pd.DataFrame([target_weight], index=[date], columns=self.universe.columns))
         tvr_cost = 0.0

@@ -285,6 +285,7 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         output_path=str(output_path),
         strategy_path=str(strategy_path),
         strategy_class="AlphaStrategy",
+        strategy_config=dict(strategy_config),
         cash=float(backtest_config["cash"]),
         fee_rate=float(backtest_config["fee_rate"]),
         reserve_cash=float(backtest_config["reserve_cash"]),

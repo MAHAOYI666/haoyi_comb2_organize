@@ -306,6 +306,56 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
         load_config(str(unknown_constant))
 
 
+def test_config_loads_researcher_optimizer_parameters(tmp_path):
+    from config import DEFAULT_OPTIMIZER_CONFIG, load_config
+
+    config_path = tmp_path / "optimizer.xml"
+    config_path.write_text(
+        """
+<config>
+  <strategy start_ds="20241028" end_ds="20241029">
+    <optimizer
+      lambda0="0.75"
+      maxtvr="0.25"
+      max_weight="0.006"
+      num_mosek_threads="2"
+      post_trim_renorm="true"
+      risk_list="returns120:-0.10:0.10,1|BarraCNE5.BETA:-0.15:0.20,1"
+    />
+  </strategy>
+</config>
+""".strip(),
+        encoding="utf-8",
+    )
+
+    optimizer = load_config(str(config_path))["strategy"]["optimizer"]
+
+    assert optimizer["lambda0"] == 0.75
+    assert optimizer["maxtvr"] == 0.25
+    assert optimizer["max_weight"] == 0.006
+    assert optimizer["num_mosek_threads"] == 2
+    assert optimizer["post_trim_renorm"] is True
+    assert optimizer["risk_list"].endswith("BarraCNE5.BETA:-0.15:0.20,1")
+    assert optimizer["ret_delay"] == 1
+    assert optimizer["benchmark_delay"] == 1
+    for name in ("univ_list", "soft_univ_list", "risk_list", "soft_risk_list"):
+        assert all(entry.rsplit(",", 1)[-1] == "1" for entry in optimizer[name].split("|"))
+    assert DEFAULT_OPTIMIZER_CONFIG["ret_delay"] == 1
+
+
+def test_config_rejects_invalid_optimizer_parameters(tmp_path):
+    from config import load_config
+
+    config_path = tmp_path / "invalid-optimizer.xml"
+    config_path.write_text(
+        '<config><strategy><optimizer ret_delay="-1" /></strategy></config>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="strategy.optimizer.ret_delay must be nonnegative"):
+        load_config(str(config_path))
+
+
 def test_version_file_is_the_build_default():
     import importlib.util
 
@@ -316,6 +366,7 @@ def test_version_file_is_the_build_default():
     spec.loader.exec_module(module)
     assert module.DISTRIBUTION_NAME == "combo2"
     assert "src" not in module.PACKAGE_SOURCES
+    assert "Mosek==11.0.25" in module.resolve_dependencies()["install_requires"]
     assert module.read_version() == (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 

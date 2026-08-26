@@ -278,7 +278,31 @@ CONFIG_TEMPLATE = '''
   <strategy
     start_ds="20160111"
     end_ds="20200101"
-  />
+  >
+    <optimizer
+      lambda0="0.5"
+      shrinkage="0.5"
+      ret_days="60"
+      ret_delay="1"
+      ret_method="2"
+      benchmark_delay="1"
+      maxtvr="0.4"
+      max_weight="0.0075"
+      min_participation_ratio="0.21"
+      trim_threshold="0.00001"
+      min_valid_instruments="200"
+      min_return_obs="20"
+      soft_univ_penalty="0.00025"
+      soft_risk_penalty="0.00004"
+      num_mosek_threads="1"
+      max_time="30.0"
+      post_trim_renorm="false"
+      univ_list="ZZ500:0.18:0.70,1"
+      soft_univ_list="ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1"
+      risk_list="returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
+      soft_risk_list="returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+    />
+  </strategy>
 
   <combo>
     <paths

@@ -19,6 +19,14 @@ vendor/
 
 `vendor/` 只包含运行所需源码，不包含原仓库 git history、构建产物、缓存和历史输出。
 
+默认持仓策略依赖 `Mosek==11.0.25`。受保护 wheel 已声明该依赖；直接从源码运行时需在当前 Python 环境安装 MOSEK，并通过环境变量提供有效许可证：
+
+```bash
+export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+```
+
+源码仓库根目录包含已脱敏的 `mosek.lic`。受保护 wheel 不内嵌许可证；wheel 部署环境仍需通过 `MOSEKLM_LICENSE_FILE` 指向获准使用的副本。
+
 完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
 
 ## research 流程示例
@@ -67,6 +75,7 @@ eg-lgbm/
 关键配置包括：
 - `constants.cache_path`：`AshareCache` 的父目录；行情、mask、label、Barra 和回测路径均从这里派生
 - `constants.output_root`：唯一输出根目录；日志、alpha、checkpoint、回测和评估目录自动从这里派生
+- `strategy.optimizer`：默认 MOSEK 持仓优化器参数；可在 `<strategy><optimizer ... /></strategy>` 中逐项覆盖
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
 
 `builtin.factorsim` 的路径规则：
@@ -228,7 +237,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 - `runEval.py --sim/--pnl/--corr/--va/--exposure`：单项模式，直接读取本地 parquet/csv
 - `runEval.py --corr left.parquet right.parquet`：默认只统计最近 240 个重叠交易日的日频截面相关
 - `config.py`：配置解析与默认参数
-- 默认 config 使用内置 `AlphaStrategy`：先对有效 alpha 减去当日截面中位数，再持有调整后为正的 alpha，并按调整后正值归一化生成 long-only 仓位
+- 默认 config 使用内置 MOSEK `AlphaStrategy`：以原始零点划分正负 alpha 并分别归一化，在中证 500、BarraCNE5、换手、单票、有效持股数和相对方差约束下生成 long-only 目标仓位；换手基准使用真实成交持仓并归一化到股票 book
 - `vendor/comb2`：临时内置的 `comb2` 源码
 - `vendor/comb2-pcmaster`：临时内置的 `comb2-pcmaster` 源码
 - `vendor/perf_monitor.py`：可选性能监控模块

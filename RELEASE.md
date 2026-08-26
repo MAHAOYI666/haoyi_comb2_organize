@@ -22,6 +22,9 @@ python -m pip install dist_protected/combo2-0.1.9-cp313-cp313-linux_x86_64.whl
 
 Changes:
 
+- Replaced the default median long-only strategy with the MOSEK Fusion optimizer modeled after the reference holding optimizer. Alpha is split at raw zero and normalized separately by sign; the optimizer uses actual realized stock-book holdings for turnover and sell-only candidates.
+- Added XML-configurable optimizer parameters with delay-1 defaults, ZZ500 weights and BarraCNE5 inputs under `constants.cache_path/AshareCache`, and pinned `Mosek==11.0.25` wheel dependency metadata. The repository includes the approved sanitized `mosek.lic`; protected wheels do not embed it, so deployments select an authorized copy through `MOSEKLM_LICENSE_FILE`.
+- Added real Cache and MOSEK coverage for one-day solving and two-day actual-holding turnover behavior, plus configuration and normalization contract tests.
 - Added CAP correlation to full configuration evaluation. It aligns alpha with the market cap available on the same trading day, cross-sectionally ranks market cap, and correlates it with median-centered, separately normalized long/short alpha weights.
 - Added `cap_corr_summary.csv` with annual and all-sample `cap_corr.avg`, `cap_corr.ir`, and `cap_corr.std` values. CAP correlation is also included in CLI text output and the signal-analysis summary panel.
 - Extended `--skip-exposure` to skip both Barra-style exposure and CAP correlation. The report continues when either cache-backed exposure calculation is unavailable and records the reason in its messages.

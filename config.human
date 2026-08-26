@@ -118,7 +118,31 @@ runEval config.xml
   <strategy
     start_ds="20160111"
     end_ds="20200101"
-  />
+  >
+    <optimizer
+      lambda0="0.5"
+      shrinkage="0.5"
+      ret_days="60"
+      ret_delay="1"
+      ret_method="2"
+      benchmark_delay="1"
+      maxtvr="0.4"
+      max_weight="0.0075"
+      min_participation_ratio="0.21"
+      trim_threshold="0.00001"
+      min_valid_instruments="200"
+      min_return_obs="20"
+      soft_univ_penalty="0.00025"
+      soft_risk_penalty="0.00004"
+      num_mosek_threads="1"
+      max_time="30.0"
+      post_trim_renorm="false"
+      univ_list="ZZ500:0.18:0.70,1"
+      soft_univ_list="ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1"
+      risk_list="returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
+      soft_risk_list="returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+    />
+  </strategy>
 
   <combo>
     <paths
@@ -256,10 +280,57 @@ runEval config.xml
 
 默认 strategy 行为：
 
-- 每天读取模型生成的 alpha 截面。
-- 对有效 alpha 减去当日截面中位数。
-- 只持有调整后为正的股票。
-- 按调整后正值归一化生成 long-only 权重。
+- 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
+- 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对指数方差约束下求目标权重。
+- 换手基准来自回测已真实成交的股数持仓；先按当日价格换算为市值，再剔除现金并归一化到股票 book。当前不可买的已有持仓仍进入候选集，但只能维持或减仓。
+- 中证 500 权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认的收益、指数、universe 和风险因子 delay 均为 `1`。
+- 缺数据、候选数不足、约束不可行、许可证不可用或 MOSEK 求解失败时直接报错，不做降级持仓。
+
+默认优化器要求安装 `Mosek==11.0.25`，并在运行前指向有效许可证：
+
+```bash
+export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+```
+
+源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。
+
+研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值：
+
+```xml
+<strategy start_ds="20200101" end_ds="20240628">
+  <optimizer
+    lambda0="0.5"
+    maxtvr="0.4"
+    max_weight="0.0075"
+    num_mosek_threads="1"
+    risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
+  />
+</strategy>
+```
+
+| 参数 | 默认值 | 说明 |
+|---|---:|---|
+| `lambda0` | `0.5` | 相对中证 500 方差在目标函数中的惩罚系数。设为 `0` 时不构造方差项。 |
+| `shrinkage` | `0.5` | 历史协方差向对角方差收缩的比例，范围 `[0, 1]`。 |
+| `ret_days` | `60` | 方差和收益有效性检查使用的历史交易日数。 |
+| `ret_delay` | `1` | 方差收益窗口相对求解日的交易日延迟。 |
+| `ret_method` | `2` | `1` 使用个股收益；`2` 使用个股相对中证 500 的收益。 |
+| `benchmark_delay` | `1` | 目标风险暴露使用的中证 500 权重延迟。 |
+| `maxtvr` | `0.4` | 相对实际股票 book 的 `sum(abs(new_weight - actual_weight))` 上限。首日无实际持仓时不加该约束。 |
+| `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
+| `min_participation_ratio` | `0.21` | 有效持股数相对候选股票数的最低比例。 |
+| `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
+| `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
+| `min_return_obs` | `20` | `ret_days` 窗口内要求的最少有效收益观测数。 |
+| `soft_univ_penalty` | `0.00025` | soft universe 越界松弛的全局惩罚系数。 |
+| `soft_risk_penalty` | `0.00004` | soft risk 越界松弛的全局惩罚系数。 |
+| `num_mosek_threads` | `1` | MOSEK 求解线程数。 |
+| `max_time` | `30.0` | 单日 MOSEK 最大求解秒数；`0` 表示不设置时间上限。 |
+| `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
+| `univ_list` / `risk_list` | 见完整模板 | 硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
+| `soft_univ_list` / `soft_risk_list` | 见完整模板 | 软约束，格式为 `name:lo:hi:penalty,delay`，多项用 `|` 分隔。 |
+
+列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。支持的衍生风险项为 `returns120`、`vola_30`、`vola_5`、`close`；Barra 风格项写成 `BarraCNE5.<NAME>`。
 
 自定义 strategy：
 
@@ -291,7 +362,7 @@ class AlphaStrategy(StrategyBase):
 | 名称 | 约定 |
 |---|---|
 | `signals` | 当日 alpha 截面，通常是 index 为股票代码、value 为 alpha 的 pandas Series。 |
-| `last_hold` | 上一期持仓，可用于控制换手；不用时可以忽略。 |
+| `last_hold` | 回测实际股数持仓按当前价格换算后的市值占总资产比例；默认优化器会再归一化到股票 book 后控制换手。 |
 | 返回值 | index 为股票代码、value 为目标权重的 pandas Series。 |
 
 ## 8. combo.paths

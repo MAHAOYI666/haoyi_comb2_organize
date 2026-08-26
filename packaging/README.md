@@ -49,7 +49,7 @@ Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
 
 The resulting wheel contains all local Combo2 runtime code. Third-party
 packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
-psutil, and Plotly are not bundled into the wheel; they are declared in the
+MOSEK, psutil, and Plotly are not bundled into the wheel; they are declared in the
 wheel metadata so `pip install` can resolve and install them for the target
 Python 3.13 environment.
 

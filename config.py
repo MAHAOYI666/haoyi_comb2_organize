@@ -73,6 +73,52 @@ DEFAULT_FACTOR_PATHS = (
 )
 
 
+DEFAULT_OPTIMIZER_CONFIG = {
+    "lambda0": 0.5,
+    "shrinkage": 0.5,
+    "ret_days": 60,
+    "ret_delay": 1,
+    "ret_method": 2,
+    "benchmark_delay": 1,
+    "maxtvr": 0.4,
+    "max_weight": 0.0075,
+    "min_participation_ratio": 0.21,
+    "trim_threshold": 1.0e-5,
+    "min_valid_instruments": 200,
+    "min_return_obs": 20,
+    "soft_univ_penalty": 0.00025,
+    "soft_risk_penalty": 0.00004,
+    "num_mosek_threads": 1,
+    "max_time": 30.0,
+    "post_trim_renorm": False,
+    "univ_list": "ZZ500:0.18:0.70,1",
+    "soft_univ_list": (
+        "ZZ500:0.28:0.50:2.0,1|"
+        "ZZ500:0.30:0.50:0.2,1|"
+        "ZZ500:0.32:0.50:0.05,1"
+    ),
+    "risk_list": (
+        "returns120:-0.14:0.14,1|"
+        "vola_30:-0.30:0.30,1|"
+        "vola_5:-0.30:0.30,1|"
+        "close:-0.10:0.10,1|"
+        "BarraCNE5.BETA:-0.20:0.30,1|"
+        "BarraCNE5.GROWTH:-0.15:0.20,1|"
+        "BarraCNE5.BTOP:-0.15:0.20,1|"
+        "BarraCNE5.LEVERAGE:-0.30:0.30,1|"
+        "BarraCNE5.RESVOL:-0.30:0.30,1"
+    ),
+    "soft_risk_list": (
+        "returns120:-0.08:0.08:5.0,1|"
+        "close:-0.05:0.05:1.0,1|"
+        "BarraCNE5.BETA:0.00:0.04:1.7,1|"
+        "BarraCNE5.GROWTH:-0.02:0.06:1.3,1|"
+        "BarraCNE5.BTOP:-0.02:0.07:1.3,1|"
+        "BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+    ),
+}
+
+
 DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
@@ -82,6 +128,7 @@ DEFAULT_CONFIG = {
         "start_ds": 20160111,
         "end_ds": 20200101,
         "path": _default_strategy_path(),
+        "optimizer": DEFAULT_OPTIMIZER_CONFIG,
     },
     "combo": {
         "paths": {
@@ -568,6 +615,36 @@ def _validate_config(config: dict) -> None:
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")
+    optimizer = strategy["optimizer"]
+    for name in ("ret_days", "min_valid_instruments", "min_return_obs", "num_mosek_threads"):
+        if int(optimizer[name]) <= 0:
+            raise ValueError(f"strategy.optimizer.{name} must be positive")
+    for name in (
+        "lambda0",
+        "ret_delay",
+        "benchmark_delay",
+        "maxtvr",
+        "trim_threshold",
+        "soft_univ_penalty",
+        "soft_risk_penalty",
+        "max_time",
+    ):
+        if float(optimizer[name]) < 0:
+            raise ValueError(f"strategy.optimizer.{name} must be nonnegative")
+    if not 0.0 <= float(optimizer["shrinkage"]) <= 1.0:
+        raise ValueError("strategy.optimizer.shrinkage must be between 0 and 1")
+    if float(optimizer["max_weight"]) <= 0:
+        raise ValueError("strategy.optimizer.max_weight must be positive")
+    participation = float(optimizer["min_participation_ratio"])
+    if not 0.0 <= participation <= 1.0:
+        raise ValueError("strategy.optimizer.min_participation_ratio must be between 0 and 1")
+    if int(optimizer["min_return_obs"]) > int(optimizer["ret_days"]):
+        raise ValueError("strategy.optimizer.min_return_obs must not exceed ret_days")
+    if int(optimizer["ret_method"]) not in {1, 2}:
+        raise ValueError("strategy.optimizer.ret_method must be 1 or 2")
+    for name in ("univ_list", "soft_univ_list", "risk_list", "soft_risk_list"):
+        if not isinstance(optimizer[name], str):
+            raise ValueError(f"strategy.optimizer.{name} must be a string")
 
     backtest = config["backtest"]
     if float(backtest["fee_rate"]) < 0:
@@ -586,7 +663,23 @@ def _load_xml_config(path: str) -> dict:
         raise ValueError("xml config root tag must be <config>")
 
     constants = _parse_section_attributes(root.find("constants"), DEFAULT_CONFIG["constants"])
-    strategy = _parse_section_attributes(root.find("strategy"), DEFAULT_CONFIG["strategy"])
+    strategy_element = root.find("strategy")
+    strategy_defaults = {
+        key: value for key, value in DEFAULT_CONFIG["strategy"].items() if key != "optimizer"
+    }
+    strategy = _parse_section_attributes(strategy_element, strategy_defaults)
+    if strategy_element is not None:
+        unsupported_children = [child.tag for child in strategy_element if child.tag != "optimizer"]
+        if unsupported_children:
+            raise ValueError(
+                "unsupported <strategy> children: " + ", ".join(sorted(set(unsupported_children)))
+            )
+        optimizer_element = strategy_element.find("optimizer")
+        if optimizer_element is not None:
+            strategy["optimizer"] = _parse_section_attributes(
+                optimizer_element,
+                DEFAULT_OPTIMIZER_CONFIG,
+            )
 
     combo_element = root.find("combo")
     combo = {}
