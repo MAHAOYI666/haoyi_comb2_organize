@@ -367,7 +367,7 @@ class ResearchModel:
 说明：
 - XML 中未填写的字段会回退到框架默认值
 - 所有输出都从 `constants.output_root` 派生，包括日志、alpha、checkpoint 和 backtest
-- `runtime.snaptime` 是实验/checkpoint 名；`runtime.snap_ti` 是默认数据时点
+- `runtime.snaptime` 是实验/checkpoint 名；`runtime.snap_ti` 是默认数据时点。非空值会使默认 `vwap30` 训练标签、Alpha IC、配置驱动评估及回测成交价统一使用/基于 `IntraVwap.Vwap30.HHMMSS`
 - `dtype` 当前建议使用：`float16`、`float32`、`float64`、`bfloat16`
 - 布尔值建议写成：`true` / `false`
 - 多个因子通过多个 `<data><item role="factor" ... /></data>` 声明

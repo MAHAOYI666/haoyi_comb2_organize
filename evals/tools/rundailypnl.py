@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from comb2_simbase.cache_layout import daily_label_path
+from comb2_simbase.snap_labels import load_snap_vwap_labels
 
 from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
 from comb_eval.pnl import summarize_pnl_with_benchmark
@@ -41,6 +42,7 @@ def main() -> None:
     parser.add_argument("path", help="Signal path by default, or daily pnl path with --input-is-pnl")
     parser.add_argument("--input-is-pnl", action="store_true", help="Treat input as an existing daily pnl dump")
     parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--snap-ti", type=int, help="Use IntraVwap.Vwap30.HHMMSS to build the default label")
     parser.add_argument("--label", help="Explicit forward-return label path for signal -> pnl")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
     parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
@@ -55,6 +57,18 @@ def main() -> None:
 
     if args.input_is_pnl:
         daily_pnl = read_table(args.path, start=args.start, end=args.end)
+    elif args.snap_ti is not None and not args.label:
+        if not args.cache_path:
+            raise ValueError("--snap-ti requires --cache-path")
+        daily_pnl = calculate_daily_pnl_from_snap_ti(
+            args.path,
+            args.cache_path,
+            args.snap_ti,
+            booksize=args.booksize,
+            tradecost_ratio=args.tradecost_ratio,
+            start=args.start,
+            end=args.end,
+        )
     else:
         label_path = _resolve_label_path(args.label, args.cache_path, "vwap30_label1d")
         daily_pnl = calculate_daily_pnl(
@@ -100,6 +114,34 @@ def calculate_daily_pnl(
     signal = read_matrix(signal_path, start=start, end=end)
     signal.columns = signal.columns.astype(str).str.zfill(6)
     label = read_matrix(label_path, start=start, end=end) if label_is_table else _read_cache_label(label_path, signal, label_df_type)
+    return _calculate_daily_pnl_from_frames(signal, label, booksize=booksize, tradecost_ratio=tradecost_ratio)
+
+
+def calculate_daily_pnl_from_snap_ti(
+    signal_path: str | Path,
+    cache_path: str | Path,
+    snap_ti: int,
+    *,
+    booksize: float = 1e7,
+    tradecost_ratio: float = 0.0,
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame:
+    signal = read_matrix(signal_path, start=start, end=end)
+    signal.columns = signal.columns.astype(str).str.zfill(6)
+    start_ds = signal.index.min().strftime("%Y%m%d")
+    end_ds = signal.index.max().strftime("%Y%m%d")
+    label = normalize_date_index(load_snap_vwap_labels(cache_path, snap_ti, start_ds, end_ds)[1])
+    return _calculate_daily_pnl_from_frames(signal, label, booksize=booksize, tradecost_ratio=tradecost_ratio)
+
+
+def _calculate_daily_pnl_from_frames(
+    signal: pd.DataFrame,
+    label: pd.DataFrame,
+    *,
+    booksize: float,
+    tradecost_ratio: float,
+) -> pd.DataFrame:
     label.columns = label.columns.astype(str).str.zfill(6)
     signal, label = signal.align(label, join="inner", axis=0)
     signal, label = signal.align(label, join="inner", axis=1)

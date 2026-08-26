@@ -481,6 +481,27 @@ def _apply_constant_paths(config: dict) -> dict:
     return updated
 
 
+def _replace_default_vwap_label(data_items: list[dict[str, Any]], cache_path: str, snap_ti: Any) -> list[dict[str, Any]]:
+    if snap_ti is None:
+        return data_items
+    default_path = str(daily_label_path(cache_path, "vwap30_label1d").resolve())
+    resolved_items = []
+    for item in data_items:
+        if (
+            item.get("role") == "label"
+            and item.get("module") in {"factorsim", "builtin.factorsim"}
+            and item.get("path") == default_path
+        ):
+            item = dict(item)
+            item["module"] = "builtin.snap_label"
+            item["path"] = None
+            params = dict(item.get("params", {}))
+            params["snap_ti"] = int(snap_ti)
+            item["params"] = params
+        resolved_items.append(item)
+    return resolved_items
+
+
 def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     normalized_config = deepcopy(config)
     data_attrs = normalized_config["combo"].get("data", {}).get("attrs", {})
@@ -504,6 +525,11 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         cache_path=resolved["constants"]["cache_path"],
         seen_paths=set(),
         presets=presets,
+    )
+    data_items = _replace_default_vwap_label(
+        data_items,
+        resolved["constants"]["cache_path"],
+        resolved["combo"]["runtime"].get("snap_ti"),
     )
     resolved["combo"]["data"] = {
         "attrs": dict(resolved["combo"].get("data", {}).get("attrs", {})),

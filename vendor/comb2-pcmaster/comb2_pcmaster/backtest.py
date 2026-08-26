@@ -44,6 +44,7 @@ class BacktestNode:
     verbose: bool = False
     universe: str = "base"
     execution_price: str = "vwap30"
+    snap_ti: int | None = None
     drawdown_stop: float = 0.0
     cooldown_days: int = 0
     holdings: pd.Series | None = None
@@ -97,7 +98,11 @@ class DailyBacktest:
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
         if self.node.execution_price == "vwap30":
-            self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+            self.vwap_data = self.dataloader.get_vwap(
+                self.node.start_ds,
+                self.node.end_ds,
+                snap_ti=self.node.snap_ti,
+            ).ffill()
         elif self.node.execution_price == "open":
             self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds).ffill()
         else:

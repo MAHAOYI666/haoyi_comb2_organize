@@ -60,7 +60,7 @@ if str(EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(EVAL_ROOT))
 
 from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
-from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase import IndexMask, Memmaper2, load_snap_vwap_labels
 from comb2_simbase.cache_layout import daily_label_path
 from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress
@@ -207,7 +207,9 @@ def print_live_metrics(meta: dict):
     _print_metric_table("[LIVE]", columns)
 
 
-def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int):
+def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int, snap_ti=None):
+    if snap_ti is not None:
+        return load_snap_vwap_labels(cache_path, snap_ti, start_ds, end_ds)[int(period.removesuffix("d"))]
     label = Memmaper2(daily_label_path(cache_path, f"vwap30_label{period}")).load(
         start_ds=start_ds,
         end_ds=end_ds,
@@ -216,15 +218,20 @@ def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int)
     return label.astype(float)
 
 
-def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str) -> pd.DataFrame:
+def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str, snap_ti=None) -> pd.DataFrame:
     if alpha.index.nlevels > 1:
         alpha = alpha.reset_index("times", drop=True).sort_index()
     date_idx = alpha.index.astype(int)
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
-    label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
-    label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    if snap_ti is None:
+        label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
+        label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    else:
+        labels = load_snap_vwap_labels(cache_path, snap_ti, start_time, end_time)
+        label_1d = labels[1].reindex(index=date_idx)
+        label_5d = labels[5].reindex(index=date_idx)
     evaluation_mask = load_evaluation_mask(alpha, cache_path)
     alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
@@ -251,7 +258,11 @@ def dump_alpha_analysis(node: Node, organize_config: dict):
     alpha_path = output_dir / "alpha.parquet"
     alpha.to_parquet(alpha_path)
 
-    daily_ic = calculate_alpha_ic(alpha, organize_config["constants"]["cache_path"])
+    daily_ic = calculate_alpha_ic(
+        alpha,
+        organize_config["constants"]["cache_path"],
+        organize_config["combo"]["runtime"].get("snap_ti"),
+    )
     daily_ic_path = output_dir / "daily_ic"
     daily_ic.to_csv(daily_ic_path, sep="\t", na_rep="NAN")
     print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
@@ -282,6 +293,7 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         verbose=bool(backtest_config["verbose"]),
         universe=backtest_config.get("universe", "base"),
         execution_price=backtest_config.get("execution_price", "vwap30"),
+        snap_ti=organize_config["combo"]["runtime"].get("snap_ti"),
         drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest_config.get("cooldown_days", 0)),
     )

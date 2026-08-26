@@ -223,7 +223,7 @@ runEval config.xml
 - 绝对路径保持不变。
 - 相对路径相对 `config.xml` 或 data-pack 文件所在目录解析。
 - `<item>` 缺省 `module="builtin.factorsim"`；普通 factor pool 请写绝对路径，或写相对当前 XML/data-pack 的路径。
-- `role="label"` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`。
+- `role="label"` 的非绝对 `path` 会解析到 `{AshareCache}/1d_DailyLabel/DailyLabel.{path}`，例如 `path="vwap30_label1d"` 会解析到 `DailyLabel.vwap30_label1d`；当 `runtime.snap_ti` 非空时，这个默认 1d 标签会改为由对应 `IntraVwap.Vwap30.HHMMSS` 动态计算。
 - `constants.cache_path` 表示 `AshareCache` 的父目录，是所有固定 cache 数据的唯一配置真源。
 
 ## 6. constants
@@ -500,7 +500,7 @@ class ResearchModel:
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `snaptime` | `mlp_minimal` | 训练快照名，checkpoint 子目录会使用它。 |
-| `snap_ti` | 空 | 默认预测/训练时点；空值时使用 `150000`。对日内 feature 只影响窗口最后一天未来 bar 的 mask，不改变单日 cube 读取。 |
+| `snap_ti` | 空 | 默认预测/训练时点；空值时使用 `150000`。对日内 feature 只影响窗口最后一天未来 bar 的 mask，不改变单日 cube 读取；非空值会使默认 `vwap30` 训练标签、Alpha IC、配置驱动评估及成交回测统一使用/基于 `IntraVwap.Vwap30.HHMMSS`。 |
 | `seed` | 空 | 运行级随机种子；会用于 `random`、`numpy`、`torch`，并在有 CUDA 时同步设置 CUDA seed。 |
 | `deterministic` | `false` | 是否开启 PyTorch deterministic 模式。开启后通常更可复现，但可能变慢，且部分算子可能报 deterministic 限制。 |
 | `livetrading` | `false` | `false` 为历史训练/回测流程。 |

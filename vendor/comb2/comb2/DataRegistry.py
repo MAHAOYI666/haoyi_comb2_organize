@@ -36,7 +36,7 @@ SIMBASE_ROOT = ORGANIZE_ROOT / "vendor" / "comb2-simbase"
 if str(SIMBASE_ROOT) not in sys.path:
     sys.path.insert(0, str(SIMBASE_ROOT))
 
-from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase import IndexMask, Memmaper2, load_snap_vwap_labels
 from comb2_simbase.cache_layout import (
     BARRA_STYLE_DIRNAME,
     BARRA_STYLE_PREFIX,
@@ -685,6 +685,7 @@ class DataRegistry:
         loaders = {
             "factorsim": _load_factorsim,
             "alpha_parquet": _load_alpha_parquet,
+            "snap_label": _load_snap_label,
         }
         return {
             alias: loader
@@ -970,6 +971,18 @@ def _load_factorsim(item: DataItem, registry: DataRegistry, start_ds: int, end_d
         freq=freq,
         universe=registry.universe,
     )
+
+
+def _load_snap_label(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
+    if not registry.ashare_cache_path:
+        raise ValueError(f"snapshot label data {item.name!r} requires an AshareCache root")
+    labels = load_snap_vwap_labels(
+        Path(registry.ashare_cache_path).parent,
+        item.params["snap_ti"],
+        start_ds,
+        end_ds,
+    )
+    return _as_2d_tensor(labels[1].to_numpy(dtype=np.float32, copy=True), dtype=registry.universe.dtype)
 
 
 def _load_alpha_parquet(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:

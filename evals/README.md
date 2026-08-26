@@ -39,7 +39,7 @@ python -m comb_eval.cli eval --config /path/to/config.xml
 <output_root>/alpha.parquet
 ```
 
-PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。
+PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。若 config 的 `runtime.snap_ti` 非空且未显式传入 label，评估会从对应 `IntraVwap.Vwap30.HHMMSS` 动态生成 1d/5d 标签。
 
 默认输出到 `<output_root>/eval_report/`：
 
