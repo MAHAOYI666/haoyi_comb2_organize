@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import time
+import warnings
 from typing import NamedTuple
 
 import numpy as np
@@ -17,29 +18,41 @@ class RangeLimit(NamedTuple):
     hi: float
     penalty: float
     delay: int
+    method: int
 
 
 def _parse_limits(raw: str, *, soft: bool, label: str) -> tuple[RangeLimit, ...]:
     limits: list[RangeLimit] = []
+    is_risk = label in {"risk_list", "soft_risk_list"}
     for entry in (item.strip() for item in raw.split("|")):
         if not entry:
             continue
         pieces = [piece.strip() for piece in entry.split(",")]
-        if len(pieces) > 2:
+        if len(pieces) > (3 if is_risk else 2):
             raise ValueError(f"strategy.optimizer.{label} has too many comma fields: {entry!r}")
         fields = pieces[0].split(":")
         expected = 4 if soft else 3
         if len(fields) != expected:
             shape = "name:lo:hi:penalty" if soft else "name:lo:hi"
-            raise ValueError(f"strategy.optimizer.{label} entry must be {shape}[,delay]: {entry!r}")
+            suffix = "[,delay[,method]]" if is_risk else "[,delay]"
+            raise ValueError(
+                f"strategy.optimizer.{label} entry must be {shape}{suffix}: {entry!r}"
+            )
         name = fields[0]
         lo = float(fields[1])
         hi = float(fields[2])
         penalty = float(fields[3]) if soft else 1.0
-        delay = int(pieces[1]) if len(pieces) == 2 else 0
-        if not name or lo > hi or penalty < 0 or delay < 0:
+        delay = int(pieces[1]) if len(pieces) >= 2 else 0
+        method = int(pieces[2]) if len(pieces) == 3 else 2 if is_risk else 0
+        if (
+            not name
+            or lo > hi
+            or penalty < 0
+            or delay < 0
+            or (is_risk and method not in {2, 4})
+        ):
             raise ValueError(f"invalid strategy.optimizer.{label} entry: {entry!r}")
-        limits.append(RangeLimit(name, lo, hi, penalty, delay))
+        limits.append(RangeLimit(name, lo, hi, penalty, delay, method))
     return tuple(limits)
 
 
@@ -100,6 +113,12 @@ class AlphaStrategy(StrategyBase):
         self.soft_risk = _parse_limits(
             self.optimizer["soft_risk_list"], soft=True, label="soft_risk_list"
         )
+        self.hard_group = _parse_limits(
+            self.optimizer["group_list"], soft=False, label="group_list"
+        )
+        self.soft_group = _parse_limits(
+            self.optimizer["soft_group_list"], soft=False, label="soft_group_list"
+        )
         self.columns: pd.Index | None = None
         self._load_inputs(int(strategy_config["start_ds"]), int(strategy_config["end_ds"]))
 
@@ -122,6 +141,16 @@ class AlphaStrategy(StrategyBase):
         self.close = self._normalize_frame(
             self.dataloader.get_close(history_start, end_ds)
         ).astype("float32", copy=False)
+        self.amount = None
+        if float(self.optimizer["maxtrd"]) > 0 or float(self.optimizer["maxpos"]) > 0:
+            self.amount = self._normalize_frame(
+                self.dataloader.get_amount(history_start, end_ds)
+            ).astype("float32", copy=False)
+        self.slippage = None
+        if float(self.optimizer["lambda_slp"]) > 0:
+            self.slippage = self._normalize_frame(
+                self.dataloader.get_slippage(history_start, end_ds)
+            ).astype("float32", copy=False)
         self.index_weight = self._normalize_frame(
             self.dataloader.get_index_weight(history_start, end_ds)
         ).astype("float32", copy=False)
@@ -135,13 +164,89 @@ class AlphaStrategy(StrategyBase):
             self.dataloader.get_suspend(start_ds, end_ds)
         ).astype("float32", copy=False)
 
+        universe_names = {limit.name for limit in (*self.hard_univ, *self.soft_univ)}
+        supported_universes = {
+            "ZZ500",
+            "ZZ1800",
+            "HS300",
+            "AshareST",
+            "AshareSH",
+            "AshareSZ",
+            "AshareCYB",
+            "NONETOP3000",
+        }
+        unknown_universes = sorted(universe_names - supported_universes)
+        if unknown_universes:
+            raise ValueError(
+                "unsupported optimizer universes: " + ", ".join(unknown_universes)
+            )
+
+        self.universes = {"ZZ500": self.index_weight}
+        if "HS300" in universe_names:
+            self.universes["HS300"] = self._normalize_frame(
+                self.dataloader.get_index_weight(history_start, end_ds, "399300.SZ")
+            ).astype("float32", copy=False)
+        if "ZZ1800" in universe_names:
+            zz800 = self._normalize_frame(
+                self.dataloader.get_index_weight(history_start, end_ds, "000906.SH")
+            )
+            zz1000 = self._normalize_frame(
+                self.dataloader.get_index_weight(history_start, end_ds, "000852.SH")
+            )
+            if not zz800.index.equals(zz1000.index) or not zz800.columns.equals(zz1000.columns):
+                raise ValueError("ZZ800 and ZZ1000 axes do not match")
+            self.universes["ZZ1800"] = (
+                (np.isfinite(zz800) & (zz800 > 0))
+                | (np.isfinite(zz1000) & (zz1000 > 0))
+            )
+        if "AshareST" in universe_names:
+            non_st = self._normalize_frame(
+                self.dataloader.get_stock_mask("STStock", history_start, end_ds)
+            )
+            self.universes["AshareST"] = ~(np.isfinite(non_st) & (non_st > 0))
+        if "NONETOP3000" in universe_names:
+            top3000 = self._normalize_frame(
+                self.dataloader.get_trade_universe("TOP3000", history_start, end_ds)
+            )
+            self.universes["NONETOP3000"] = ~(
+                np.isfinite(top3000) & (top3000 > 0)
+            )
+
+        codes = self.index_weight.columns.to_numpy(dtype=str)
+        static_universes = {
+            "AshareSH": np.char.startswith(codes, "6"),
+            "AshareSZ": np.char.startswith(codes, "0") | np.char.startswith(codes, "3"),
+            "AshareCYB": np.char.startswith(codes, "300")
+            | np.char.startswith(codes, "301"),
+        }
+        self.static_universes = {
+            name: values for name, values in static_universes.items() if name in universe_names
+        }
+
+        group_names = {limit.name for limit in (*self.hard_group, *self.soft_group)}
+        group_fields = {
+            "WindIndustry.sw1": "SW2021_L1",
+            "WindIndustry.sw3": "SW2021_L3",
+        }
+        unknown_groups = sorted(group_names - group_fields.keys())
+        if unknown_groups:
+            raise ValueError(
+                "unsupported optimizer groups: " + ", ".join(unknown_groups)
+            )
+        self.groups = {
+            name: self._normalize_frame(
+                self.dataloader.get_industry(group_fields[name], history_start, end_ds)
+            ).astype("float32", copy=False)
+            for name in sorted(group_names)
+        }
+
         factor_names = {limit.name for limit in (*self.hard_risk, *self.soft_risk)}
         barra_names = sorted(
             name.split(".", 1)[1]
             for name in factor_names
             if name.startswith("BarraCNE5.")
         )
-        supported = {"returns120", "vola_30", "vola_5", "close"}
+        supported = {"cap", "returns120", "vola_30", "vola_5", "close"}
         unknown = sorted(
             name for name in factor_names if not name.startswith("BarraCNE5.") and name not in supported
         )
@@ -153,6 +258,11 @@ class AlphaStrategy(StrategyBase):
             ).astype("float32", copy=False)
             for name in barra_names
         }
+        self.market_cap = None
+        if "cap" in factor_names:
+            self.market_cap = self._normalize_frame(
+                self.dataloader.get_market_cap(history_start, end_ds)
+            ).astype("float32", copy=False)
         self.index_return = self._build_index_return()
 
     def _build_index_return(self) -> pd.Series:
@@ -179,12 +289,27 @@ class AlphaStrategy(StrategyBase):
             "base universe": self.base,
             "limit mask": self.limit,
             "suspend mask": self.suspend,
+            **{f"universe {name}": frame for name, frame in self.universes.items()},
+            **{f"group {name}": frame for name, frame in self.groups.items()},
             **self.styles,
         }
+        if self.market_cap is not None:
+            frames["market cap"] = self.market_cap
+        if self.amount is not None:
+            frames["amount"] = self.amount
+        if self.slippage is not None:
+            frames["slippage"] = self.slippage
         for label, frame in frames.items():
             if not frame.columns.equals(normalized):
                 raise ValueError(f"{label} columns do not match the backtest instrument axis")
         self.columns = normalized
+
+    def _universe_membership(self, name: str, date: int, delay: int) -> np.ndarray:
+        if name in self.static_universes:
+            values = self.static_universes[name]
+        else:
+            values = self._row_at_delay(self.universes[name], date, delay, name)
+        return (np.isfinite(values) & (values > 0)).astype(np.float64)
 
     @staticmethod
     def _row_at_delay(frame: pd.DataFrame, date: int, delay: int, label: str) -> np.ndarray:
@@ -256,7 +381,12 @@ class AlphaStrategy(StrategyBase):
         return result
 
     def _factor(self, limit: RangeLimit, date: int, factor_mask: np.ndarray) -> np.ndarray:
-        if limit.name in self.styles:
+        if limit.name == "cap":
+            assert self.market_cap is not None
+            values = self._row_at_delay(
+                self.market_cap, date, limit.delay, "market cap"
+            )
+        elif limit.name in self.styles:
             values = self._row_at_delay(self.styles[limit.name], date, limit.delay, limit.name)
             valid = factor_mask & np.isfinite(values)
             if valid.any():
@@ -264,7 +394,17 @@ class AlphaStrategy(StrategyBase):
                 values[valid] -= float(values[valid].mean())
         else:
             values = self._derived_factor(limit.name, date, limit.delay)
-        return _centered_rank(values, factor_mask)
+        if limit.method == 2:
+            return _centered_rank(values, factor_mask)
+
+        valid = factor_mask & np.isfinite(values) & (values > 0)
+        result = np.zeros_like(values, dtype=np.float64)
+        logs = np.log(values[valid])
+        if logs.size:
+            scale = float(logs.std(ddof=0))
+            if np.isfinite(scale) and scale > 0:
+                result[valid] = (logs - float(logs.mean())) / scale
+        return result
 
     def _variance_matrix(self, date: int, candidate_idx: np.ndarray):
         from mosek.fusion import Matrix
@@ -342,7 +482,7 @@ class AlphaStrategy(StrategyBase):
         return objective
 
     def generate_positions(self, signals, last_hold):
-        from mosek.fusion import Domain, Expr, Model, ObjectiveSense
+        from mosek.fusion import Domain, Expr, Model, ObjectiveSense, SolutionStatus
 
         if self.columns is None:
             self._bind_columns(signals.index)
@@ -352,6 +492,67 @@ class AlphaStrategy(StrategyBase):
         alpha = _normalize_alpha(signal_values, float(self.optimizer["trim_threshold"]))
         benchmark = self._benchmark(date)
         previous, has_previous = self._actual_previous(last_hold)
+        hard_univ_rows = [
+            (
+                limit_spec,
+                self._universe_membership(
+                    limit_spec.name, date, limit_spec.delay
+                ),
+            )
+            for limit_spec in self.hard_univ
+        ]
+        forced_exit = np.zeros(len(self.columns), dtype=bool)
+        for limit_spec, membership in hard_univ_rows:
+            if limit_spec.hi == 0:
+                forced_exit |= (previous > 0) & (membership > 0)
+        forced_exit_weight = float(previous[forced_exit].sum())
+
+        liquidity_enabled = (
+            float(self.optimizer["maxtrd"]) > 0
+            or float(self.optimizer["maxpos"]) > 0
+        )
+        if liquidity_enabled:
+            assert self.amount is not None
+            liquidity = self._row_at_delay(
+                self.amount,
+                date,
+                int(self.optimizer["liquidity_delay"]),
+                "daily amount",
+            )
+            liquidity_valid = np.isfinite(liquidity) & (liquidity > 0)
+        else:
+            liquidity = np.full(len(self.columns), np.inf, dtype=np.float64)
+            liquidity_valid = np.ones(len(self.columns), dtype=bool)
+        lambda_slp = float(self.optimizer["lambda_slp"])
+        if lambda_slp > 0:
+            assert self.slippage is not None
+            slippage = self._row_at_delay(
+                self.slippage,
+                date,
+                int(self.optimizer["slippage_delay"]),
+                "spread slippage",
+            )
+            slippage_price = self._row_at_delay(
+                self.close,
+                date,
+                int(self.optimizer["slippage_delay"]),
+                "slippage close",
+            )
+            slippage_valid = (
+                np.isfinite(slippage)
+                & (slippage >= 0)
+                & np.isfinite(slippage_price)
+                & (slippage_price > 0)
+            )
+            if not slippage_valid.any():
+                raise ValueError(
+                    f"{date}: spread slippage has no valid values at "
+                    f"delay={int(self.optimizer['slippage_delay'])}"
+                )
+        else:
+            slippage = np.zeros(len(self.columns), dtype=np.float64)
+            slippage_price = np.ones(len(self.columns), dtype=np.float64)
+            slippage_valid = np.ones(len(self.columns), dtype=bool)
 
         base = self._row_at_delay(self.base, date, 0, "base universe")
         limit = self._row_at_delay(self.limit, date, 0, "limit mask")
@@ -371,7 +572,16 @@ class AlphaStrategy(StrategyBase):
             np.isfinite(history.to_numpy(dtype=np.float32)).sum(axis=0)
             >= int(self.optimizer["min_return_obs"])
         )
-        buy_candidate = ((alpha > 0) | (benchmark > 0)) & tradable & return_valid
+        buy_candidate = (
+            ((alpha > 0) | (benchmark > 0))
+            & tradable
+            & return_valid
+            & liquidity_valid
+        )
+        slippage_excluded_candidates = 0
+        if lambda_slp > 0:
+            slippage_excluded_candidates = int((buy_candidate & ~slippage_valid).sum())
+            buy_candidate &= slippage_valid
         held = previous > 0
         candidate_idx = np.flatnonzero(buy_candidate | held)
         if len(candidate_idx) < int(self.optimizer["min_valid_instruments"]):
@@ -386,8 +596,42 @@ class AlphaStrategy(StrategyBase):
         local_buy = buy_candidate[candidate_idx]
         max_weight = float(self.optimizer["max_weight"])
         upper = np.full(len(candidate_idx), max_weight, dtype=np.float64)
+        target_size = float(self.optimizer["target_size"])
+        maxpos = float(self.optimizer["maxpos"])
+        if maxpos > 0:
+            capacity_upper = maxpos * liquidity[candidate_idx] / target_size
+            capacity_upper = np.where(
+                np.isfinite(capacity_upper) & (capacity_upper >= 0),
+                capacity_upper,
+                0.0,
+            )
+            upper = np.minimum(upper, capacity_upper)
         upper[~local_buy] = local_previous[~local_buy]
         upper = np.maximum(upper, np.where(local_previous > max_weight, local_previous, 0.0))
+        if maxpos > 0:
+            upper = np.maximum(upper, local_previous)
+        local_forced_exit = forced_exit[candidate_idx]
+        upper[local_forced_exit] = 0.0
+
+        maxtrd = float(self.optimizer["maxtrd"])
+        if maxtrd > 0:
+            trade_upper = maxtrd * liquidity[candidate_idx] / target_size
+            trade_upper = np.where(
+                np.isfinite(trade_upper) & (trade_upper >= 0), trade_upper, 0.0
+            )
+        else:
+            trade_upper = np.full(len(candidate_idx), np.inf, dtype=np.float64)
+        if lambda_slp > 0:
+            trade_upper[~slippage_valid[candidate_idx]] = 0.0
+        trade_upper[local_forced_exit] = np.maximum(
+            trade_upper[local_forced_exit], local_previous[local_forced_exit]
+        )
+        slippage_rate = np.divide(
+            slippage[candidate_idx],
+            slippage_price[candidate_idx],
+            out=np.zeros(len(candidate_idx), dtype=np.float64),
+            where=slippage_valid[candidate_idx],
+        )
 
         factor_mask = np.isfinite(base) & (base != 0)
         hard_risk_rows = [
@@ -397,6 +641,30 @@ class AlphaStrategy(StrategyBase):
         soft_risk_rows = [
             (limit_spec, self._factor(limit_spec, date, factor_mask))
             for limit_spec in self.soft_risk
+        ]
+        hard_group_rows = [
+            (
+                limit_spec,
+                self._row_at_delay(
+                    self.groups[limit_spec.name],
+                    date,
+                    limit_spec.delay,
+                    limit_spec.name,
+                ),
+            )
+            for limit_spec in self.hard_group
+        ]
+        soft_group_rows = [
+            (
+                limit_spec,
+                self._row_at_delay(
+                    self.groups[limit_spec.name],
+                    date,
+                    limit_spec.delay,
+                    limit_spec.name,
+                ),
+            )
+            for limit_spec in self.soft_group
         ]
         risk_matrix = None
         if float(self.optimizer["lambda0"]) > 0:
@@ -412,57 +680,61 @@ class AlphaStrategy(StrategyBase):
             model.constraint("booksize", Expr.sum(weights), Domain.equalsTo(1.0))
             objective = Expr.dot(local_alpha.tolist(), weights)
 
+            absolute_trade = model.variable(
+                "absolute_trade", len(candidate_idx), Domain.greaterThan(0.0)
+            )
+            model.constraint(
+                "trade_positive",
+                Expr.sub(Expr.sub(weights, local_previous.tolist()), absolute_trade),
+                Domain.lessThan(0.0),
+            )
+            model.constraint(
+                "trade_negative",
+                Expr.sub(Expr.sub(local_previous.tolist(), weights), absolute_trade),
+                Domain.lessThan(0.0),
+            )
+            if maxtrd > 0:
+                model.constraint(
+                    "maxtrd",
+                    absolute_trade,
+                    Domain.lessThan(trade_upper.tolist()),
+                )
             if has_previous:
-                absolute_trade = model.variable(
-                    "absolute_trade", len(candidate_idx), Domain.greaterThan(0.0)
-                )
-                model.constraint(
-                    "trade_positive",
-                    Expr.sub(Expr.sub(weights, local_previous.tolist()), absolute_trade),
-                    Domain.lessThan(0.0),
-                )
-                model.constraint(
-                    "trade_negative",
-                    Expr.sub(Expr.sub(local_previous.tolist(), weights), absolute_trade),
-                    Domain.lessThan(0.0),
-                )
                 model.constraint(
                     "maxtvr",
                     Expr.sum(absolute_trade),
-                    Domain.lessThan(float(self.optimizer["maxtvr"])),
+                    Domain.lessThan(
+                        float(self.optimizer["maxtvr"]) + forced_exit_weight
+                    ),
+                )
+            if lambda_slp > 0:
+                objective = Expr.sub(
+                    objective,
+                    Expr.mul(
+                        lambda_slp,
+                        Expr.dot(slippage_rate.tolist(), absolute_trade),
+                    ),
                 )
 
-            for index, limit_spec in enumerate(self.hard_univ):
-                if limit_spec.name != "ZZ500":
-                    raise ValueError(f"unsupported optimizer universe: {limit_spec.name}")
-                membership = self._row_at_delay(
-                    self.index_weight, date, limit_spec.delay, limit_spec.name
-                )
-                coefficient = (
-                    np.isfinite(membership[candidate_idx]) & (membership[candidate_idx] > 0)
-                ).astype(np.float64)
+            for index, (limit_spec, membership) in enumerate(hard_univ_rows):
+                coefficient = membership[candidate_idx]
                 model.constraint(
-                    f"univ_{index}_ZZ500",
+                    f"univ_{index}_{_safe_name(limit_spec.name)}",
                     Expr.dot(coefficient.tolist(), weights),
                     Domain.inRange(limit_spec.lo, limit_spec.hi),
                 )
 
             for index, limit_spec in enumerate(self.soft_univ):
-                if limit_spec.name != "ZZ500":
-                    raise ValueError(f"unsupported optimizer universe: {limit_spec.name}")
-                membership = self._row_at_delay(
-                    self.index_weight, date, limit_spec.delay, limit_spec.name
-                )
-                coefficient = (
-                    np.isfinite(membership[candidate_idx]) & (membership[candidate_idx] > 0)
-                ).astype(np.float64)
+                coefficient = self._universe_membership(
+                    limit_spec.name, date, limit_spec.delay
+                )[candidate_idx]
                 objective = self._add_soft_range(
                     model,
                     Expr.dot(coefficient.tolist(), weights),
                     limit_spec,
                     float(self.optimizer["soft_univ_penalty"]),
                     objective,
-                    f"soft_univ_{index}_ZZ500",
+                    f"soft_univ_{index}_{_safe_name(limit_spec.name)}",
                 )
 
             for index, (limit_spec, full_factor) in enumerate(hard_risk_rows):
@@ -492,20 +764,65 @@ class AlphaStrategy(StrategyBase):
                     f"soft_risk_{index}_{_safe_name(limit_spec.name)}",
                 )
 
+            for index, (limit_spec, group_values) in enumerate(hard_group_rows):
+                for group_value in np.unique(group_values[np.isfinite(group_values)]):
+                    full_membership = (group_values == group_value).astype(np.float64)
+                    coefficient = full_membership[candidate_idx]
+                    benchmark_exposure = float(np.dot(benchmark, full_membership))
+                    active = Expr.sub(
+                        Expr.dot(coefficient.tolist(), weights), benchmark_exposure
+                    )
+                    label = _safe_name(
+                        f"group_{index}_{limit_spec.name}_{group_value:g}"
+                    )
+                    model.constraint(
+                        label,
+                        active,
+                        Domain.inRange(limit_spec.lo, limit_spec.hi),
+                    )
+
+            for index, (limit_spec, group_values) in enumerate(soft_group_rows):
+                for group_value in np.unique(group_values[np.isfinite(group_values)]):
+                    full_membership = (group_values == group_value).astype(np.float64)
+                    coefficient = full_membership[candidate_idx]
+                    benchmark_exposure = float(np.dot(benchmark, full_membership))
+                    active = Expr.sub(
+                        Expr.dot(coefficient.tolist(), weights), benchmark_exposure
+                    )
+                    label = _safe_name(
+                        f"soft_group_{index}_{limit_spec.name}_{group_value:g}"
+                    )
+                    objective = self._add_soft_range(
+                        model,
+                        active,
+                        limit_spec,
+                        float(self.optimizer["soft_group_penalty"]),
+                        objective,
+                        label,
+                    )
+
             participation = float(self.optimizer["min_participation_ratio"])
-            if participation > 0:
-                maximum_sum_squares = 1.0 / (participation * len(candidate_idx))
+            parti_penalty = float(self.optimizer["parti_penalty"])
+            if participation > 0 or parti_penalty > 0:
                 concentration = model.variable("participation", 1, Domain.greaterThan(0.0))
                 model.constraint(
                     "participation_cone",
                     Expr.vstack(concentration, 0.5, weights),
                     Domain.inRotatedQCone(),
                 )
-                model.constraint(
-                    "participation_limit",
-                    concentration,
-                    Domain.lessThan(maximum_sum_squares),
-                )
+                if participation > 0:
+                    maximum_sum_squares = 1.0 / (
+                        participation * len(candidate_idx)
+                    )
+                    model.constraint(
+                        "participation_limit",
+                        concentration,
+                        Domain.lessThan(maximum_sum_squares),
+                    )
+                if parti_penalty > 0:
+                    objective = Expr.sub(
+                        objective, Expr.mul(parti_penalty, concentration)
+                    )
 
             if risk_matrix is not None:
                 active_weight = Expr.sub(weights, local_benchmark.tolist())
@@ -525,24 +842,51 @@ class AlphaStrategy(StrategyBase):
             started = time.monotonic()
             try:
                 model.solve()
-                solution = np.asarray(weights.level(), dtype=np.float64)
             except Exception as exc:
                 raise RuntimeError(f"{date}: MOSEK optimizer failed: {exc}") from exc
             solve_seconds = time.monotonic() - started
+            solution_status = model.getPrimalSolutionStatus()
+            solver_fallback = solution_status != SolutionStatus.Optimal
+            if solver_fallback:
+                warnings.warn(
+                    f"{date}: MOSEK solution status is {solution_status}; "
+                    "keeping previous holdings",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                solution = local_previous.copy()
+            else:
+                solution = np.asarray(weights.level(), dtype=np.float64)
 
         if not np.isfinite(solution).all() or float(solution.min()) < -1.0e-7:
             raise RuntimeError(f"{date}: MOSEK returned invalid target weights")
         solution = np.maximum(solution, 0.0)
-        trim_threshold = float(self.optimizer["trim_threshold"])
-        if trim_threshold > 0:
-            solution[solution < trim_threshold] = 0.0
-        if bool(self.optimizer["post_trim_renorm"]):
-            total = float(solution.sum())
-            if total > 0:
-                solution /= total
+        if not solver_fallback:
+            trim_threshold = float(self.optimizer["trim_threshold"])
+            if trim_threshold > 0:
+                solution[solution < trim_threshold] = 0.0
+            if bool(self.optimizer["post_trim_renorm"]):
+                total = float(solution.sum())
+                if total > 0:
+                    solution /= total
 
         result = np.zeros(len(self.columns), dtype=np.float64)
         result[candidate_idx] = solution
         output = pd.Series(result, index=self.columns, name=date, dtype=float)
         output.attrs["solve_seconds"] = solve_seconds
+        output.attrs["solver_status"] = str(solution_status)
+        output.attrs["solver_fallback"] = solver_fallback
+        output.attrs["slippage_valid_candidates"] = int(
+            slippage_valid[candidate_idx].sum()
+        )
+        output.attrs["candidate_count"] = int(len(candidate_idx))
+        output.attrs["slippage_excluded_candidates"] = slippage_excluded_candidates
+        output.attrs["forced_exit_count"] = int(forced_exit.sum())
+        output.attrs["forced_exit_weight"] = forced_exit_weight
+        output.attrs["forced_exit_unpriced_count"] = int(
+            (forced_exit & ~slippage_valid).sum()
+        )
+        output.attrs["forced_exit_unpriced_weight"] = float(
+            previous[forced_exit & ~slippage_valid].sum()
+        )
         return output

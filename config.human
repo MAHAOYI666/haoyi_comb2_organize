@@ -126,21 +126,31 @@ runEval config.xml
       ret_delay="1"
       ret_method="2"
       benchmark_delay="1"
+      target_size="100000000.0"
       maxtvr="0.4"
       max_weight="0.0075"
-      min_participation_ratio="0.21"
+      maxtrd="0.0"
+      maxpos="0.0"
+      liquidity_delay="1"
+      lambda_slp="0.0"
+      slippage_delay="1"
+      min_participation_ratio="0.07"
+      parti_penalty="0.0"
       trim_threshold="0.00001"
       min_valid_instruments="200"
       min_return_obs="20"
       soft_univ_penalty="0.00025"
       soft_risk_penalty="0.00004"
+      soft_group_penalty="0.0002"
       num_mosek_threads="1"
       max_time="30.0"
       post_trim_renorm="false"
-      univ_list="ZZ500:0.18:0.70,1"
-      soft_univ_list="ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1"
-      risk_list="returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
-      soft_risk_list="returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+      univ_list="ZZ500:0.18:0.70,1|AshareST:0.00:0.00,1|AshareSH:0.00:0.60,1|AshareSZ:0.00:0.60,1|NONETOP3000:0.00:0.17,1|AshareCYB:0.10:0.30,1"
+      soft_univ_list="ZZ1800:0.74:0.85:0.70,1|ZZ1800:0.79:0.85:0.45,1|ZZ1800:0.83:0.89:0.25,1|ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1|AshareSH:0.00:0.55:0.50,1|AshareCYB:0.10:0.25:1.00,1|AshareSZ:0.00:0.55:0.50,1|HS300:0.10:0.30:1.00,1|NONETOP3000:0.00:0.15:1.00,1"
+      risk_list="cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
+      soft_risk_list="cap:-0.02:0.07:2.0,1,4|returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+      group_list="WindIndustry.sw1:-0.065:0.065,1"
+      soft_group_list="WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
     />
   </strategy>
 
@@ -284,7 +294,7 @@ runEval config.xml
 - 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对指数方差约束下求目标权重。
 - 换手基准来自回测已真实成交的股数持仓；先按当日价格换算为市值，再剔除现金并归一化到股票 book。当前不可买的已有持仓仍进入候选集，但只能维持或减仓。
 - 中证 500 权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认的收益、指数、universe 和风险因子 delay 均为 `1`。
-- 缺数据、候选数不足、约束不可行、许可证不可用或 MOSEK 求解失败时直接报错，不做降级持仓。
+- 缺数据、候选数不足、许可证不可用或 MOSEK 调用失败时直接报错；MOSEK 正常完成但没有返回 `Optimal` 解时维持上一日实际股票 book，首日无持仓时保持空仓，并输出 RuntimeWarning。
 
 默认优化器要求安装 `Mosek==11.0.25`，并在运行前指向有效许可证：
 
@@ -316,21 +326,37 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `ret_delay` | `1` | 方差收益窗口相对求解日的交易日延迟。 |
 | `ret_method` | `2` | `1` 使用个股收益；`2` 使用个股相对中证 500 的收益。 |
 | `benchmark_delay` | `1` | 目标风险暴露使用的中证 500 权重延迟。 |
-| `maxtvr` | `0.4` | 相对实际股票 book 的 `sum(abs(new_weight - actual_weight))` 上限。首日无实际持仓时不加该约束。 |
+| `target_size` | `100000000` | 容量约束使用的目标股票 book，单位为元。 |
+| `maxtvr` | `0.4` | 相对实际股票 book 的 `sum(abs(new_weight - actual_weight))` 上限。首日无实际持仓时不加该约束；hard `0:0` universe 要求的强制退出不占用该额度。 |
 | `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
-| `min_participation_ratio` | `0.21` | 有效持股数相对候选股票数的最低比例。 |
+| `maxtrd` | `0.0` | 单票交易额相对 delay-1 全日成交额的上限，即 `abs(delta_weight) <= maxtrd * amount / target_size`；`0` 表示不添加该约束，非零时 hard `0:0` universe 要求的强制退出可突破卖出上限。 |
+| `maxpos` | `0.0` | 单票持仓额相对 delay-1 全日成交额的上限；`0` 表示不添加该约束，非零时历史持仓超限不强制一次性卖回。 |
+| `liquidity_delay` | `1` | `maxtrd` 和 `maxpos` 使用的 `DailyKline.amount` 交易日延迟。 |
+| `lambda_slp` | `0.0` | 逐股滑点成本在目标函数中的惩罚系数；成本率为 delay-1 `spread_slippage_new / close`。 |
+| `slippage_delay` | `1` | 滑点和对应收盘价的交易日延迟。缺失 spread 的股票不可交易。 |
+| `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
+| `parti_penalty` | `0.0` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
 | `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
 | `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
 | `min_return_obs` | `20` | `ret_days` 窗口内要求的最少有效收益观测数。 |
 | `soft_univ_penalty` | `0.00025` | soft universe 越界松弛的全局惩罚系数。 |
 | `soft_risk_penalty` | `0.00004` | soft risk 越界松弛的全局惩罚系数。 |
+| `soft_group_penalty` | `0.0002` | soft industry group 越界松弛的全局惩罚系数。 |
 | `num_mosek_threads` | `1` | MOSEK 求解线程数。 |
 | `max_time` | `30.0` | 单日 MOSEK 最大求解秒数；`0` 表示不设置时间上限。 |
 | `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
-| `univ_list` / `risk_list` | 见完整模板 | 硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
-| `soft_univ_list` / `soft_risk_list` | 见完整模板 | 软约束，格式为 `name:lo:hi:penalty,delay`，多项用 `|` 分隔。 |
+| `univ_list` | 见完整模板 | 股票集合权重硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
+| `soft_univ_list` | 见完整模板 | 软 universe 约束，格式为 `name:lo:hi:penalty,delay`。 |
+| `group_list` | 见完整模板 | 相对中证 500 的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
+| `soft_group_list` | 见完整模板 | 相对中证 500 的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
+| `risk_list` | 见完整模板 | 硬风险约束，格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。 |
+| `soft_risk_list` | 见完整模板 | 软风险约束，格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。 |
 
-列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。支持的衍生风险项为 `returns120`、`vola_30`、`vola_5`、`close`；Barra 风格项写成 `BarraCNE5.<NAME>`。
+列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
+
+hard universe 的上界为 `0` 时，已有成员仓位必须退出。该强制卖出不占用 `maxtrd` 和 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时因交易量已被硬约束唯一确定而省略该常数项，并记录未定价强退数量和权重。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。执行层因停牌或涨跌停未能成交时，下一交易日继续以实际持仓为基准退出。
+
+当 MOSEK primal solution status 不是 `Optimal` 时，当日忽略新目标和强制退出，返回上一日实际股票 book，执行层完全跳过买卖，因此手续费和换手均为 `0`；返回权重的 attrs 会记录 `solver_fallback=true` 和具体 `solver_status`，下一交易日重新求解。
 
 自定义 strategy：
 

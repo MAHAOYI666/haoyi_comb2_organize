@@ -207,25 +207,32 @@ class DailyBacktest:
             signal_masked = signals * self.universe.loc[date].fillna(0.0)
             self.dataloader.date = date
             target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
+        solver_fallback = bool(target_weight.attrs.get("solver_fallback", False))
         self.node.position_history.append(pd.DataFrame([target_weight], index=[date], columns=self.universe.columns))
         tvr_cost = 0.0
 
-        if self.node.weight_index is not None:
+        if not solver_fallback and self.node.weight_index is not None:
             diff = self.node.weight_index.difference(target_weight.index)
             if len(diff) > 0:
                 k_value = (self.node.holdings.loc[diff] * vwap_today.loc[diff]).sum()
                 tvr_cost += k_value
                 self.cash += k_value * (1 - self.node.fee_rate)
                 self.node.holdings.loc[diff] = 0
-        self.node.weight_index = target_weight.index
 
         total_asset = self._total_asset(vwap_today)
-        target_value = target_weight * total_asset * self.node.reserve_cash
         current_value = self.node.holdings * vwap_today
-        diff_value = target_value - current_value
+        if solver_fallback:
+            execution_index = pd.Index([])
+            target_value = current_value
+            diff_value = current_value * 0.0
+        else:
+            self.node.weight_index = target_weight.index
+            execution_index = self.node.weight_index
+            target_value = target_weight * total_asset * self.node.reserve_cash
+            diff_value = target_value - current_value
         trade_cost = 0.0
 
-        for stock in self.node.weight_index:
+        for stock in execution_index:
             if (stock not in vwap_today) or pd.isna(vwap_today[stock]) or pd.isna(self.suspend.loc[date, stock]) or pd.isna(self.limit.loc[date, stock]):
                 continue
 

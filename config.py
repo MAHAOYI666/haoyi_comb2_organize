@@ -80,24 +80,49 @@ DEFAULT_OPTIMIZER_CONFIG = {
     "ret_delay": 1,
     "ret_method": 2,
     "benchmark_delay": 1,
+    "target_size": 1.0e8,
     "maxtvr": 0.4,
     "max_weight": 0.0075,
-    "min_participation_ratio": 0.21,
+    "maxtrd": 0.0,
+    "maxpos": 0.0,
+    "liquidity_delay": 1,
+    "lambda_slp": 0.0,
+    "slippage_delay": 1,
+    "min_participation_ratio": 0.07,
+    "parti_penalty": 0.0,
     "trim_threshold": 1.0e-5,
     "min_valid_instruments": 200,
     "min_return_obs": 20,
     "soft_univ_penalty": 0.00025,
     "soft_risk_penalty": 0.00004,
+    "soft_group_penalty": 0.0002,
     "num_mosek_threads": 1,
     "max_time": 30.0,
     "post_trim_renorm": False,
-    "univ_list": "ZZ500:0.18:0.70,1",
+    "univ_list": (
+        "ZZ500:0.18:0.70,1|"
+        "AshareST:0.00:0.00,1|"
+        "AshareSH:0.00:0.60,1|"
+        "AshareSZ:0.00:0.60,1|"
+        "NONETOP3000:0.00:0.17,1|"
+        "AshareCYB:0.10:0.30,1"
+    ),
     "soft_univ_list": (
+        "ZZ1800:0.74:0.85:0.70,1|"
+        "ZZ1800:0.79:0.85:0.45,1|"
+        "ZZ1800:0.83:0.89:0.25,1|"
         "ZZ500:0.28:0.50:2.0,1|"
         "ZZ500:0.30:0.50:0.2,1|"
-        "ZZ500:0.32:0.50:0.05,1"
+        "ZZ500:0.32:0.50:0.05,1|"
+        "AshareSH:0.00:0.55:0.50,1|"
+        "AshareCYB:0.10:0.25:1.00,1|"
+        "AshareSZ:0.00:0.55:0.50,1|"
+        "HS300:0.10:0.30:1.00,1|"
+        "NONETOP3000:0.00:0.15:1.00,1"
     ),
     "risk_list": (
+        "cap:-0.40:0.30,1,4|"
+        "cap:-0.20:0.21,1,2|"
         "returns120:-0.14:0.14,1|"
         "vola_30:-0.30:0.30,1|"
         "vola_5:-0.30:0.30,1|"
@@ -109,12 +134,18 @@ DEFAULT_OPTIMIZER_CONFIG = {
         "BarraCNE5.RESVOL:-0.30:0.30,1"
     ),
     "soft_risk_list": (
+        "cap:-0.02:0.07:2.0,1,4|"
         "returns120:-0.08:0.08:5.0,1|"
         "close:-0.05:0.05:1.0,1|"
         "BarraCNE5.BETA:0.00:0.04:1.7,1|"
         "BarraCNE5.GROWTH:-0.02:0.06:1.3,1|"
         "BarraCNE5.BTOP:-0.02:0.07:1.3,1|"
         "BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+    ),
+    "group_list": "WindIndustry.sw1:-0.065:0.065,1",
+    "soft_group_list": (
+        "WindIndustry.sw1:-0.05:0.05,1|"
+        "WindIndustry.sw3:-0.012:0.012,1"
     ),
 }
 
@@ -624,9 +655,15 @@ def _validate_config(config: dict) -> None:
         "ret_delay",
         "benchmark_delay",
         "maxtvr",
+        "maxtrd",
+        "maxpos",
+        "liquidity_delay",
+        "lambda_slp",
+        "slippage_delay",
         "trim_threshold",
         "soft_univ_penalty",
         "soft_risk_penalty",
+        "soft_group_penalty",
         "max_time",
     ):
         if float(optimizer[name]) < 0:
@@ -635,6 +672,10 @@ def _validate_config(config: dict) -> None:
         raise ValueError("strategy.optimizer.shrinkage must be between 0 and 1")
     if float(optimizer["max_weight"]) <= 0:
         raise ValueError("strategy.optimizer.max_weight must be positive")
+    if float(optimizer["target_size"]) <= 0:
+        raise ValueError("strategy.optimizer.target_size must be positive")
+    if float(optimizer["parti_penalty"]) < 0:
+        raise ValueError("strategy.optimizer.parti_penalty must be nonnegative")
     participation = float(optimizer["min_participation_ratio"])
     if not 0.0 <= participation <= 1.0:
         raise ValueError("strategy.optimizer.min_participation_ratio must be between 0 and 1")
@@ -642,7 +683,14 @@ def _validate_config(config: dict) -> None:
         raise ValueError("strategy.optimizer.min_return_obs must not exceed ret_days")
     if int(optimizer["ret_method"]) not in {1, 2}:
         raise ValueError("strategy.optimizer.ret_method must be 1 or 2")
-    for name in ("univ_list", "soft_univ_list", "risk_list", "soft_risk_list"):
+    for name in (
+        "univ_list",
+        "soft_univ_list",
+        "risk_list",
+        "soft_risk_list",
+        "group_list",
+        "soft_group_list",
+    ):
         if not isinstance(optimizer[name], str):
             raise ValueError(f"strategy.optimizer.{name} must be a string")
 
