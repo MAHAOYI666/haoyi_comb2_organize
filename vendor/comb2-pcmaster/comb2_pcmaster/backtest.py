@@ -36,6 +36,7 @@ class BacktestNode:
     output_path: str
     strategy_path: str
     strategy_class: str
+    strategy_config: dict[str, Any]
     cash: float
     fee_rate: float
     reserve_cash: float
@@ -44,12 +45,14 @@ class BacktestNode:
     verbose: bool = False
     universe: str = "base"
     execution_price: str = "vwap30"
+    snap_ti: int | None = None
     drawdown_stop: float = 0.0
     cooldown_days: int = 0
     holdings: pd.Series | None = None
-    last_hold: pd.Series | None = None
+    locked_holdings: pd.Series | None = None
     yesterday: int | None = None
-    weight_index: pd.Index | None = None
+    target_stock_amount: float | None = None
+    executed_turnover_today: float = 0.0
     daily_metrics_history: list[dict] = field(default_factory=list)
     asset_history: list[list[float]] = field(default_factory=list)
     position_history: list[pd.DataFrame] = field(default_factory=list)
@@ -81,10 +84,7 @@ class DailyBacktest:
         spec.loader.exec_module(module)
         strategy_class = getattr(module, class_name, None)
         return strategy_class(
-            strategy_config={
-                "strategy_path": file_path,
-                "strategy_class": class_name,
-            },
+            strategy_config=dict(self.node.strategy_config),
             dataloader=self.dataloader,
         )
 
@@ -97,7 +97,11 @@ class DailyBacktest:
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
         if self.node.execution_price == "vwap30":
-            self.vwap_data = self.dataloader.get_vwap(self.node.start_ds, self.node.end_ds).ffill()
+            self.vwap_data = self.dataloader.get_vwap(
+                self.node.start_ds,
+                self.node.end_ds,
+                snap_ti=self.node.snap_ti,
+            ).ffill()
         elif self.node.execution_price == "open":
             self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds).ffill()
         else:
@@ -109,9 +113,10 @@ class DailyBacktest:
 
     def initialize(self):
         self.node.holdings = pd.Series(0.0, index=self.vwap_data.columns)
-        self.node.last_hold = None
+        self.node.locked_holdings = pd.Series(0.0, index=self.vwap_data.columns)
         self.node.yesterday = None
-        self.node.weight_index = None
+        self.node.target_stock_amount = None
+        self.node.executed_turnover_today = 0.0
         self.node.daily_metrics_history = []
         self.node.asset_history = []
         self.node.position_history = []
@@ -153,8 +158,7 @@ class DailyBacktest:
         new_holdings = self.node.holdings / adj
         self.node.holdings = np.floor(new_holdings)
         self.cash += (pre_close_today * (new_holdings - self.node.holdings)).sum()
-        total = self._total_asset(pre_close_today)
-        self.node.last_hold = (self.node.holdings * pre_close_today / total).fillna(0.0)
+        self.node.locked_holdings = pd.Series(0.0, index=self.node.holdings.index)
 
     def _total_asset(self, prices_per_share: pd.Series) -> float:
         stock_value = (self.node.holdings * prices_per_share).sum()
@@ -187,8 +191,16 @@ class DailyBacktest:
             raise ValueError(f"date {date} must be later than previous date {self.node.yesterday}")
 
         self._advance_from_previous_close(date)
+        assert self.node.holdings is not None
+        assert self.node.locked_holdings is not None
+        self.node.executed_turnover_today = 0.0
         vwap_today = self.vwap_data.loc[date]
         pre_trade_total = self._total_asset(vwap_today)
+        self.node.target_stock_amount = float(pre_trade_total * self.node.reserve_cash)
+        assert np.isfinite(self.node.target_stock_amount) and self.node.target_stock_amount > 0
+        current_value = (self.node.holdings * vwap_today).fillna(0.0)
+        locked_value = (self.node.locked_holdings * vwap_today).fillna(0.0)
+        sellable_value = (current_value - locked_value).clip(lower=0.0)
         stop_triggered = False
         if self.node.drawdown_stop > 0 and pre_trade_total / self.equity_peak - 1.0 <= -self.node.drawdown_stop:
             stop_triggered = True
@@ -197,41 +209,72 @@ class DailyBacktest:
 
         signals = self._coerce_alpha(alpha).fillna(0.0)
         if stop_triggered or self.cooldown_left > 0:
-            target_weight = pd.Series(dtype=float)
+            orders = pd.DataFrame(
+                {
+                    "buy_amount": np.zeros(len(self.universe.columns), dtype=float),
+                    "sell_amount": sellable_value.reindex(self.universe.columns).to_numpy(
+                        dtype=float
+                    ),
+                },
+                index=self.universe.columns,
+            )
+            orders.attrs["optimizer_type"] = self.node.strategy_config.get(
+                "optimizer", {}
+            ).get("type", "custom")
+            orders.attrs["solver_status"] = "drawdown_stop"
+            orders.attrs["solver_fallback"] = False
             if not stop_triggered:
                 self.cooldown_left -= 1
         else:
             signal_masked = signals * self.universe.loc[date].fillna(0.0)
-            target_weight = self.strategy.generate_positions(signal_masked, self.node.last_hold)
-        self.node.position_history.append(pd.DataFrame([target_weight], index=[date], columns=self.universe.columns))
+            self.dataloader.date = date
+            orders = self.strategy.generate_orders(
+                signal_masked,
+                sellable_value,
+                locked_value,
+                self.node.target_stock_amount,
+                self.node.executed_turnover_today,
+            )
+        assert orders.index.equals(self.universe.columns)
+        assert list(orders.columns) == ["buy_amount", "sell_amount"]
+        order_values = orders.to_numpy(dtype=float)
+        assert np.isfinite(order_values).all() and (order_values >= 0).all()
+        assert not (
+            (orders["buy_amount"].to_numpy(dtype=float) > 0)
+            & (orders["sell_amount"].to_numpy(dtype=float) > 0)
+        ).any()
+
+        target_weight = orders.attrs.get("target_weight")
+        if target_weight is None:
+            target_amount = current_value + orders["buy_amount"] - orders["sell_amount"]
+            target_weight = target_amount.clip(lower=0.0) / self.node.target_stock_amount
+        else:
+            target_weight = target_weight.copy()
+        target_weight.name = date
+        target_weight.attrs.update(
+            {key: value for key, value in orders.attrs.items() if key != "target_weight"}
+        )
+        self.node.position_history.append(
+            pd.DataFrame([target_weight], index=[date], columns=self.universe.columns)
+        )
+        execution_index = orders.index[
+            (orders["buy_amount"] > 0) | (orders["sell_amount"] > 0)
+        ]
         tvr_cost = 0.0
-
-        if self.node.weight_index is not None:
-            diff = self.node.weight_index.difference(target_weight.index)
-            if len(diff) > 0:
-                k_value = (self.node.holdings.loc[diff] * vwap_today.loc[diff]).sum()
-                tvr_cost += k_value
-                self.cash += k_value * (1 - self.node.fee_rate)
-                self.node.holdings.loc[diff] = 0
-        self.node.weight_index = target_weight.index
-
-        total_asset = self._total_asset(vwap_today)
-        target_value = target_weight * total_asset * self.node.reserve_cash
-        current_value = self.node.holdings * vwap_today
-        diff_value = target_value - current_value
         trade_cost = 0.0
 
-        for stock in self.node.weight_index:
+        for stock in execution_index:
             if (stock not in vwap_today) or pd.isna(vwap_today[stock]) or pd.isna(self.suspend.loc[date, stock]) or pd.isna(self.limit.loc[date, stock]):
                 continue
 
             price_per_share = vwap_today[stock]
             price_per_100_shares = price_per_share * 100
-            value_diff = diff_value[stock]
+            buy_amount = orders.at[stock, "buy_amount"]
+            sell_amount = orders.at[stock, "sell_amount"]
 
-            if value_diff > 0:
+            if buy_amount > 0:
                 max_lots = int(self.cash // (price_per_100_shares * (1 + self.node.fee_rate)))
-                target_lots = int(value_diff // (price_per_100_shares * (1 + self.node.fee_rate)))
+                target_lots = int(buy_amount // (price_per_100_shares * (1 + self.node.fee_rate)))
                 buy_lots = min(target_lots, max_lots)
                 if buy_lots > 0:
                     b_value = buy_lots * price_per_100_shares
@@ -239,10 +282,20 @@ class DailyBacktest:
                     trade_cost += buy_lots * price_per_100_shares * self.node.fee_rate
                     self.cash -= cost
                     self.node.holdings.loc[stock] = self.node.holdings.loc[stock] + buy_lots * 100
+                    self.node.locked_holdings.loc[stock] = (
+                        self.node.locked_holdings.loc[stock] + buy_lots * 100
+                    )
                     tvr_cost += b_value
-            elif value_diff < 0:
-                sell_value = -value_diff
-                shares_to_sell = min(self.node.holdings.loc[stock], (sell_value // price_per_100_shares + 1) * 100)
+            elif sell_amount > 0:
+                sellable_shares = max(
+                    self.node.holdings.loc[stock]
+                    - self.node.locked_holdings.loc[stock],
+                    0.0,
+                )
+                shares_to_sell = min(
+                    sellable_shares,
+                    (sell_amount // price_per_100_shares + 1) * 100,
+                )
                 s_value = shares_to_sell * price_per_share
                 proceeds = s_value * (1 - self.node.fee_rate)
                 trade_cost += s_value * self.node.fee_rate
@@ -250,12 +303,14 @@ class DailyBacktest:
                 self.node.holdings.loc[stock] = self.node.holdings.loc[stock] - shares_to_sell
                 tvr_cost += s_value
 
+        self.node.executed_turnover_today += float(tvr_cost)
+
         close_today = self.close_data.loc[date]
         total = self._total_asset(close_today)
         self.equity_peak = max(self.equity_peak, float(total))
         pnl = 0.0 if self.node.prev_total_asset is None else float(total - self.node.prev_total_asset)
         self.node.prev_total_asset = float(total)
-        tvr = float(tvr_cost / target_value.sum()) if target_value.sum() != 0 else 0.0
+        tvr = float(tvr_cost / self.node.target_stock_amount)
         long_num = int((self.node.holdings > 0).sum())
 
         metrics = {
@@ -279,7 +334,9 @@ class DailyBacktest:
         return {
             **metrics,
             "target_weight": target_weight.copy(),
+            "orders": orders.copy(),
             "holdings": self.node.holdings.copy(),
+            "locked_holdings": self.node.locked_holdings.copy(),
         }
 
     def finalize(self):

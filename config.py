@@ -57,8 +57,27 @@ def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
         "mode": "read_dump",
         "config_path": None,
         "ops": (),
-        "params": {},
+        "params": {"freq": "1d"},
     }
+
+
+def _builtin_target_item(freq: str) -> dict[str, Any]:
+    assert freq in {"5m", "1m"}
+    return {
+        "name": "returns.default",
+        "module": "builtin.factorsim",
+        "path": f"{freq}_IntvReturns/IntvReturns.c2c",
+        "role": "target",
+        "mode": "read_dump",
+        "config_path": None,
+        "ops": (),
+        "params": {"freq": freq},
+    }
+
+
+def _default_data_items(freq: str) -> tuple[dict[str, Any], ...]:
+    supervision = _builtin_label_item() if freq == "1d" else _builtin_target_item(freq)
+    return (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), supervision)
 
 
 DEFAULT_FACTOR_PATHS = (
@@ -73,15 +92,95 @@ DEFAULT_FACTOR_PATHS = (
 )
 
 
+DEFAULT_OPTIMIZER_CONFIG = {
+    "type": "opt1",
+    "lambda0": 0.5,
+    "shrinkage": 0.5,
+    "ret_days": 60,
+    "ret_delay": 1,
+    "ret_method": 2,
+    "benchmark_delay": 1,
+    "target_size": 1.0e8,
+    "maxtvr": 0.4,
+    "max_weight": 0.0075,
+    "maxtrd": 0.0,
+    "maxpos": 0.0,
+    "liquidity_delay": 1,
+    "lambda_slp": 0.0,
+    "slippage_delay": 1,
+    "min_participation_ratio": 0.07,
+    "parti_penalty": 0.0,
+    "trim_threshold": 1.0e-5,
+    "min_valid_instruments": 200,
+    "min_return_obs": 20,
+    "soft_univ_penalty": 0.00025,
+    "soft_risk_penalty": 0.00004,
+    "soft_group_penalty": 0.0002,
+    "num_mosek_threads": 1,
+    "max_time": 30.0,
+    "post_trim_renorm": False,
+    "univ_list": (
+        "ZZ500:0.18:0.70,1|"
+        "AshareST:0.00:0.00,1|"
+        "AshareSH:0.00:0.60,1|"
+        "AshareSZ:0.00:0.60,1|"
+        "NONETOP3000:0.00:0.17,1|"
+        "AshareCYB:0.10:0.30,1"
+    ),
+    "soft_univ_list": (
+        "ZZ1800:0.74:0.85:0.70,1|"
+        "ZZ1800:0.79:0.85:0.45,1|"
+        "ZZ1800:0.83:0.89:0.25,1|"
+        "ZZ500:0.28:0.50:2.0,1|"
+        "ZZ500:0.30:0.50:0.2,1|"
+        "ZZ500:0.32:0.50:0.05,1|"
+        "AshareSH:0.00:0.55:0.50,1|"
+        "AshareCYB:0.10:0.25:1.00,1|"
+        "AshareSZ:0.00:0.55:0.50,1|"
+        "HS300:0.10:0.30:1.00,1|"
+        "NONETOP3000:0.00:0.15:1.00,1"
+    ),
+    "risk_list": (
+        "cap:-0.40:0.30,1,4|"
+        "cap:-0.20:0.21,1,2|"
+        "returns120:-0.14:0.14,1|"
+        "vola_30:-0.30:0.30,1|"
+        "vola_5:-0.30:0.30,1|"
+        "close:-0.10:0.10,1|"
+        "BarraCNE5.BETA:-0.20:0.30,1|"
+        "BarraCNE5.GROWTH:-0.15:0.20,1|"
+        "BarraCNE5.BTOP:-0.15:0.20,1|"
+        "BarraCNE5.LEVERAGE:-0.30:0.30,1|"
+        "BarraCNE5.RESVOL:-0.30:0.30,1"
+    ),
+    "soft_risk_list": (
+        "cap:-0.02:0.07:2.0,1,4|"
+        "returns120:-0.08:0.08:5.0,1|"
+        "close:-0.05:0.05:1.0,1|"
+        "BarraCNE5.BETA:0.00:0.04:1.7,1|"
+        "BarraCNE5.GROWTH:-0.02:0.06:1.3,1|"
+        "BarraCNE5.BTOP:-0.02:0.07:1.3,1|"
+        "BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+    ),
+    "group_list": "WindIndustry.sw1:-0.065:0.065,1",
+    "soft_group_list": (
+        "WindIndustry.sw1:-0.05:0.05,1|"
+        "WindIndustry.sw3:-0.012:0.012,1"
+    ),
+}
+
+
 DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
         "output_root": str(COMB2_ROOT / "output"),
+        "freq": "1d",
     },
     "strategy": {
         "start_ds": 20160111,
         "end_ds": 20200101,
         "path": _default_strategy_path(),
+        "optimizer": DEFAULT_OPTIMIZER_CONFIG,
     },
     "combo": {
         "paths": {
@@ -113,7 +212,7 @@ DEFAULT_CONFIG = {
         "model": {},
         "data": {
             "imports": (),
-            "items": (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), _builtin_label_item()),
+            "items": _default_data_items("1d"),
             "presets": (),
             "attrs": {},
         },
@@ -125,6 +224,7 @@ DEFAULT_CONFIG = {
             "data_items": (),
             "data_presets": (),
             "config_path": None,
+            "registry_cache_days": 64,
         },
     },
     "backtest": {
@@ -191,6 +291,7 @@ DATA_ATTR_DEFAULTS = {
         "compression",
         "data_start_ds",
         "data_offset",
+        "registry_cache_days",
     )
 }
 
@@ -289,7 +390,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     path = attrs.pop("path", None)
     config_path = attrs.pop("config_path", None)
     mode = attrs.pop("mode", "read_dump")
-    role = attrs.pop("role", "aux")
+    role = attrs.pop("role", "data")
     module = attrs.pop("module", "builtin.factorsim")
     legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
     if legacy_keys:
@@ -307,9 +408,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
         supported = ", ".join(DATA_FREQ_ORDER)
         raise ValueError(f"<item name='{name}'> has unsupported freq={freq!r}; expected one of {supported}")
     if role == "label" and freq != "1d":
-        raise ValueError(f"<item name='{name}'> role='label' only supports freq='1d'")
-    if role == "label" and not path:
-        path = "vwap30_label1d"
+        raise ValueError(f"<item name='{name}'> role='label' requires freq='1d'")
     params = {key: _parse_scalar(value) for key, value in attrs.items()}
     params["freq"] = freq
     return {
@@ -397,6 +496,11 @@ def _resolve_data_item_path(
         return value
     if field == "path" and str(role).strip().lower() == "label":
         return str(daily_label_path(cache_path, str(value)).resolve())
+    if field == "path" and str(role).strip().lower() == "target":
+        cache_root = Path(cache_path)
+        if path.parts and path.parts[0] == "AshareCache":
+            path = Path(*path.parts[1:])
+        return str((cache_root / "AshareCache" / path).resolve())
     return str((base_dir / path).resolve())
 
 
@@ -481,6 +585,29 @@ def _apply_constant_paths(config: dict) -> dict:
     return updated
 
 
+def _replace_default_vwap_label(
+    data_items: list[dict[str, Any]], cache_path: str, snap_ti: Any
+) -> list[dict[str, Any]]:
+    if snap_ti is None:
+        return data_items
+    default_path = str(daily_label_path(cache_path, "vwap30_label1d").resolve())
+    resolved_items = []
+    for item in data_items:
+        if (
+            item.get("role") == "label"
+            and item.get("module") in {"factorsim", "builtin.factorsim"}
+            and item.get("path") == default_path
+        ):
+            item = dict(item)
+            item["module"] = "builtin.snap_label"
+            item["path"] = None
+            params = dict(item.get("params", {}))
+            params["snap_ti"] = int(snap_ti)
+            item["params"] = params
+        resolved_items.append(item)
+    return resolved_items
+
+
 def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
     normalized_config = deepcopy(config)
     data_attrs = normalized_config["combo"].get("data", {}).get("attrs", {})
@@ -505,6 +632,12 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         seen_paths=set(),
         presets=presets,
     )
+    if resolved["constants"]["freq"] == "1d":
+        data_items = _replace_default_vwap_label(
+            data_items,
+            resolved["constants"]["cache_path"],
+            resolved["combo"]["runtime"].get("snap_ti"),
+        )
     resolved["combo"]["data"] = {
         "attrs": dict(resolved["combo"].get("data", {}).get("attrs", {})),
         "items": tuple(data_items),
@@ -518,6 +651,11 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
 
 
 def _validate_config(config: dict) -> None:
+    freq = str(config["constants"]["freq"])
+    if freq not in SUPPORTED_DATA_FREQS:
+        supported = ", ".join(DATA_FREQ_ORDER)
+        raise ValueError(f"constants.freq must be one of {supported}")
+
     runtime = config["combo"]["runtime"]
     nonnegative = ("trainDelay",)
     positive = ("retDays", "tsDays", "max_train_days", "torch_threads", "torch_interop_threads")
@@ -538,10 +676,78 @@ def _validate_config(config: dict) -> None:
     loader = config["combo"]["loader"]
     if int(loader["data_offset"]) < 0:
         raise ValueError("combo.data.data_offset must be nonnegative")
-
+    if int(loader["registry_cache_days"]) <= 0:
+        raise ValueError("combo.data.registry_cache_days must be positive")
+    items = tuple(loader["data_items"])
+    labels = tuple(item for item in items if item["role"] == "label")
+    targets = tuple(item for item in items if item["role"] == "target")
+    if freq == "1d":
+        if targets:
+            raise ValueError("constants.freq='1d' requires role='label', not role='target'")
+        if len(labels) > 1:
+            raise ValueError("constants.freq='1d' supports at most one role='label' item")
+    else:
+        if labels:
+            raise ValueError(f"constants.freq='{freq}' requires role='target', not role='label'")
+        if len(targets) != 1:
+            raise ValueError(f"constants.freq='{freq}' requires exactly one role='target' item")
+        target_freq = str(targets[0]["params"]["freq"])
+        if target_freq != freq:
+            raise ValueError(
+                f"constants.freq='{freq}' does not match target freq='{target_freq}'"
+            )
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")
+    optimizer = strategy["optimizer"]
+    if optimizer["type"] not in {"opt1", "opt2"}:
+        raise ValueError("strategy.optimizer.type must be opt1 or opt2")
+    for name in ("ret_days", "min_valid_instruments", "min_return_obs", "num_mosek_threads"):
+        if int(optimizer[name]) <= 0:
+            raise ValueError(f"strategy.optimizer.{name} must be positive")
+    for name in (
+        "lambda0",
+        "ret_delay",
+        "benchmark_delay",
+        "maxtvr",
+        "maxtrd",
+        "maxpos",
+        "liquidity_delay",
+        "lambda_slp",
+        "slippage_delay",
+        "trim_threshold",
+        "soft_univ_penalty",
+        "soft_risk_penalty",
+        "soft_group_penalty",
+        "max_time",
+    ):
+        if float(optimizer[name]) < 0:
+            raise ValueError(f"strategy.optimizer.{name} must be nonnegative")
+    if not 0.0 <= float(optimizer["shrinkage"]) <= 1.0:
+        raise ValueError("strategy.optimizer.shrinkage must be between 0 and 1")
+    if float(optimizer["max_weight"]) <= 0:
+        raise ValueError("strategy.optimizer.max_weight must be positive")
+    if float(optimizer["target_size"]) <= 0:
+        raise ValueError("strategy.optimizer.target_size must be positive")
+    if float(optimizer["parti_penalty"]) < 0:
+        raise ValueError("strategy.optimizer.parti_penalty must be nonnegative")
+    participation = float(optimizer["min_participation_ratio"])
+    if not 0.0 <= participation <= 1.0:
+        raise ValueError("strategy.optimizer.min_participation_ratio must be between 0 and 1")
+    if int(optimizer["min_return_obs"]) > int(optimizer["ret_days"]):
+        raise ValueError("strategy.optimizer.min_return_obs must not exceed ret_days")
+    if int(optimizer["ret_method"]) not in {1, 2}:
+        raise ValueError("strategy.optimizer.ret_method must be 1 or 2")
+    for name in (
+        "univ_list",
+        "soft_univ_list",
+        "risk_list",
+        "soft_risk_list",
+        "group_list",
+        "soft_group_list",
+    ):
+        if not isinstance(optimizer[name], str):
+            raise ValueError(f"strategy.optimizer.{name} must be a string")
 
     backtest = config["backtest"]
     if float(backtest["fee_rate"]) < 0:
@@ -560,7 +766,23 @@ def _load_xml_config(path: str) -> dict:
         raise ValueError("xml config root tag must be <config>")
 
     constants = _parse_section_attributes(root.find("constants"), DEFAULT_CONFIG["constants"])
-    strategy = _parse_section_attributes(root.find("strategy"), DEFAULT_CONFIG["strategy"])
+    strategy_element = root.find("strategy")
+    strategy_defaults = {
+        key: value for key, value in DEFAULT_CONFIG["strategy"].items() if key != "optimizer"
+    }
+    strategy = _parse_section_attributes(strategy_element, strategy_defaults)
+    if strategy_element is not None:
+        unsupported_children = [child.tag for child in strategy_element if child.tag != "optimizer"]
+        if unsupported_children:
+            raise ValueError(
+                "unsupported <strategy> children: " + ", ".join(sorted(set(unsupported_children)))
+            )
+        optimizer_element = strategy_element.find("optimizer")
+        if optimizer_element is not None:
+            strategy["optimizer"] = _parse_section_attributes(
+                optimizer_element,
+                DEFAULT_OPTIMIZER_CONFIG,
+            )
 
     combo_element = root.find("combo")
     combo = {}
@@ -599,4 +821,13 @@ def load_config(path: str | None = None) -> dict:
         raise ValueError("config file must be an XML file")
     loaded = _load_xml_config(str(config_path))
     merged = _deep_merge(DEFAULT_CONFIG, loaded)
+    loaded_data = loaded.get("combo", {}).get("data")
+    if loaded_data is None or (
+        "items" not in loaded_data and "imports" not in loaded_data
+    ):
+        freq = str(merged["constants"]["freq"])
+        if freq not in SUPPORTED_DATA_FREQS:
+            supported = ", ".join(DATA_FREQ_ORDER)
+            raise ValueError(f"constants.freq must be one of {supported}")
+        merged["combo"]["data"]["items"] = _default_data_items(freq)
     return _resolve_loaded_paths(merged, config_path.parent)

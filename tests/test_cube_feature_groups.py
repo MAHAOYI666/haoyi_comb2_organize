@@ -8,7 +8,13 @@ import torch
 
 from config import load_config
 from comb2.DataLoader import ComboDataLoader, FeatureGroups, GroupCodec, LoaderConfig
-from comb2.DataRegistry import DataItem, DataRegistry, OpSpec, Universe
+from comb2.DataRegistry import (
+    DataItem,
+    DataRegistry,
+    OpSpec,
+    Universe,
+    available_bar_count,
+)
 from comb2.codec import build_codec
 
 
@@ -50,12 +56,13 @@ def test_config_normalizes_freq_and_rejects_removed_ops(tmp_path: Path):
     config_path.write_text(
         """
 <config>
+  <constants freq="5m" />
   <combo>
     <paths model_path="model.py" />
     <data>
-      <item name="factor.daily" path="daily" role="factor" />
-      <item name="factor.m5" module="builtin.factorsim" path="m5" role="factor" freq="5m" />
-      <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" />
+      <item name="factor.daily" path="daily" />
+      <item name="factor.m5" module="builtin.factorsim" path="m5" freq="5m" />
+      <item name="returns.default" module="builtin.factorsim" path="5m_IntvReturns/IntvReturns.c2c" role="target" freq="5m" />
     </data>
   </combo>
 </config>
@@ -67,7 +74,8 @@ def test_config_normalizes_freq_and_rejects_removed_ops(tmp_path: Path):
     assert items[0]["params"]["freq"] == "1d"
     assert items[1]["params"]["freq"] == "5m"
     assert items[0]["module"] == "builtin.factorsim"
-    assert items[2]["module"] == "builtin.factorsim"
+    assert items[2]["role"] == "target"
+    assert items[2]["params"]["freq"] == "5m"
 
     bad_path = tmp_path / "bad.xml"
     bad_path.write_text(
@@ -76,7 +84,7 @@ def test_config_normalizes_freq_and_rejects_removed_ops(tmp_path: Path):
   <combo>
     <data>
       <item name="factor.bad" module="builtin.factorsim" path="bad" role="factor" nbar="10" />
-      <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" />
+      <item name="returns.default" module="builtin.factorsim" path="returns" role="target" freq="5m" />
     </data>
   </combo>
 </config>
@@ -95,7 +103,7 @@ def test_config_normalizes_freq_and_rejects_removed_ops(tmp_path: Path):
       <item name="factor.bad" module="builtin.factorsim" path="bad" role="factor">
         <op name="mean" axis="bar" />
       </item>
-      <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" />
+      <item name="returns.default" module="builtin.factorsim" path="returns" role="target" freq="5m" />
     </data>
   </combo>
 </config>
@@ -140,11 +148,12 @@ def test_loader_groups_features_and_masks_only_window_tail(monkeypatch):
             dtype=torch.float32,
             data_start_ds=20200101,
             data_offset=0,
+            freq="5m",
             data_items=(
-                DataItem(name="daily", module="test.daily", role="factor"),
-                DataItem(name="m5", module="test.m5", role="factor", params={"freq": "5m"}),
-                DataItem(name="m1", module="test.m1", role="factor", params={"freq": "1m"}),
-                DataItem(name="label", module="test.daily", role="label"),
+                DataItem(name="daily", module="test.daily"),
+                DataItem(name="m5", module="test.m5", params={"freq": "5m"}),
+                DataItem(name="m1", module="test.m1", params={"freq": "1m"}),
+                DataItem(name="returns", module="test.m5", role="target", params={"freq": "5m"}),
             ),
         )
     )
@@ -152,19 +161,38 @@ def test_loader_groups_features_and_masks_only_window_tail(monkeypatch):
     loader.registry.modules["test.m5"] = _intraday_loader(49)
     loader.registry.modules["test.m1"] = _intraday_loader(239)
 
-    day = loader.gen_feature(20200101)
+    day = loader.gen_feature(20200102)
     assert day.freqs == ("1d", "5m", "1m")
     assert day["1d"].shape == (3, 1)
     assert day["5m"].shape == (3, 49, 1)
     assert day["1m"].shape == (3, 239, 1)
 
-    loader.set_current_ti(100000)
     window = FeatureGroups.stack([day, day], dim=0)
-    masked = loader.transform_feature_window(window, stage="train")
+    masked = loader.transform_feature_window(window, target_ti=100000, stage="train")
     assert torch.isfinite(masked["5m"][0]).all()
-    assert torch.isnan(masked["5m"][-1, :, 7:, :]).all()
-    assert torch.isfinite(masked["5m"][-1, :, :7, :]).all()
+    assert torch.isnan(masked["5m"][-1, :, 6:, :]).all()
+    assert torch.isfinite(masked["5m"][-1, :, :6, :]).all()
+    assert torch.isnan(masked["1m"][-1, :, 26:, :]).all()
+    assert torch.isfinite(masked["1m"][-1, :, :26, :]).all()
     assert torch.isfinite(masked["1d"]).all()
+
+
+@pytest.mark.parametrize(
+    ("target_ti", "expected_5m", "expected_1m"),
+    (
+        (93500, 1, 1),
+        (94000, 2, 6),
+        (100000, 6, 26),
+        (113000, 24, 116),
+        (130500, 25, 121),
+        (150000, 48, 236),
+    ),
+)
+def test_available_bar_count_uses_previous_target_bar_cutoff(
+    target_ti, expected_5m, expected_1m
+):
+    assert available_bar_count("5m", "5m", target_ti) == expected_5m
+    assert available_bar_count("1m", "5m", target_ti) == expected_1m
 
 
 def test_group_codec_roundtrip_preserves_freqs_and_nan():

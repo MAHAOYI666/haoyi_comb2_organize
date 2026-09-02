@@ -47,28 +47,33 @@ def make_strategy() -> AlphaStrategy:
     return AlphaStrategy(strategy_config={}, dataloader=None)
 
 
-def test_generate_positions_longs_above_cross_section_median():
+def generate_orders(signals: pd.Series) -> pd.DataFrame:
+    zero = pd.Series(0.0, index=signals.index)
+    return make_strategy().generate_orders(signals, zero, zero, 100.0, 0.0)
+
+
+def test_generate_orders_longs_above_cross_section_median():
     signals = pd.Series({"a": 1.0, "b": 2.0, "c": 3.0, "d": 4.0})
 
-    positions = make_strategy().generate_positions(signals, last_hold=None)
+    orders = generate_orders(signals)
 
-    expected = pd.Series({"c": 0.25, "d": 0.75}, dtype=float)
-    pd.testing.assert_series_equal(positions, expected)
-    assert np.isclose(positions.sum(), 1.0)
+    expected = pd.Series({"a": 0.0, "b": 0.0, "c": 25.0, "d": 75.0})
+    pd.testing.assert_series_equal(orders["buy_amount"], expected, check_names=False)
+    assert orders["sell_amount"].sum() == 0.0
 
 
-def test_generate_positions_median_ignores_missing_and_infinite_values():
+def test_generate_orders_median_ignores_missing_and_infinite_values():
     signals = pd.Series({"a": 1.0, "b": 2.0, "c": np.inf, "d": np.nan, "e": 3.0})
 
-    positions = make_strategy().generate_positions(signals, last_hold=None)
+    orders = generate_orders(signals)
 
-    expected = pd.Series({"e": 1.0}, dtype=float)
-    pd.testing.assert_series_equal(positions, expected)
+    expected = pd.Series({"a": 0.0, "b": 0.0, "c": 0.0, "d": 0.0, "e": 100.0})
+    pd.testing.assert_series_equal(orders["buy_amount"], expected, check_names=False)
 
 
-def test_generate_positions_returns_empty_when_no_signal_exceeds_median():
+def test_generate_orders_returns_zero_when_no_signal_exceeds_median():
     signals = pd.Series({"a": 1.0, "b": 1.0, "c": 1.0})
 
-    positions = make_strategy().generate_positions(signals, last_hold=None)
+    orders = generate_orders(signals)
 
-    pd.testing.assert_series_equal(positions, pd.Series(dtype=float))
+    assert orders.to_numpy(dtype=float).sum() == 0.0

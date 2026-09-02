@@ -1,5 +1,5 @@
 <config>
-  <constants cache_path="data/Cache" output_root="output-torch" />
+  <constants cache_path="data/Cache" output_root="output-torch" freq="1d" />
   <strategy start_ds="20160111" end_ds="20200101" />
   <combo>
     <paths model_path="model.py" research_loader_path="loader.py" research_dataset_path="dataset.py" />

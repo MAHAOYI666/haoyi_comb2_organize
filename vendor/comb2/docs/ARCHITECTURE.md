@@ -1,6 +1,6 @@
 # comb2 Architecture
 
-This document describes internal component boundaries. Researcher-facing configuration and hook usage live in `../../config.human`.
+This document describes internal component boundaries. Researcher-facing configuration and hook usage live in `../../../config.human`.
 
 ## DataRegistry
 
@@ -18,10 +18,12 @@ Main types:
 Data cache model:
 
 ```text
-processed_cache[name]    # aligned processed [T, N]
-processed_loaded[name]   # processed date bitmap
+processed_cache[name]    # OrderedDict[date_idx, processed row]
+cache_days               # per-item LRU day limit, default 64
 module_cache[...]        # reader objects / module-local helpers
 ```
+
+The registry cache is bounded per item. It does not allocate a tensor covering the complete universe date axis and does not maintain a `processed_loaded` bitmap.
 
 Data load flow:
 
@@ -36,15 +38,16 @@ DataRegistry._ensure_range(names, start_ds, end_ds)
         5m: [R, 49, N]
         1m: [R, 239, N]
      -> _apply_ops(item, loaded_window, lo_idx, hi_idx)
-     -> write processed_cache
+     -> write each requested day to the per-item LRU
 
 DataRegistry.get_data(name, start_ds, end_ds)
   -> ensures the requested date range is loaded
-  -> returns processed_cache[resolved_name][lo:hi+1]
+  -> rejects ranges longer than cache_days
+  -> stacks and returns the requested cached rows
 
 DataRegistry.get_data(name)
-  -> returns already-loaded processed_cache[resolved_name]
-  -> raises if the item has not been loaded yet
+  -> returns the current cache only when it is non-empty and contiguous
+  -> otherwise requires an explicit date range
 ```
 
 Supported built-in modules:
@@ -83,6 +86,15 @@ Main types:
 | `ComboTrainDataset` | Builds rolling training tensors `X/Y/W` from a loader. |
 | `ComboBuffer` | Stores recent prediction features for online/history combination. |
 
+Execution modes:
+
+| `constants.freq` | Supervision | Sample and prediction contract |
+|---|---|---|
+| `1d` | Zero or one `role="label"`; training requires a label | `(idx, x, y, w)` and `predict(x_window)` |
+| `5m` / `1m` | Exactly one same-frequency `role="target"` | `(idx, di, ti, x, y, w)` and `predict(x_window, di=..., ti=...)` |
+
+The loader receives `constants.freq` as `LoaderConfig.freq`. Daily input items are `role="factor"`; in intraday execution every non-target item is a model input.
+
 Feature flow:
 
 ```text
@@ -90,9 +102,11 @@ ComboDataLoader.gen_feature(ds)
   -> align_date(ds)
   -> _build_feature(ds)
      -> build_raw_feature(ds)
-        -> registry._ensure_range(factor_names, ds, ds)
-        -> registry.get_data(name)[date_idx] for role="factor"
-        -> group factors by freq
+        -> source_date(ds, freq)
+           daily execution: ds
+           intraday execution with a 1d input: previous trading day
+        -> registry.get_data(name, source_ds, source_ds)[0]
+        -> group model inputs by freq
            1d: [N, F_1d]
            5m/1m: [N, bar, F_freq]
         -> inf -> NaN
@@ -105,9 +119,9 @@ ComboDataLoader.gen_feature(ds)
 
 Feature cache note:
 
-- Registry cache stores processed tensors per item while preserving item shape.
+- Registry cache stores at most `cache_days` processed rows per item while preserving item shape.
 - `ComboTrainDataset.X` and `ComboBuffer` store grouped tensors through `GroupCodec`.
-- `current_ti` is not part of `gen_feature(ds)`; it masks only the last day of train/predict windows.
+- `current_ti` is used only by daily snapshot execution. Intraday execution passes the target `ti` explicitly when transforming each train/predict window.
 
 Label flow:
 
@@ -132,19 +146,35 @@ ComboDataLoader.gen_label(ds, ret_days)
   -> return (y, w)
 ```
 
+Intraday target flow:
+
+```text
+ComboDataLoader.gen_target(ds, ti)
+  -> gen_raw_target(ds, ti)
+     -> validate ti on the target frequency axis
+     -> registry.get_data(target_name, ds, ds)[0][target_bar_id]
+  -> gen_valid_mask(ds), using the previous trading day's masks
+  -> finite(target) intersection
+  -> preprocess_target(target_values, valid_mask, ds)
+  -> return (y, w)
+```
+
 Prediction/live feature window flow:
 
 ```text
-load_feature_window(end_ds, ts_days)
-  -> choose trading days
-  -> repeated gen_feature(ds)
-  -> pad with NaN if history is short
-  -> transform_feature_window(feature_window, stage="predict")
-     -> mask future intraday bars on the last day only
-  -> process_feature_window(feature_window)
-     -> _feature_available_mask(feature_window)
-     -> return selected FeatureGroups, available_mask
+ComboBase.GenComboPos(ds, ti)
+  -> buffer_load(ds)
+     -> repeated gen_feature(ds) into ComboBuffer
+  -> ComboBuffer.get(trailing tsDays)
+  -> optional model trainii stock selection
+  -> transform_feature_window(...)
+     daily: stage="predict"
+     intraday: target_ti=ti, stage="predict"
+  -> ResearchModel.predict(...)
+  -> refill predictions to the complete stock axis
 ```
+
+For intraday execution, `transform_feature_window` retains only source bars whose completion progress is no later than the preceding target bar. The special opening-auction target bar is excluded from training, prediction, IC, and output.
 
 ## ResearchLoader Hooks
 
@@ -161,6 +191,11 @@ gen_label(ds, ret_days)
   -> aggregate ret_days returns
   -> build valid_mask
   -> preprocess_label(label_values, valid_mask, ds, ret_days)
+
+gen_target(ds, ti)
+  -> load one target bar
+  -> build valid_mask
+  -> preprocess_target(target_values, valid_mask, ds)
 ```
 
 Recommended override level:
@@ -173,7 +208,9 @@ Recommended override level:
 | Replace complete feature generation | `gen_feature(ds)` |
 | Change label standardization, clipping, or sample weights | `preprocess_label(label_values, valid_mask, ds, ret_days)` |
 | Replace complete label source/aggregation/valid-mask logic | `gen_label(ds, ret_days)` |
-| Change train/predict window processing while preserving future-bar masking | `transform_feature_window(feature_window, stage=...)` |
+| Change intraday target standardization or sample weights | `preprocess_target(target_values, valid_mask, ds)` |
+| Replace complete intraday target extraction | `gen_target(ds, ti)` |
+| Change train/predict window processing while preserving causality | `transform_feature_window(feature_window, target_ti=..., stage=...)` |
 | Change prediction stock availability | `_feature_available_mask(feature_window)` |
 | Change full prediction window processing | `process_feature_window(feature_window)` or `load_feature_window(end_ds, ts_days)` |
 
@@ -181,7 +218,7 @@ Recommended override level:
 
 ## ComboTrainDataset
 
-Training dataset construction:
+Daily training dataset construction:
 
 ```text
 ComboTrainDataset.__init__
@@ -199,6 +236,22 @@ ComboTrainDataset.__getitem__(idx)
   -> return idx, x, y, w
 ```
 
+Intraday training dataset construction:
+
+```text
+ComboTrainDataset.__init__
+  -> build trailing feature storage ending before/at each target date
+  -> chunked prefetch_features / prefetch_targets
+  -> Y/W shape [day, target_bar, stock]
+
+ComboTrainDataset.__getitem__(idx)
+  -> map idx to (di, ti)
+  -> decode the trailing ts_days feature window
+  -> transform_feature_window(..., target_ti=ti, stage="train")
+  -> select y/w for the same target bar
+  -> return idx, di, ti, x, y, w
+```
+
 Research dataset override points:
 
 | Goal | Hook |
@@ -212,16 +265,17 @@ Research dataset override points:
 
 ```text
 config XML
-  -> <combo><data> declarations and attrs
+  -> constants.freq and <combo><data> declarations
   -> LoaderConfig
   -> ResearchLoader or ComboDataLoader
   -> ResearchDataset or ComboTrainDataset
   -> ResearchModel.fit(dataset)
-  -> GenComboPos uses loader.load_feature_window(...)
-  -> ResearchModel.predict(x_window)
+  -> GenComboPos builds a causal window through ComboBuffer
+  -> daily: ResearchModel.predict(x_window)
+     intraday: ResearchModel.predict(x_window, di=..., ti=...)
 ```
 
-Default model-facing shapes:
+Daily model-facing shapes:
 
 ```text
 Training sample: idx, x, y, w
@@ -234,5 +288,13 @@ w: [M]
 
 Prediction input:
 x_window: FeatureGroups with the same grouped shapes
-available_mask: [N]
 ```
+
+Intraday changes the sample header to `idx, di, ti, x, y, w`; grouped feature shapes remain the same, but the final day's intraday groups are causally clipped for `ti`. `ComboBase` injects `freq` in both modes and adds `target_freq` and `target_times` in intraday mode.
+
+## runCombo Outputs
+
+| Execution mode | Alpha index | Analysis and execution |
+|---|---|---|
+| `1d` | date | `daily_ic`, daily backtest, and `backtest/` outputs |
+| `5m` / `1m` | `(dates, times)` | `intraday_ic.csv` and `ic_by_time.csv`; no daily backtest |

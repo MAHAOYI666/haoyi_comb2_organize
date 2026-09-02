@@ -7,5 +7,12 @@ class StrategyBase(metaclass=ABCMeta):
         self.dataloader = dataloader
 
     @abstractmethod
-    def generate_positions(self, signals, last_hold):
+    def generate_orders(
+        self,
+        signals,
+        sellable_amount,
+        locked_amount,
+        target_stock_amount,
+        executed_turnover_today,
+    ):
         raise NotImplementedError

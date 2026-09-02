@@ -67,6 +67,7 @@ RUNTIME_DEPENDENCY_PINS = (
     ("psutil", "7.2.2"),
     ("plotly", "6.7.0"),
     ("lightgbm", "4.4.0"),
+    ("Mosek", "11.0.25"),
 )
 
 IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}

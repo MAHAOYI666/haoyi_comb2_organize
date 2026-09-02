@@ -5,13 +5,15 @@ import sys
 from pathlib import Path
 
 EVALS_ROOT = Path(__file__).resolve().parents[1]
-if str(EVALS_ROOT) not in sys.path:
-    sys.path.insert(0, str(EVALS_ROOT))
+REPO_ROOT = EVALS_ROOT.parent
+for local_path in (EVALS_ROOT, REPO_ROOT / "vendor" / "comb2-simbase"):
+    if str(local_path) not in sys.path:
+        sys.path.insert(0, str(local_path))
 
 import pandas as pd
 
 from comb_eval.io import read_table
-from rundailypnl import _parse_df_type, _resolve_label_path, calculate_daily_pnl
+from rundailypnl import _parse_df_type, _resolve_label_path, calculate_daily_pnl, calculate_daily_pnl_from_snap_ti
 
 from _common import frame_to_text, write_frame, write_text
 
@@ -27,6 +29,7 @@ def main() -> None:
     parser.add_argument("--column", default="pnl", help="PnL column name")
     parser.add_argument("--weights", default=",".join(str(x) for x in DEFAULT_WEIGHTS), help="Comma-separated blend weights for new")
     parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--snap-ti", type=int, help="Use IntraVwap.Vwap30.HHMMSS to build the default label")
     parser.add_argument("--label", help="Explicit forward-return label path when inputs are signal files")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
     parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
@@ -43,6 +46,7 @@ def main() -> None:
         args.column,
         label=args.label,
         cache_path=args.cache_path,
+        snap_ti=args.snap_ti,
         label_is_table=args.label_is_table,
         label_df_type=_parse_df_type(args.label_df_type),
         booksize=args.booksize,
@@ -55,6 +59,7 @@ def main() -> None:
         args.column,
         label=args.label,
         cache_path=args.cache_path,
+        snap_ti=args.snap_ti,
         label_is_table=args.label_is_table,
         label_df_type=_parse_df_type(args.label_df_type),
         booksize=args.booksize,
@@ -83,6 +88,7 @@ def _read_pnl_or_signal(
     *,
     label: str | None,
     cache_path: str | None,
+    snap_ti: int | None,
     label_is_table: bool,
     label_df_type: object,
     booksize: float,
@@ -93,6 +99,18 @@ def _read_pnl_or_signal(
     table = read_table(path, start=start, end=end)
     if column in table.columns:
         return table
+    if snap_ti is not None and not label:
+        if not cache_path:
+            raise ValueError("--snap-ti requires --cache-path")
+        return calculate_daily_pnl_from_snap_ti(
+            path,
+            cache_path,
+            snap_ti,
+            booksize=booksize,
+            tradecost_ratio=tradecost_ratio,
+            start=start,
+            end=end,
+        )
     label_path = _resolve_label_path(label, cache_path, "vwap30_label1d")
     return calculate_daily_pnl(
         path,

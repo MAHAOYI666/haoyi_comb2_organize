@@ -13,6 +13,7 @@ for local_path in (EVALS_ROOT, REPO_ROOT / "vendor" / "comb2-simbase"):
 import pandas as pd
 
 from comb2_simbase.cache_layout import daily_label_path
+from comb2_simbase.snap_labels import load_snap_vwap_labels
 
 from comb_eval.ic import summarize_ic
 from comb_eval.io import normalize_date_index, read_cache_array, read_matrix, read_table
@@ -25,6 +26,7 @@ def main() -> None:
     parser.add_argument("path", help="Signal path by default, or daily IC path with --input-is-ic")
     parser.add_argument("--input-is-ic", action="store_true", help="Treat input as an existing daily IC dump")
     parser.add_argument("--cache-path", help="Parent directory containing AshareCache")
+    parser.add_argument("--snap-ti", type=int, help="Use IntraVwap.Vwap30.HHMMSS to build default labels")
     parser.add_argument("--label-1d", help="Explicit 1d forward-return label path")
     parser.add_argument("--label-5d", help="Explicit 5d forward-return label path")
     parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
@@ -41,6 +43,17 @@ def main() -> None:
     if args.input_is_ic:
         daily_ic = read_table(args.path, start=args.start, end=args.end)
         normalize_names = args.normalize_names
+    elif args.snap_ti is not None and not args.label_1d and not args.label_5d:
+        if not args.cache_path:
+            raise ValueError("--snap-ti requires --cache-path")
+        daily_ic = calculate_daily_ic_from_snap_ti(
+            args.path,
+            args.cache_path,
+            args.snap_ti,
+            start=args.start,
+            end=args.end,
+        )
+        normalize_names = True
     else:
         label_1d_path = _resolve_label_path(args.label_1d, args.cache_path, "vwap30_label1d")
         label_5d_path = _resolve_label_path(args.label_5d, args.cache_path, "vwap30_label5d")
@@ -90,6 +103,25 @@ def calculate_daily_ic(
     signal = read_matrix(signal_path, start=start, end=end)
     label_1d = _read_label(label_1d_path, signal, label_1d_is_table, label_df_type, start, end)
     label_5d = _read_label(label_5d_path, signal, label_5d_is_table, label_df_type, start, end)
+    return _calculate_daily_ic_from_frames(signal, label_1d, label_5d)
+
+
+def calculate_daily_ic_from_snap_ti(
+    signal_path: str | Path,
+    cache_path: str | Path,
+    snap_ti: int,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame:
+    signal = read_matrix(signal_path, start=start, end=end)
+    start_ds = signal.index.min().strftime("%Y%m%d")
+    end_ds = signal.index.max().strftime("%Y%m%d")
+    labels = load_snap_vwap_labels(cache_path, snap_ti, start_ds, end_ds)
+    return _calculate_daily_ic_from_frames(signal, normalize_date_index(labels[1]), normalize_date_index(labels[5]))
+
+
+def _calculate_daily_ic_from_frames(signal: pd.DataFrame, label_1d: pd.DataFrame, label_5d: pd.DataFrame) -> pd.DataFrame:
 
     signal, label_1d = signal.align(label_1d, join="inner", axis=0)
     signal, label_1d = signal.align(label_1d, join="inner", axis=1)

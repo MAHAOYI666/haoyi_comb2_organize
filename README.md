@@ -1,6 +1,6 @@
 # comb2-organize
 
-`comb2-organize` 用来把 research 模型接到内置的 `comb2` 和 `comb2-pcmaster` 源码上，完成训练、信号生成和回测。
+`comb2-organize` 用来把 research 模型接到内置的 `comb2` 和 `comb2-pcmaster` 源码上。日频模式完成训练、每日信号生成和回测；日内模式完成训练、逐时点信号生成和 IC 分析。
 
 发布记录、版本号和当前 wheel 安装目标统一记录在 `RELEASE.md`。
 唯一发布包名为 `combo2`，版本号只从仓库根目录 `VERSION` 读取。
@@ -18,6 +18,14 @@ vendor/
 ```
 
 `vendor/` 只包含运行所需源码，不包含原仓库 git history、构建产物、缓存和历史输出。
+
+默认持仓策略依赖 `Mosek==11.0.25`。受保护 wheel 已声明该依赖；直接从源码运行时需在当前 Python 环境安装 MOSEK，并通过环境变量提供有效许可证：
+
+```bash
+export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+```
+
+源码仓库根目录包含已脱敏的 `mosek.lic`。受保护 wheel 不内嵌许可证；wheel 部署环境仍需通过 `MOSEKLM_LICENSE_FILE` 指向获准使用的副本。
 
 完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
 
@@ -46,17 +54,18 @@ eg-lgbm/
 可以参考 `eg-lgbm/model.py`。模型需要提供一个 `ResearchModel` 类，并实现以下接口：
 
 - `fit(dataset)`
-- `predict(x_window)`
+- 日频：`predict(x_window)`
+- 日内：`predict(x_window, di=..., ti=...)`
 - `save(path_or_buffer)`
 - `load(path_or_buffer)`
 
-`predict(x_window)` 接收的是按频率分组的 `FeatureGroups`，不是单个 concat tensor。常见 shape：
+日频训练样本是 `(idx, x, y, w)`；日内训练样本是 `(idx, di, ti, x, y, w)`。两种 `predict` 接口中的 `x_window` 都是按频率分组的 `FeatureGroups`，不是单个 concat tensor。常见 shape：
 
 - `x_window["1d"]`: `[ts_days, stock, feature]`
 - `x_window["5m"]`: `[ts_days, stock, 49, feature]`
 - `x_window["1m"]`: `[ts_days, stock, 239, feature]`
 
-如果 config 没有声明某个频率的 factor，对应 key 不会存在。模型初始化时会额外收到 `freqs`、`num_features_by_freq`、`num_features`。
+如果 config 没有声明某个频率的输入，对应 key 不会存在。模型初始化时会额外收到 `freq`、`freqs`、`num_features_by_freq`、`num_features`；日内模式还会收到 `target_freq` 和 `target_times`。
 
 ### 3. 编写配置文件
 
@@ -67,20 +76,24 @@ eg-lgbm/
 关键配置包括：
 - `constants.cache_path`：`AshareCache` 的父目录；行情、mask、label、Barra 和回测路径均从这里派生
 - `constants.output_root`：唯一输出根目录；日志、alpha、checkpoint、回测和评估目录自动从这里派生
+- `constants.freq`：执行模式，支持 `1d`、`5m`、`1m`，缺省为 `1d`
+- `strategy.optimizer`：默认 MOSEK 持仓优化器参数；可在 `<strategy><optimizer ... /></strategy>` 中逐项覆盖
 - `combo.paths.model_path`：指向 research 目录下的 `model.py`
+
+`freq="1d"` 时，数据区使用 `role="factor"` 和最多一个 `role="label"`。`freq="5m"`/`"1m"` 时，必须有且仅有一个同频 `role="target"`，其余 item 都是模型输入；配置与 target 频率不一致会直接报错。
 
 `builtin.factorsim` 的路径规则：
 
 - 绝对路径：直接读取
 - 相对路径：相对 `config.xml` 或 data-pack 文件所在目录解析
 
-普通 factor pool 使用 `<item path="...">` 中的绝对路径，或者相对当前 XML/data-pack 的路径。固定的 label、mask 和 Barra 数据由 `constants.cache_path` 统一派生。
+普通 factor pool 使用 `<item path="...">` 中的绝对路径，或者相对当前 XML/data-pack 的路径。固定的 label、日内 returns target、mask 和 Barra 数据由 `constants.cache_path` 统一派生。
 
 示例里：
 - `model_path="model.py"`
 - `output_root="output"`
 
-固定输出包括 `output/train.log`、`output/alpha_history.pt`、`output/alpha.parquet`、`output/checkpoints/` 和 `output/backtest/`。
+两种模式都会使用 `output/train.log`、`output/alpha_history.pt`、`output/alpha.parquet` 和 `output/checkpoints/`。日频另有 `output/daily_ic` 与 `output/backtest/`；日内另有 `output/intraday_ic.csv` 与 `output/ic_by_time.csv`。
 
 ### 4. 运行 organize 入口
 
@@ -100,7 +113,7 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 ### 5. 评估已有输出
 
-`runEval.py` 和 `runCombo.py` 一样可以从任意目录执行：
+`runEval.py` 当前只评估 `freq="1d"` 的日期索引 alpha；日内输出直接查看 `intraday_ic.csv` 和 `ic_by_time.csv`。日频评估可以和 `runCombo.py` 一样从任意目录执行：
 
 ```bash
 /path/to/comb2-organize/runEval.py /path/to/research/config.xml
@@ -189,9 +202,10 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 - `preprocess_feature_group(freq, feature, ds)`：每个频率 group 的单日预处理；`1d=[stock,F]`，`5m/1m=[stock,bar,F]`。
 - `preprocess_daily_features(feature, ds)`：只改日频默认预处理。
 - `preprocess_label(label_values, valid_mask, ds, ret_days)`：改 label 标准化和样本权重。
-- `transform_feature_window(feature_window, stage=...)`：改训练/预测窗口处理；默认会 mask 最后一天未来日内 bar。
+- `preprocess_target(target_values, valid_mask, ds)`：改日内 target 标准化和样本权重。
+- `transform_feature_window(feature_window, target_ti=..., stage=...)`：改训练/预测窗口处理；日内模式必须保留目标时点的因果裁剪。
 
-在 loader hook 中读取已声明的 factor / label / aux 数据，使用 `self.registry.get_data(name, start_ds, end_ds)`；返回保留 date 维：`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。
+在 loader hook 中读取已声明的数据，使用 `self.registry.get_data(name, start_ds, end_ds)`；返回保留 date 维：`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。单次日期范围不能超过 `registry_cache_days`。
 
 `dataset.py` 里定义 `ResearchDataset(ComboTrainDataset)`，常用 hook：
 
@@ -207,13 +221,13 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 - `output/train.log`
 - `output/alpha_history.pt`
 - `output/alpha.parquet`
-- `output/daily_ic`
-- `output/backtest/daily_pnl.csv`
 - `output/checkpoints/` 下的模型文件
+- 日频：`output/daily_ic`、`output/backtest/daily_pnl.csv`
+- 日内：`output/intraday_ic.csv`、`output/ic_by_time.csv`，不调用日频回测
 
 ## 性能监控
 
-性能监控默认关闭，不影响原有训练和回测流程。需要时可在 XML 顶层加入：
+性能监控默认关闭，不影响训练、预测和日频回测流程。需要时可在 XML 顶层加入：
 
 ```xml
 <monitor enabled="true" output_path="output/perf_metrics.csv" collect_gpu="true" sync_cuda="false" />
@@ -223,12 +237,12 @@ python3 /path/to/comb2-organize/runCombo.py --config /path/to/research/config.xm
 
 ## 当前目录说明
 
-- `runCombo.py`：research 运行入口，负责加载配置、调用 `comb2`、再接入 `comb2-pcmaster` 回测
-- `runEval.py`：整体评估入口，检查 config 输出是否齐全并生成本地评估报告
+- `runCombo.py`：research 运行入口；日频接入 `comb2-pcmaster` 回测，日内生成逐时点 alpha 和 IC
+- `runEval.py`：日频整体评估入口，检查 config 输出是否齐全并生成本地评估报告
 - `runEval.py --sim/--pnl/--corr/--va/--exposure`：单项模式，直接读取本地 parquet/csv
 - `runEval.py --corr left.parquet right.parquet`：默认只统计最近 240 个重叠交易日的日频截面相关
 - `config.py`：配置解析与默认参数
-- 默认 config 使用内置 `AlphaStrategy`：先对有效 alpha 减去当日截面中位数，再持有调整后为正的 alpha，并按调整后正值归一化生成 long-only 仓位
+- 默认 config 使用内置 MOSEK `AlphaStrategy`：以原始零点划分正负 alpha 并分别归一化，在中证 500、BarraCNE5、换手、单票、有效持股数和相对方差约束下生成 long-only 目标仓位；换手基准使用真实成交持仓并归一化到股票 book
 - `vendor/comb2`：临时内置的 `comb2` 源码
 - `vendor/comb2-pcmaster`：临时内置的 `comb2-pcmaster` 源码
 - `vendor/perf_monitor.py`：可选性能监控模块

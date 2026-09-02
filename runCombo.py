@@ -60,7 +60,7 @@ if str(EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(EVAL_ROOT))
 
 from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
-from comb2_simbase import IndexMask, Memmaper2
+from comb2_simbase import IndexMask, Memmaper2, load_snap_vwap_labels
 from comb2_simbase.cache_layout import daily_label_path
 from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
 from vendor.perf_monitor import PerfMonitor, print_progress
@@ -90,6 +90,7 @@ def load_combo_base_class(combo_config: dict) -> type[ComboBase]:
     spec = importlib.util.spec_from_file_location(f"comb2_research_combo_base_{custom_path.stem}", custom_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     if not hasattr(module, "ComboBase"):
         raise AttributeError(f"{custom_path} must define ComboBase")
@@ -144,7 +145,8 @@ class Node:
         config = organize_config["combo"]
         instsz = len(IndexMask().code)
         self.alpha = torch.zeros(instsz, dtype=config["loader"]["dtype"])
-        self.alpha_history: dict[int, torch.Tensor] = {}
+        self.alpha_history: dict[int | tuple[int, int], torch.Tensor] = {}
+        self.freq = str(organize_config["constants"]["freq"])
 
         for section in ("paths", "runtime", "model", "output"):
             for key, value in config[section].items():
@@ -154,6 +156,7 @@ class Node:
         loader_fields = {field.name for field in fields(LoaderConfig)}
         loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
         loader_config["cache_path"] = organize_config["constants"]["cache_path"]
+        loader_config["freq"] = self.freq
         loader_config["verbose"] = bool(getattr(self, "verbose", False))
         self.loader_config = LoaderConfig(**loader_config)
 
@@ -204,10 +207,14 @@ def print_live_metrics(meta: dict):
         ("mean", f"{meta['mean']:.6f}" if meta["mean"] is not None else "NA", 12),
         ("std", f"{meta['std']:.6f}" if meta["std"] is not None else "NA", 12),
     ]
+    if meta.get("target_ti") is not None:
+        columns.insert(1, ("time", str(meta["target_ti"]), 8))
     _print_metric_table("[LIVE]", columns)
 
 
-def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int):
+def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int, snap_ti=None):
+    if snap_ti is not None:
+        return load_snap_vwap_labels(cache_path, snap_ti, start_ds, end_ds)[int(period.removesuffix("d"))]
     label = Memmaper2(daily_label_path(cache_path, f"vwap30_label{period}")).load(
         start_ds=start_ds,
         end_ds=end_ds,
@@ -216,23 +223,44 @@ def get_backtest_label(cache_path: str, period: str, start_ds: int, end_ds: int)
     return label.astype(float)
 
 
-def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str) -> pd.DataFrame:
-    if alpha.index.nlevels > 1:
-        alpha = alpha.reset_index("times", drop=True).sort_index()
+def calculate_alpha_ic(alpha: pd.DataFrame, cache_path: str, snap_ti=None) -> pd.DataFrame:
     date_idx = alpha.index.astype(int)
     start_time = int(date_idx[0])
     end_time = int(date_idx[-1])
     alpha = alpha.reindex(index=date_idx)
-    label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
-    label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    if snap_ti is None:
+        label_1d = get_backtest_label(cache_path, "1d", start_time, end_time).reindex(index=date_idx)
+        label_5d = get_backtest_label(cache_path, "5d", start_time, end_time).reindex(index=date_idx)
+    else:
+        labels = load_snap_vwap_labels(cache_path, snap_ti, start_time, end_time)
+        label_1d = labels[1].reindex(index=date_idx)
+        label_5d = labels[5].reindex(index=date_idx)
     evaluation_mask = load_evaluation_mask(alpha, cache_path)
-    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
+    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(
+        alpha, label_1d, label_5d, evaluation_mask
+    )
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
     daily_ic.index = daily_ic.index.strftime("%Y%m%d").astype(int)
     return daily_ic
 
 
-def dump_alpha_analysis(node: Node, organize_config: dict):
+def calculate_intraday_ic(alpha: pd.DataFrame, combo: ComboBase) -> pd.DataFrame:
+    rows = []
+    for di, ti in alpha.index:
+        prediction = alpha.loc[(di, ti)].to_numpy(dtype=np.float64, copy=False)
+        target = combo.loader.gen_raw_target(int(di), int(ti)).cpu().numpy().astype(np.float64, copy=False)
+        mask = combo.loader.gen_valid_mask(int(di)).cpu().numpy().astype(bool, copy=False)
+        valid = mask & np.isfinite(prediction) & np.isfinite(target)
+        count = int(valid.sum())
+        ic = np.nan
+        if count >= 2 and np.std(prediction[valid]) > 0.0 and np.std(target[valid]) > 0.0:
+            ic = float(np.corrcoef(prediction[valid], target[valid])[0, 1])
+        rows.append((int(di), int(ti), ic, count))
+    result = pd.DataFrame(rows, columns=("dates", "times", "ic", "count"))
+    return result.set_index(["dates", "times"]).sort_index()
+
+
+def dump_alpha_analysis(node: Node, combo: ComboBase, organize_config: dict):
     if not node.alpha_history:
         return
     combo_config = organize_config["combo"]
@@ -244,24 +272,37 @@ def dump_alpha_analysis(node: Node, organize_config: dict):
 
     codes = pd.Index([str(code).zfill(6) for code in IndexMask().code])
     alpha = pd.DataFrame(
-        {date: value.detach().cpu().to(torch.float32).numpy() for date, value in node.alpha_history.items()},
+        {key: value.detach().cpu().to(torch.float32).numpy() for key, value in node.alpha_history.items()},
         index=codes,
     ).T.sort_index()
-    alpha.index = alpha.index.astype(int)
     alpha_path = output_dir / "alpha.parquet"
+    if node.freq == "1d":
+        alpha.index = alpha.index.astype(int)
+        alpha.to_parquet(alpha_path)
+        daily_ic = calculate_alpha_ic(
+            alpha,
+            organize_config["constants"]["cache_path"],
+            organize_config["combo"]["runtime"].get("snap_ti"),
+        )
+        daily_ic_path = output_dir / "daily_ic"
+        daily_ic.to_csv(daily_ic_path, sep="\t", na_rep="NAN")
+        print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
+        return
+    alpha.index = pd.MultiIndex.from_tuples(alpha.index, names=("dates", "times"))
     alpha.to_parquet(alpha_path)
-
-    daily_ic = calculate_alpha_ic(alpha, organize_config["constants"]["cache_path"])
-    daily_ic_path = output_dir / "daily_ic"
-    daily_ic.to_csv(daily_ic_path, sep="\t", na_rep="NAN")
-    print(f"[IC] alpha={alpha_path} daily_ic={daily_ic_path}")
+    intraday_ic = calculate_intraday_ic(alpha, combo)
+    ic_path = output_dir / "intraday_ic.csv"
+    by_time_path = output_dir / "ic_by_time.csv"
+    intraday_ic.to_csv(ic_path)
+    intraday_ic.groupby(level="times")["ic"].agg(["mean", "std", "count"]).to_csv(by_time_path)
+    print(f"[IC] alpha={alpha_path} intraday_ic={ic_path} by_time={by_time_path}")
 
 
 def build_strategy_file(organize_config: dict) -> Path:
     return Path(organize_config["strategy"]["path"])
 
 
-def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestNode:
+def build_backtest_node(strategy_path: Path, organize_config: dict):
     from comb2_pcmaster import BacktestNode
 
     strategy_config = organize_config["strategy"]
@@ -274,6 +315,7 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         output_path=str(output_path),
         strategy_path=str(strategy_path),
         strategy_class="AlphaStrategy",
+        strategy_config=dict(strategy_config),
         cash=float(backtest_config["cash"]),
         fee_rate=float(backtest_config["fee_rate"]),
         reserve_cash=float(backtest_config["reserve_cash"]),
@@ -282,6 +324,7 @@ def build_backtest_node(strategy_path: Path, organize_config: dict) -> BacktestN
         verbose=bool(backtest_config["verbose"]),
         universe=backtest_config.get("universe", "base"),
         execution_price=backtest_config.get("execution_price", "vwap30"),
+        snap_ti=organize_config["combo"]["runtime"].get("snap_ti"),
         drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest_config.get("cooldown_days", 0)),
     )
@@ -311,27 +354,31 @@ class ExperimentRunner:
 
         if self.live_mode:
             self.live_output_dir.mkdir(parents=True, exist_ok=True)
-            return
+        elif self.node.freq == "1d":
+            from comb2_pcmaster import DailyBacktest
 
-        strategy_path = build_strategy_file(self.organize_config)
-        backtest_node = build_backtest_node(strategy_path, self.organize_config)
-        from comb2_pcmaster import DailyBacktest
-
-        self.backtest = DailyBacktest(backtest_node)
+            self.backtest = DailyBacktest(
+                build_backtest_node(build_strategy_file(self.organize_config), self.organize_config)
+            )
+        else:
+            print("[BACKTEST] daily execution is disabled for intraday (di, ti) outputs")
 
     def dates(self):
-        if self.live_mode:
-            start_ds = int(self.organize_config["strategy"]["start_ds"])
-            end_ds = int(self.organize_config["strategy"]["end_ds"])
-            dates = [
-                int(ds)
-                for ds in sorted(self.combo.loader.mask.date)
-                if start_ds <= int(ds) <= end_ds
-            ]
-            if not dates:
-                raise ValueError(f"no live trading dates in range {start_ds}-{end_ds}; live mode does not auto-align dates")
-            return dates
-        return sorted(self.backtest.vwap_data.index)
+        if self.node.freq == "1d" and not self.live_mode:
+            return sorted(self.backtest.vwap_data.index)
+        start_ds = int(self.organize_config["strategy"]["start_ds"])
+        end_ds = int(self.organize_config["strategy"]["end_ds"])
+        dates = [
+            int(ds)
+            for ds in sorted(self.combo.loader.mask.date)
+            if start_ds <= int(ds) <= end_ds
+        ]
+        if not dates:
+            raise ValueError(f"no trading dates in range {start_ds}-{end_ds}")
+        return dates
+
+    def target_times(self):
+        return self.combo.loader.target_times
 
     def alpha_convert(self, date_int: int):
         return self.node.alpha.detach().cpu().to(dtype=self.node.alpha.dtype).numpy()
@@ -340,15 +387,15 @@ class ExperimentRunner:
         return self.backtest.step(date_int, pd.Series(alpha, index=self.codes))
 
     def backtest_finalize(self):
-        self.backtest.finalize()
+        return self.backtest.finalize()
 
     def alpha_analysis(self):
         if not self.combo_config["output"].get("enable_alpha_analysis", True):
             print("[IC] alpha analysis disabled by config")
             return
-        dump_alpha_analysis(self.node, self.organize_config)
+        dump_alpha_analysis(self.node, self.combo, self.organize_config)
 
-    def live_step(self, date_int: int, alpha) -> dict:
+    def live_step(self, date_int: int, alpha, ti: int | None = None) -> dict:
         if self.combo.model is None or int(self.combo.model_dt) < 0:
             raise RuntimeError(f"live mode failed to load checkpoint for trade date {date_int}")
         pred_ds = self.combo._prev_date(date_int)
@@ -359,6 +406,7 @@ class ExperimentRunner:
             "mode": "livetrading",
             "config": self.config_path,
             "trade_ds": int(date_int),
+            "target_ti": None if ti is None else int(ti),
             "pred_ds": int(pred_ds),
             "snaptime": str(self.combo.snaptime),
             "checkpoint_model_dt": int(self.combo.model_dt),
@@ -378,8 +426,9 @@ class ExperimentRunner:
         if meta["nonzero_count"] == 0:
             raise RuntimeError(f"live mode produced all-zero finite alpha for trade date {date_int}")
 
-        alpha_path = self.live_output_dir / f"alpha_{date_int}.csv"
-        meta_path = self.live_output_dir / f"meta_{date_int}.json"
+        suffix = str(date_int) if ti is None else f"{date_int}_{ti}"
+        alpha_path = self.live_output_dir / f"alpha_{suffix}.csv"
+        meta_path = self.live_output_dir / f"meta_{suffix}.json"
         pd.Series(alpha_array, index=self.codes, name="alpha").to_csv(alpha_path)
         meta["alpha_path"] = str(alpha_path)
         meta["meta_path"] = str(meta_path)
@@ -438,6 +487,7 @@ def install_perf_decorators(monitor: PerfMonitor):
     monitor.patch_method(ComboTrainDataset, "__getitem__", "detail_dataset_getitem", date_arg="idx")
     monitor.patch_method(ComboDataLoader, "gen_feature", "detail_gen_feature", date_arg="ds")
     monitor.patch_method(ComboDataLoader, "gen_label", "detail_gen_label", date_arg="ds")
+    monitor.patch_method(ComboDataLoader, "gen_target", "detail_gen_target", date_arg="ds")
     monitor.patch_method(ComboDataLoader, "gen_valid_mask", "detail_gen_valid_mask", date_arg="ds")
     monitor.patch_method(ComboDataLoader, "gen_base_universe_mask", "detail_gen_base_universe_mask", date_arg="ds")
 
@@ -485,45 +535,77 @@ def run_loaded_config(organize_config: dict, config_path: str) -> int:
         backtest_time = 0.0
         live_output_time = 0.0
         verbose = bool(monitor.config.verbose)
-        for update_idx, date in enumerate(dates, start=1):
-            date_int = int(date)
-            section_start = time.perf_counter()
-            runner.combo.Combine(date_int)
-            combine_time += time.perf_counter() - section_start
-            section_start = time.perf_counter()
-            alpha = runner.alpha_convert(date_int)
-            alpha_time += time.perf_counter() - section_start
-            if runner.live_mode:
+        if runner.node.freq == "1d":
+            for update_idx, date in enumerate(dates, start=1):
+                date_int = int(date)
                 section_start = time.perf_counter()
-                meta = runner.live_step(date_int, alpha)
-                live_output_time += time.perf_counter() - section_start
-                print_live_metrics(meta)
+                runner.combo.Combine(date_int)
+                combine_time += time.perf_counter() - section_start
+                section_start = time.perf_counter()
+                alpha = runner.alpha_convert(date_int)
+                alpha_time += time.perf_counter() - section_start
+                if runner.live_mode:
+                    section_start = time.perf_counter()
+                    meta = runner.live_step(date_int, alpha)
+                    live_output_time += time.perf_counter() - section_start
+                    print_live_metrics(meta)
+                    detail = (
+                        f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, "
+                        f"output {live_output_time:.2f}"
+                    )
+                    stage = "Stage:runComboLive"
+                else:
+                    section_start = time.perf_counter()
+                    metrics = runner.backtest_step(date_int, alpha)
+                    backtest_time += time.perf_counter() - section_start
+                    print_daily_metrics(metrics)
+                    detail = (
+                        f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, "
+                        f"backtest {backtest_time:.2f}"
+                    )
+                    stage = "Stage:runCombo"
                 if verbose:
                     print_progress(
-                        "Stage:runComboLive",
+                        stage,
                         update_idx,
                         len(dates),
                         loop_start,
-                        f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, output {live_output_time:.2f}",
+                        detail,
                         final=update_idx == len(dates),
                     )
-                continue
-            section_start = time.perf_counter()
-            metrics = runner.backtest_step(date_int, alpha)
-            backtest_time += time.perf_counter() - section_start
-            print_daily_metrics(metrics)
-            if verbose:
-                print_progress(
-                    "Stage:runCombo",
-                    update_idx,
-                    len(dates),
-                    loop_start,
-                    f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, backtest {backtest_time:.2f}",
-                    final=update_idx == len(dates),
-                )
+            if not runner.live_mode:
+                runner.backtest_finalize()
+                runner.alpha_analysis()
+            return 0
+
+        total_updates = len(dates) * len(runner.target_times())
+        update_idx = 0
+        for date in dates:
+            date_int = int(date)
+            for ti in runner.target_times():
+                update_idx += 1
+                section_start = time.perf_counter()
+                runner.combo.Combine(date_int, int(ti))
+                combine_time += time.perf_counter() - section_start
+                section_start = time.perf_counter()
+                alpha = runner.alpha_convert(date_int)
+                alpha_time += time.perf_counter() - section_start
+                if runner.live_mode:
+                    section_start = time.perf_counter()
+                    meta = runner.live_step(date_int, alpha, int(ti))
+                    live_output_time += time.perf_counter() - section_start
+                    print_live_metrics(meta)
+                if verbose:
+                    print_progress(
+                        "Stage:runComboLive" if runner.live_mode else "Stage:runCombo",
+                        update_idx,
+                        total_updates,
+                        loop_start,
+                        f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, output {live_output_time:.2f}",
+                        final=update_idx == total_updates,
+                    )
 
         if not runner.live_mode:
-            runner.backtest_finalize()
             runner.alpha_analysis()
     finally:
         monitor.close()

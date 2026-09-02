@@ -18,6 +18,7 @@ from comb2_simbase.cache_layout import (
     daily_label_path,
     stock_mask_path,
 )
+from comb2_simbase.snap_labels import load_snap_vwap_labels, snap_vwap_price_name
 
 warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
 
@@ -65,8 +66,9 @@ class ConfigEvalArtifacts:
     report_dir: Path
     alpha_path: Path
     plot_path: Path
-    label_path: Path
-    label_5d_path: Path
+    label_path: Path | None
+    label_5d_path: Path | None
+    snap_ti: int | None
     label_is_table: bool
     label_5d_is_table: bool
     label_df_type: object
@@ -153,8 +155,21 @@ def run_config_evaluation(
     if alpha.empty:
         raise ValueError(f"alpha has no rows after date filtering: {artifacts.alpha_path}")
 
-    label_1d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
-    label_5d = _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
+    snap_labels = None
+    if artifacts.snap_ti is not None and (artifacts.label_path is None or artifacts.label_5d_path is None):
+        start_ds = int(normalize_date_index(alpha).index.min().strftime("%Y%m%d"))
+        end_ds = int(normalize_date_index(alpha).index.max().strftime("%Y%m%d"))
+        snap_labels = load_snap_vwap_labels(artifacts.cache_path, artifacts.snap_ti, start_ds, end_ds)
+    label_1d = (
+        snap_labels[1]
+        if artifacts.label_path is None
+        else _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
+    )
+    label_5d = (
+        snap_labels[5]
+        if artifacts.label_5d_path is None
+        else _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
+    )
     evaluation_mask = load_evaluation_mask(alpha, artifacts.cache_path)
     alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
     daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
@@ -553,8 +568,12 @@ def _resolve_artifacts(
     alpha_path = _find_alpha_path(output_root)
     resolved_report_dir = Path(report_dir).expanduser().resolve() if report_dir else output_root / "eval_report"
     resolved_plot_path = Path(plot_path).expanduser().resolve() if plot_path else resolved_report_dir / "signal_analysis.png"
-    resolved_label_path = Path(label_path).expanduser().resolve() if label_path else _default_label_path(config)
-    resolved_label_5d_path = Path(label_5d_path).expanduser().resolve() if label_5d_path else _default_label_5d_path(config)
+    snap_ti = config["combo"]["runtime"].get("snap_ti")
+    resolved_label_path = Path(label_path).expanduser().resolve() if label_path else None
+    resolved_label_5d_path = Path(label_5d_path).expanduser().resolve() if label_5d_path else None
+    if snap_ti is None:
+        resolved_label_path = resolved_label_path or _default_label_path(config)
+        resolved_label_5d_path = resolved_label_5d_path or _default_label_5d_path(config)
     resolved_booksize = float(booksize if booksize is not None else config["backtest"].get("cash", 1e7))
     resolved_tradecost_ratio = float(
         tradecost_ratio
@@ -570,6 +589,7 @@ def _resolve_artifacts(
         plot_path=resolved_plot_path,
         label_path=resolved_label_path,
         label_5d_path=resolved_label_5d_path,
+        snap_ti=int(snap_ti) if snap_ti is not None else None,
         label_is_table=label_is_table,
         label_5d_is_table=label_5d_is_table,
         label_df_type=label_df_type,
@@ -697,12 +717,11 @@ def _read_label_for_signal(
     signal: pd.DataFrame,
     artifacts: ConfigEvalArtifacts,
     *,
-    path: str | Path | None = None,
-    is_table: bool | None = None,
+    path: str | Path,
+    is_table: bool,
 ) -> pd.DataFrame:
-    label_path = Path(path) if path is not None else artifacts.label_path
-    read_as_table = artifacts.label_is_table if is_table is None else is_table
-    if read_as_table:
+    label_path = Path(path)
+    if is_table:
         return read_matrix(label_path)
     start_ds = normalize_date_index(signal).index.min().strftime("%Y%m%d")
     end_ds = normalize_date_index(signal).index.max().strftime("%Y%m%d")
@@ -748,13 +767,19 @@ def _write_outputs(
         "output_root": str(artifacts.output_root),
         "alpha_path": str(artifacts.alpha_path),
         "plot_path": str(artifacts.plot_path),
-        "label_path": str(artifacts.label_path),
-        "label_5d_path": str(artifacts.label_5d_path),
+        "label_path": _label_source(artifacts.label_path, artifacts.snap_ti, 1),
+        "label_5d_path": _label_source(artifacts.label_5d_path, artifacts.snap_ti, 5),
         "start": start,
         "end": end,
         "messages": messages,
     }
     (artifacts.report_dir / "report.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+
+
+def _label_source(path: Path | None, snap_ti: int | None, period: int) -> str:
+    if path is not None:
+        return str(path)
+    return f"dynamic:{snap_vwap_price_name(snap_ti)}:label{period}d"
 
 
 def config_eval_to_text(result: ConfigEvalResult) -> str:

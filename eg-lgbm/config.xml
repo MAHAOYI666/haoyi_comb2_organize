@@ -1,5 +1,5 @@
 <config>
-  <constants cache_path="data/Cache" output_root="output" />
+  <constants cache_path="data/Cache" output_root="output" freq="1d" />
   <strategy start_ds="20200101" end_ds="20200331" />
   <combo>
     <paths model_path="model.py" />

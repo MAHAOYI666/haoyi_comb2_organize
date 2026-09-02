@@ -33,8 +33,9 @@ class DataLoader:
     def get_preclose(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.pre_close")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
-    def get_vwap(self, start_ds, end_ds) -> pd.DataFrame:
-        return Memmaper2(str(self.ashare_cache_path / "1d_IntraVwap" / "IntraVwap.VwapBegin30")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+    def get_vwap(self, start_ds, end_ds, snap_ti=None) -> pd.DataFrame:
+        name = "IntraVwap.VwapBegin30" if snap_ti is None else f"IntraVwap.Vwap30.{int(snap_ti):06d}"
+        return Memmaper2(str(self.ashare_cache_path / "1d_IntraVwap" / name)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
     def get_open(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.open")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
@@ -42,8 +43,39 @@ class DataLoader:
     def get_close(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.close")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
+    def get_returns(self, start_ds, end_ds) -> pd.DataFrame:
+        return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.pct_chg")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_index_weight(self, start_ds, end_ds, ts_code="000905.SH") -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_IndexWeight" / f"IndexWeight.{ts_code}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_trade_universe(self, name, start_ds, end_ds) -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_TradeUniverse" / f"TradeUniverse.{name}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_stock_mask(self, name, start_ds, end_ds) -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_StockMask2" / f"StockMask2.{name}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_industry(self, name, start_ds, end_ds) -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_SwIndMask" / f"SwIndMask.{name}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_barra_style(self, name, start_ds, end_ds) -> pd.DataFrame:
+        filename = str(name).upper()
+        path = self.ashare_cache_path / "1d_BarraCNE5" / f"BarraCNE5.{filename}"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
     def get_market_cap(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(self.ashare_cache_path / "1d_DailyFdm" / "DailyFdm.mkt_cap")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_amount(self, start_ds, end_ds) -> pd.DataFrame:
+        return Memmaper2(str(self.ashare_cache_path / "1d_DailyKline" / "DailyKline.amount")).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+
+    def get_slippage(self, start_ds, end_ds) -> pd.DataFrame:
+        path = self.ashare_cache_path / "1d_DailySpread" / "DailySpread.spread_slippage_new"
+        return Memmaper2(str(path)).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
 
     def get_suspend(self, start_ds, end_ds) -> pd.DataFrame:
         return Memmaper2(str(stock_mask_path(self.cache_path, SUSPEND_MASK_NAME))).load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]

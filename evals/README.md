@@ -2,6 +2,8 @@
 
 `comb_eval` 是一个不依赖 PySim 外部服务的本地评估工具包，目标是把 `metric.md` 中的 evaluation 拆成可单独运行的模块。
 
+配置驱动的整体评估只接受 `constants.freq="1d"` 生成的日期索引 alpha。`5m`/`1m` 的 `(dates, times)` alpha 由 `runCombo` 直接生成 `intraday_ic.csv` 和 `ic_by_time.csv`，不进入这里的日频 PNL、分组回测和 label 评估流程。
+
 ## 已有模块
 
 - `pnl`: 汇总本地 pnl 文件，计算 `ret_pct`、`tvr_pct`、`ir`、`sharpe`、`dd_pct`、`win_pct`、`margin`、`fitness`、`lnum_ratio` 等，并支持外部提供的 `pnlzz500` benchmark。
@@ -39,7 +41,7 @@ python -m comb_eval.cli eval --config /path/to/config.xml
 <output_root>/alpha.parquet
 ```
 
-PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。
+PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。若 config 的 `runtime.snap_ti` 非空且未显式传入 label，评估会从对应 `IntraVwap.Vwap30.HHMMSS` 动态生成 1d/5d 标签。
 
 默认输出到 `<output_root>/eval_report/`：
 
