@@ -30,6 +30,7 @@ class Model(nn.Module):
         hidden_size: int,
         fc_size: int,
         trainii: torch.Tensor,
+        time_embedding_size: int | None,
         dropout: float = 0.5,
     ):
         super().__init__()
@@ -38,6 +39,11 @@ class Model(nn.Module):
         self.Q = nn.Linear(input_size, hidden_size)
         self.K = nn.Linear(input_size, hidden_size)
         self.hdfc = nn.Linear(input_size * 6, hidden_size)
+        self.time_embedding = (
+            nn.Embedding(time_embedding_size, hidden_size)
+            if time_embedding_size is not None
+            else None
+        )
         self.mlpfc1 = nn.Linear(hidden_size, fc_size, bias=True)
         self.mlpfc2 = nn.Linear(fc_size, fc_size, bias=True)
         self.mlpfc3 = nn.Linear(fc_size, 1, bias=True)
@@ -58,7 +64,7 @@ class Model(nn.Module):
         cov = (ts.view(1, steps, 1, 1) * (x - x.mean(dim=1, keepdim=True))).sum(dim=1)
         return cov / ts_var
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, bar_id: torch.Tensor | None = None) -> torch.Tensor:
         x = x / 4.0
         x_last = x[:, -1]
         x_tsmean = x.mean(dim=1)
@@ -68,6 +74,9 @@ class Model(nn.Module):
         x = torch.cat([x_last, x_tsmean, x_last - x_tsmean, x_tsdelta, x_tsslope, x_attn], dim=-1)
 
         out = self.hdfc(x)
+        if self.time_embedding is not None:
+            assert bar_id is not None
+            out = out + self.time_embedding(bar_id).unsqueeze(1)
         out = self.dropout(out)
         out = F.leaky_relu(out, negative_slope=0.1)
         out = self.mlpfc1(out)
@@ -98,9 +107,11 @@ TrainLoss = ICLoss
 class ResearchModel:
     def __init__(self, config: dict[str, Any]):
         self.config = config
+        self.freq = str(config.get("freq", "1d"))
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 8))
         self.num_features = int(config.get("num_features_by_freq", {}).get("1d", config.get("num_features", 1)))
+        self.target_times = tuple(int(value) for value in config.get("target_times", ()))
         self.device = torch.device(config.get("device", "cpu"))
         adaptive_hidden_size = max(64, self.num_features * 8)
         self.hidden_size = int(config.get("hidden_size", adaptive_hidden_size))
@@ -141,6 +152,7 @@ class ResearchModel:
             hidden_size=self.hidden_size,
             fc_size=self.fc_size,
             trainii=trainii,
+            time_embedding_size=None if self.freq == "1d" else len(self.target_times) + 1,
             dropout=self.dropout,
         )
         return model.to(self.device)
@@ -148,8 +160,17 @@ class ResearchModel:
     def _next_batch(self, iterator):
         return next(iterator)
 
-    def _batch_to_device(self, x: FeatureGroups, y: torch.Tensor, w: torch.Tensor):
+    def _batch_to_device(self, *batch):
+        if self.freq == "1d":
+            x, y, w = batch
+            bar_id = None
+        else:
+            ti, x, y, w = batch
+            bar_id = torch.as_tensor(
+                [self.target_times.index(int(value)) + 1 for value in ti], dtype=torch.long
+            ).to(self.device, non_blocking=True)
         return (
+            bar_id,
             x.to(self.device, dtype=torch.float32, non_blocking=True),
             y.to(self.device, dtype=torch.float32, non_blocking=True),
             w.to(self.device, dtype=torch.float32, non_blocking=True),
@@ -158,8 +179,8 @@ class ResearchModel:
     def _zero_grad(self, optimizer):
         optimizer.zero_grad(set_to_none=True)
 
-    def _forward_batch(self, x: FeatureGroups) -> torch.Tensor:
-        return self.model(x["1d"])
+    def _forward_batch(self, x: FeatureGroups, bar_id: torch.Tensor | None) -> torch.Tensor:
+        return self.model(x["1d"], bar_id)
 
     def _compute_loss(self, pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         return self.loss_fn(pred, y, w)
@@ -204,12 +225,17 @@ class ResearchModel:
             iterator = iter(dataloader)
             while True:
                 try:
-                    _, x, y, w = self._next_batch(iterator)
+                    batch = self._next_batch(iterator)
                 except StopIteration:
                     break
-                x, y, w = self._batch_to_device(x, y, w)
+                if self.freq == "1d":
+                    _, x, y, w = batch
+                    bar_id, x, y, w = self._batch_to_device(x, y, w)
+                else:
+                    _, _, ti, x, y, w = batch
+                    bar_id, x, y, w = self._batch_to_device(ti, x, y, w)
                 self._zero_grad(optimizer)
-                pred = self._forward_batch(x)
+                pred = self._forward_batch(x, bar_id)
                 loss = self._compute_loss(pred, y, w)
                 self._backward_loss(loss)
                 self._clip_grad()
@@ -236,7 +262,9 @@ class ResearchModel:
         return self
 
     @torch.no_grad()
-    def predict(self, x_window: FeatureGroups) -> torch.Tensor:
+    def predict(
+        self, x_window: FeatureGroups, *, di: int | None = None, ti: int | None = None
+    ) -> torch.Tensor:
         if self.model is None:
             raise ValueError("model is not fitted")
         x_1d = x_window["1d"]
@@ -244,7 +272,12 @@ class ResearchModel:
             raise ValueError(f"expected 3D 1d feature tensor, got shape={tuple(x_1d.shape)}")
         self.model.eval()
         x = x_1d.unsqueeze(0).to(self.device, dtype=torch.float32)
-        pred = self.model(x).squeeze(0)
+        if self.freq == "1d":
+            bar_id = None
+        else:
+            assert di is not None and ti is not None
+            bar_id = torch.tensor([self.target_times.index(int(ti)) + 1], device=self.device)
+        pred = self.model(x, bar_id).squeeze(0)
         return pred.detach().cpu().to(dtype=self.dtype)
 
     def save(self, path_or_buffer):
@@ -273,6 +306,7 @@ CONFIG_TEMPLATE = '''
   <constants
     cache_path="data/Cache"
     output_root="output"
+    freq="1d"
   />
 
   <strategy
@@ -280,27 +314,38 @@ CONFIG_TEMPLATE = '''
     end_ds="20200101"
   >
     <optimizer
+      type="opt1"
       lambda0="0.5"
       shrinkage="0.5"
       ret_days="60"
       ret_delay="1"
       ret_method="2"
       benchmark_delay="1"
+      target_size="100000000.0"
       maxtvr="0.4"
       max_weight="0.0075"
-      min_participation_ratio="0.21"
+      maxtrd="0.0"
+      maxpos="0.0"
+      liquidity_delay="1"
+      lambda_slp="0.0"
+      slippage_delay="1"
+      min_participation_ratio="0.07"
+      parti_penalty="0.0"
       trim_threshold="0.00001"
       min_valid_instruments="200"
       min_return_obs="20"
       soft_univ_penalty="0.00025"
       soft_risk_penalty="0.00004"
+      soft_group_penalty="0.0002"
       num_mosek_threads="1"
       max_time="30.0"
       post_trim_renorm="false"
-      univ_list="ZZ500:0.18:0.70,1"
-      soft_univ_list="ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1"
-      risk_list="returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
-      soft_risk_list="returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+      univ_list="ZZ500:0.18:0.70,1|AshareST:0.00:0.00,1|AshareSH:0.00:0.60,1|AshareSZ:0.00:0.60,1|NONETOP3000:0.00:0.17,1|AshareCYB:0.10:0.30,1"
+      soft_univ_list="ZZ1800:0.74:0.85:0.70,1|ZZ1800:0.79:0.85:0.45,1|ZZ1800:0.83:0.89:0.25,1|ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1|AshareSH:0.00:0.55:0.50,1|AshareCYB:0.10:0.25:1.00,1|AshareSZ:0.00:0.55:0.50,1|HS300:0.10:0.30:1.00,1|NONETOP3000:0.00:0.15:1.00,1"
+      risk_list="cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
+      soft_risk_list="cap:-0.02:0.07:2.0,1,4|returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+      group_list="WindIndustry.sw1:-0.065:0.065,1"
+      soft_group_list="WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
     />
   </strategy>
 
@@ -318,6 +363,7 @@ CONFIG_TEMPLATE = '''
 
     <runtime
       snaptime="mlp_minimal"
+      snap_ti=""
       livetrading="false"
       trainDelay="0"
       retDays="1"
@@ -352,8 +398,7 @@ CONFIG_TEMPLATE = '''
       <!-- Factor paths can be absolute or relative to this config.xml. -->
       <item name="factor.example_factor" path="example_factor" role="factor" display_name="example_factor" />
 
-      <!-- Example label resolves under constants.cache_path:
-           data/Cache/AshareCache/1d_DailyLabel/DailyLabel.vwap30_label1d -->
+      <!-- Daily labels resolve under constants.cache_path/AshareCache/1d_DailyLabel. -->
       <item name="label.example_label_1d" path="vwap30_label1d" role="label" />
     </data>
 

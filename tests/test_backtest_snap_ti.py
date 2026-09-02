@@ -229,12 +229,14 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
     second = backtest.step(dates[1], alpha.loc[dates[1]])
 
     assert first["holdings"].gt(0).any()
-    assert node.last_hold is not None
-    previous, has_previous = backtest.strategy._actual_previous(node.last_hold)
-    assert has_previous is True
+    target = second["target_weight"].reindex(backtest.strategy.columns).to_numpy(dtype=float)
+    second_orders = second["orders"].reindex(backtest.strategy.columns)
+    previous_amount = target * float(node.target_stock_amount)
+    previous_amount -= second_orders["buy_amount"].to_numpy(dtype=float)
+    previous_amount += second_orders["sell_amount"].to_numpy(dtype=float)
+    previous = previous_amount / previous_amount.sum()
     assert previous.sum() == pytest.approx(1.0)
 
-    target = second["target_weight"].reindex(backtest.strategy.columns).to_numpy(dtype=float)
     trim_allowance = max(0.0, 1.0 - float(target.sum()))
     assert np.abs(target - previous).sum() <= (
         optimizer["maxtvr"] + trim_allowance + 1.0e-6
@@ -375,11 +377,20 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
         label="univ_list",
     )
     backtest.dataloader.date = date
-    with pytest.warns(RuntimeWarning, match="keeping previous holdings"):
-        fallback = backtest.strategy.generate_positions(signals, node.last_hold)
+    current_amount = (node.holdings * backtest.vwap_data.loc[date]).fillna(0.0)
+    locked_amount = (node.locked_holdings * backtest.vwap_data.loc[date]).fillna(0.0)
+    sellable_amount = (current_amount - locked_amount).clip(lower=0.0)
+    with pytest.warns(RuntimeWarning, match="returning zero orders"):
+        fallback = backtest.strategy.generate_orders(
+            signals,
+            sellable_amount,
+            locked_amount,
+            node.target_stock_amount,
+            node.executed_turnover_today,
+        )
     np.testing.assert_allclose(
-        fallback.reindex(backtest.strategy.columns).to_numpy(dtype=float),
-        previous,
+        fallback[["buy_amount", "sell_amount"]].to_numpy(dtype=float),
+        0.0,
     )
     assert fallback.attrs["solver_fallback"] is True
     assert fallback.attrs["solver_status"] != "Optimal"
@@ -389,7 +400,7 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
         backtest.preclose_data.loc[dates[2]] / backtest.close_data.loc[dates[1]]
     ).fillna(1.0)
     expected_holdings = np.floor(holdings_before_fallback / adjustment)
-    with pytest.warns(RuntimeWarning, match="keeping previous holdings"):
+    with pytest.warns(RuntimeWarning, match="returning zero orders"):
         fallback_day = backtest.step(dates[2], alpha.loc[dates[2]])
     pd.testing.assert_series_equal(
         fallback_day["holdings"], expected_holdings, check_names=False
@@ -397,6 +408,121 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
     assert fallback_day["trade_cost"] == 0.0
     assert fallback_day["tvr"] == 0.0
     assert fallback_day["target_weight"].attrs["solver_fallback"] is True
+
+
+def test_real_opt2_enforces_t1_and_daily_turnover(tmp_path: Path):
+    cache_value = os.environ.get("COMB2_TEST_CACHE_PATH")
+    alpha_value = os.environ.get("COMB2_TEST_ALPHA_PATH")
+    license_value = os.environ.get("MOSEKLM_LICENSE_FILE")
+    if not cache_value or not alpha_value or not license_value:
+        pytest.skip(
+            "set COMB2_TEST_CACHE_PATH, COMB2_TEST_ALPHA_PATH, and "
+            "MOSEKLM_LICENSE_FILE for the real optimizer integration test"
+        )
+    cache_path = Path(cache_value)
+    alpha_path = Path(alpha_value)
+    license_path = Path(license_value)
+    if not cache_path.is_dir() or not alpha_path.is_file() or not license_path.is_file():
+        pytest.skip("real optimizer cache, alpha, or MOSEK license path is unavailable")
+    pytest.importorskip("mosek")
+
+    date, next_date, signal_date = 20200103, 20200106, 20200102
+    alpha = pd.read_parquet(alpha_path).loc[signal_date]
+    strategy_path = Path(default_strategy_module.__file__).resolve()
+    optimizer = dict(DEFAULT_OPTIMIZER_CONFIG)
+    optimizer["type"] = "opt2"
+    optimizer["post_trim_renorm"] = True
+    node = BacktestNode(
+        start_ds=date,
+        end_ds=next_date,
+        output_path=str(tmp_path / "opt2_backtest"),
+        strategy_path=str(strategy_path),
+        strategy_class="AlphaStrategy",
+        strategy_config={
+            "start_ds": date,
+            "end_ds": next_date,
+            "path": str(strategy_path),
+            "optimizer": optimizer,
+        },
+        cash=10_000_000.0,
+        fee_rate=0.00075,
+        reserve_cash=0.95,
+        cache_path=str(cache_path),
+        execution_price="vwap30",
+        snap_ti=93000,
+    )
+    backtest = DailyBacktest(node)
+    first = backtest.step(date, alpha)
+
+    assert first["target_weight"].attrs["optimizer_type"] == "opt2"
+    assert first["target_weight"].attrs["solver_status"] == "SolutionStatus.Optimal"
+    assert node.target_stock_amount == pytest.approx(9_500_000.0)
+    pd.testing.assert_series_equal(
+        first["locked_holdings"], first["holdings"], check_names=False
+    )
+    assert (first["holdings"] % 100 == 0).all()
+    assert backtest.cash >= 0
+    assert node.executed_turnover_today > 0
+    assert node.executed_turnover_today <= first["orders"]["buy_amount"].sum()
+
+    columns = backtest.strategy.columns
+    assert columns is not None
+    signals = -alpha.reindex(columns).fillna(0.0)
+    prices = backtest.vwap_data.loc[date]
+    locked_amount = (node.locked_holdings * prices).fillna(0.0)
+    zero_amount = locked_amount * 0.0
+    backtest.dataloader.date = date
+    locked_orders = backtest.strategy.generate_orders(
+        signals,
+        zero_amount,
+        locked_amount,
+        node.target_stock_amount,
+        0.0,
+    )
+    assert locked_orders.attrs["solver_status"] == "SolutionStatus.Optimal"
+    assert locked_orders.loc[locked_amount > 0, "sell_amount"].sum() == pytest.approx(
+        0.0, abs=1.0e-5
+    )
+
+    planned_amount = first["target_weight"].reindex(columns).fillna(0.0)
+    planned_amount *= node.target_stock_amount
+    quota_orders = backtest.strategy.generate_orders(
+        signals,
+        planned_amount,
+        zero_amount,
+        node.target_stock_amount,
+        float(optimizer["maxtvr"]) * node.target_stock_amount,
+    )
+    assert quota_orders.attrs["solver_status"] == "SolutionStatus.Optimal"
+    assert quota_orders.to_numpy(dtype=float).sum() == pytest.approx(0.0, abs=1.0e-5)
+
+    backtest.strategy.hard_univ = _parse_limits(
+        "AshareSH:0.00:0.00,0",
+        soft=False,
+        label="univ_list",
+    )
+    sellable_amount = planned_amount * 0.5
+    forced_locked_amount = planned_amount * 0.5
+    forced_orders = backtest.strategy.generate_orders(
+        alpha.reindex(columns).fillna(0.0),
+        sellable_amount,
+        forced_locked_amount,
+        node.target_stock_amount,
+        0.0,
+    )
+    sh = np.asarray(backtest.strategy.static_universes["AshareSH"], dtype=bool)
+    assert forced_orders.attrs["solver_status"] == "SolutionStatus.Optimal"
+    assert forced_orders.attrs["forced_exit_count"] > 0
+    assert forced_orders["buy_amount"].to_numpy(dtype=float)[sh].sum() == pytest.approx(
+        0.0, abs=1.0e-5
+    )
+    assert forced_orders["sell_amount"].to_numpy(dtype=float)[sh].sum() == pytest.approx(
+        sellable_amount.to_numpy(dtype=float)[sh].sum(), abs=1.0e-4
+    )
+
+    assert node.locked_holdings.sum() > 0
+    backtest._advance_from_previous_close(next_date)
+    assert node.locked_holdings.sum() == 0.0
 
 
 def test_real_default_optimizer_forces_hard_zero_universe_exit(tmp_path: Path):
@@ -415,25 +541,25 @@ def test_real_default_optimizer_forces_hard_zero_universe_exit(tmp_path: Path):
         pytest.skip("real optimizer cache, alpha, or MOSEK license path is unavailable")
     pytest.importorskip("mosek")
 
-    start_ds, forced_exit_ds = 20230403, 20230428
-    alpha = pd.read_parquet(alpha_path)
+    date, signal_date = 20200103, 20200102
+    alpha = pd.read_parquet(alpha_path).loc[signal_date]
     strategy_path = Path(default_strategy_module.__file__).resolve()
     optimizer = dict(DEFAULT_OPTIMIZER_CONFIG)
     optimizer["lambda_slp"] = 0.058
     strategy_config = {
-        "start_ds": start_ds,
-        "end_ds": forced_exit_ds,
+        "start_ds": date,
+        "end_ds": date,
         "path": str(strategy_path),
         "optimizer": optimizer,
     }
     node = BacktestNode(
-        start_ds=start_ds,
-        end_ds=forced_exit_ds,
+        start_ds=date,
+        end_ds=date,
         output_path=str(tmp_path / "forced_exit_backtest"),
         strategy_path=str(strategy_path),
         strategy_class="AlphaStrategy",
         strategy_config=strategy_config,
-        cash=100_000_000.0,
+        cash=10_000_000.0,
         fee_rate=0.00075,
         reserve_cash=0.95,
         cache_path=str(cache_path),
@@ -441,22 +567,38 @@ def test_real_default_optimizer_forces_hard_zero_universe_exit(tmp_path: Path):
         snap_ti=93000,
     )
     backtest = DailyBacktest(node)
-    execution_dates = [
-        int(date)
-        for date in backtest.trade_date
-        if start_ds <= int(date) <= forced_exit_ds
-    ]
-    for execution_ds in execution_dates:
-        date_pos = backtest.trade_date.index(execution_ds)
-        signal_ds = int(backtest.trade_date[date_pos - 1])
-        result = backtest.step(execution_ds, alpha.loc[signal_ds])
+    first = backtest.step(date, alpha)
+    columns = backtest.strategy.columns
+    assert columns is not None
+    current_amount = first["target_weight"].reindex(columns).fillna(0.0)
+    current_amount *= node.target_stock_amount
+    zero_amount = current_amount * 0.0
 
-    target = result["target_weight"].reindex(backtest.strategy.columns).fillna(0.0)
-    st_membership = backtest.strategy._universe_membership(
-        "AshareST", forced_exit_ds, 1
+    backtest.strategy.hard_univ = _parse_limits(
+        "AshareCYB:0.00:0.00,0",
+        soft=False,
+        label="univ_list",
+    )
+    backtest.dataloader.date = date
+    orders = backtest.strategy.generate_orders(
+        alpha.reindex(columns).fillna(0.0),
+        current_amount,
+        zero_amount,
+        node.target_stock_amount,
+        0.0,
+    )
+    membership = backtest.strategy._universe_membership(
+        "AshareCYB", date, 0
     ).astype(bool)
-    assert result["target_weight"].attrs["forced_exit_count"] > 0
-    assert result["target_weight"].attrs["forced_exit_weight"] > 0
-    assert result["target_weight"].attrs["forced_exit_unpriced_count"] > 0
-    assert result["target_weight"].attrs["forced_exit_unpriced_weight"] > 0
-    assert target.to_numpy(dtype=float)[st_membership].sum() <= 1.0e-8
+    target = orders.attrs["target_weight"].reindex(columns).fillna(0.0)
+
+    assert orders.attrs["solver_status"] == "SolutionStatus.Optimal"
+    assert orders.attrs["forced_exit_count"] > 0
+    assert orders.attrs["forced_exit_weight"] > 0
+    assert orders["buy_amount"].to_numpy(dtype=float)[membership].sum() == pytest.approx(
+        0.0, abs=1.0e-5
+    )
+    assert orders["sell_amount"].to_numpy(dtype=float)[membership].sum() == pytest.approx(
+        current_amount.to_numpy(dtype=float)[membership].sum(), abs=1.0e-4
+    )
+    assert target.to_numpy(dtype=float)[membership].sum() <= 1.0e-8

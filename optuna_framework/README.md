@@ -4,6 +4,8 @@
 
 这个框架本身只负责“改 XML 参数并评估结果”。真正模型能不能跑，取决于 baseline XML 指向的 comb2 模型是否能被 `runCombo.py` 正常执行。
 
+当前 Optuna 目标函数读取日频回测的 `daily_pnl.csv` 和 `pnl_summary.csv`，因此 baseline 必须使用 `constants.freq="1d"`。`5m`/`1m` 模式不调用日频回测，不能直接用于这套搜索和筛选流程。
+
 所有命令请在有完整因子运行环境的远程实例、仓库根目录下执行。下面统一用 `python` 表示当前运行环境的 Python 入口。
 
 ## 搜索和验证策略
@@ -43,7 +45,7 @@ max_dd_threshold = baseline_tuning_period_dd_li * 1.3
 
 ## 模型接口依赖
 
-Optuna 框架不绑定某个具体模型文件。只要你的 baseline XML 能正常跑 `runCombo.py`，并且 `<search_space>` 中声明的参数存在于 baseline XML 的 `combo.model` 或 `combo.runtime` 中，就可以用这个框架调参。
+Optuna 框架不绑定某个具体模型文件。只要你的日频 baseline XML 能正常跑 `runCombo.py`，并且 `<search_space>` 中声明的参数存在于 baseline XML 的 `combo.model` 或 `combo.runtime` 中，就可以用这个框架调参。
 
 但是 `runCombo.py/comb2` 对模型文件有固定接口要求。baseline XML 中：
 
@@ -74,6 +76,8 @@ class ResearchModel:
 ```
 
 类名必须是 `ResearchModel`。框架会把 `<combo><model ... />` 里的参数整理成 `config` 字典传给 `ResearchModel(config)`。
+
+这里展示的是日频接口：训练样本为 `(idx, x, y, w)`，预测调用为 `predict(x_window)`。comb2 的日内接口另有 `(di, ti)`，但当前 Optuna 流程不消费其日内 IC 输出。
 
 注意：
 
@@ -120,7 +124,7 @@ optuna_runs/<study.name>/
 <baseline config_path="eg-torch/config_hybrid_tcn.xml" />
 ```
 
-这个 XML 必须能直接跑通 `runCombo.py`。所有 trial config 都从它复制并打补丁。
+这个 XML 必须显式设置 `constants.freq="1d"` 并能直接跑通 `runCombo.py`。所有 trial config 都从它复制并打补丁。
 
 ### 1.3 训练和评分窗口
 

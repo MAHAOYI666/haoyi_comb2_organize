@@ -5,24 +5,33 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Release
 
-- Version: `0.1.9`
-- Release date: `2026-07-10`
+- Version: `0.1.10`
+- Release date: `2026-09-02`
 - Package name: `combo2`
-- Protected wheel: `dist_protected/combo2-0.1.9-cp313-cp313-linux_x86_64.whl`
+- Protected wheel: `dist_protected/combo2-0.1.10-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.9`
+- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.10`
 
 Install the current wheel:
 
 ```bash
-python -m pip install dist_protected/combo2-0.1.9-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-0.1.10-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.1.10
+
 Changes:
 
+- Added `constants.freq` as the execution-mode switch with `1d` as the default. Daily execution keeps the original factor/label dataset, `predict(x_window)`, daily IC, and backtest contract; `5m`/`1m` execution requires exactly one same-frequency returns target and uses `(di, ti)` samples and predictions.
+- Added causal intraday window clipping, per-target-time alpha and IC outputs, and explicit model config fields for `freq`, `target_freq`, and `target_times`. Intraday execution does not invoke the daily backtest or `runEval` workflow.
+- Kept the processed data registry as a bounded 64-day per-item LRU and synchronized the starter, examples, researcher guide, root/package documentation, architecture guide, Optuna scope, and evaluation scope with the dual execution contracts.
+- Restored the original daily `retDays` and optional `snap_ti` label path while keeping snapshot labels, alpha IC, configured evaluation, and backtest execution prices on the same `IntraVwap.Vwap30.HHMMSS` source.
 - Replaced the default median long-only strategy with the MOSEK Fusion optimizer modeled after the reference holding optimizer. Alpha is split at raw zero and normalized separately by sign; the optimizer uses actual realized stock-book holdings for turnover and sell-only candidates.
+- Added `opt1` and `opt2` optimizer modes with amount-order output. `opt2` applies T+1 sellability, shared intraday turnover budgets, direct amount-based liquidity constraints, and zero-order observable fallback behavior when no optimal solution is available.
 - Added XML-configurable optimizer parameters with delay-1 defaults, ZZ500 weights and BarraCNE5 inputs under `constants.cache_path/AshareCache`, and pinned `Mosek==11.0.25` wheel dependency metadata. The repository includes the approved sanitized `mosek.lic`; protected wheels do not embed it, so deployments select an authorized copy through `MOSEKLM_LICENSE_FILE`.
 - Added real Cache and MOSEK coverage for one-day solving and two-day actual-holding turnover behavior, plus configuration and normalization contract tests.
 - Added CAP correlation to full configuration evaluation. It aligns alpha with the market cap available on the same trading day, cross-sectionally ranks market cap, and correlates it with median-centered, separately normalized long/short alpha weights.

@@ -836,13 +836,17 @@ def test_date_rolling_reloads_raw_lookback_after_processed_cache_hit() -> None:
 
     registry._ensure_range(("alpha.roll",), 20200102, 20200102)
     assert load_calls == [(20200101, 20200102)]
-    assert registry.processed_loaded["alpha.roll"].tolist() == [False, True, False]
-    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.0, 20.0]))
+    assert tuple(registry.processed_cache["alpha.roll"]) == (1,)
+    assert torch.equal(
+        registry.get_data("alpha.roll", 20200102, 20200102)[0],
+        torch.tensor([2.0, 20.0]),
+    )
 
     registry._ensure_range(("alpha.roll",), 20200103, 20200103)
     assert load_calls == [(20200101, 20200102), (20200102, 20200103)]
-    assert torch.equal(registry.get_data("alpha.roll")[1], torch.tensor([2.0, 20.0]))
-    assert torch.equal(registry.get_data("alpha.roll")[2], torch.tensor([4.0, 40.0]))
+    loaded = registry.get_data("alpha.roll", 20200102, 20200103)
+    assert torch.equal(loaded[0], torch.tensor([2.0, 20.0]))
+    assert torch.equal(loaded[1], torch.tensor([4.0, 40.0]))
 
 
 def test_op_utils_axis_aware_transforms() -> None:
@@ -1152,8 +1156,7 @@ def test_data_registry_builtin_alpha_parquet_loads_date_and_reindexes_codes(tmp_
         ]
     )
 
-    registry._ensure_range(("alpha.base",), 20200102, 20200102)
-    loaded = registry.get_data("alpha.base")[registry.universe.date2idx(20200102)]
+    loaded = registry.get_data("alpha.base", 20200102, 20200102)[0]
 
     assert loaded.dtype == torch.float32
     assert torch.equal(loaded, torch.tensor([3.0, 4.0, 0.0]))
@@ -1190,8 +1193,7 @@ def test_data_registry_builtin_alpha_parquet_supports_neut_op(tmp_path) -> None:
         ]
     )
 
-    registry._ensure_range(("alpha.base",), 20200102, 20200102)
-    loaded = registry.get_data("alpha.base")[registry.universe.date2idx(20200102)]
+    loaded = registry.get_data("alpha.base", 20200102, 20200102)[0]
 
     assert loaded.dtype == torch.float32
     assert _finite_abs_max(loaded) < 1e-4
@@ -1358,7 +1360,7 @@ def test_data_registry_returns_load_timing_stats() -> None:
     assert stats.total_time >= stats.raw_time
 
 
-def test_data_registry_get_data_returns_processed_fixed_matrix() -> None:
+def test_data_registry_get_data_returns_requested_processed_matrix() -> None:
     values = torch.tensor(
         [
             [1.0, 2.0, 3.0],
@@ -1379,15 +1381,13 @@ def test_data_registry_get_data_returns_processed_fixed_matrix() -> None:
         ]
     )
 
-    registry._ensure_range(("alpha.raw",), 20200102, 20200106)
-    data = registry.get_data("alpha.raw")
+    data = registry.get_data("alpha.raw", 20200102, 20200106)
     registry._ensure_range(("alpha.raw",), 20200102, 20200106)
 
-    assert data.shape == (4, 3)
-    assert torch.isnan(data[0]).all()
-    assert torch.equal(data[1], torch.tensor([1.5, 3.0, 4.5]))
-    assert torch.equal(data[2], torch.tensor([2.5, 5.0, 7.5]))
-    assert torch.equal(data[3], torch.tensor([3.5, 7.0, 10.5]))
+    assert data.shape == (3, 3)
+    assert torch.equal(data[0], torch.tensor([1.5, 3.0, 4.5]))
+    assert torch.equal(data[1], torch.tensor([2.5, 5.0, 7.5]))
+    assert torch.equal(data[2], torch.tensor([3.5, 7.0, 10.5]))
     assert calls == [("alpha.raw", 20200101, 20200106)]
 
 
@@ -1412,13 +1412,11 @@ def test_data_registry_rolling_mean_uses_history_window() -> None:
         ]
     )
 
-    registry._ensure_range(("alpha.mean",), 20200102, 20200106)
-    data = registry.get_data("alpha.mean")
+    data = registry.get_data("alpha.mean", 20200102, 20200106)
 
-    assert torch.isnan(data[0]).all()
-    assert torch.equal(data[1], torch.tensor([2.0, 4.0, 6.0]))
-    assert torch.equal(data[2], torch.tensor([4.0, 8.0, 12.0]))
-    assert torch.equal(data[3], torch.tensor([6.0, 12.0, 18.0]))
+    assert torch.equal(data[0], torch.tensor([2.0, 4.0, 6.0]))
+    assert torch.equal(data[1], torch.tensor([4.0, 8.0, 12.0]))
+    assert torch.equal(data[2], torch.tensor([6.0, 12.0, 18.0]))
 
 
 def test_data_registry_rolling_std_uses_history_window() -> None:
@@ -1442,13 +1440,11 @@ def test_data_registry_rolling_std_uses_history_window() -> None:
         ]
     )
 
-    registry._ensure_range(("alpha.std",), 20200102, 20200106)
-    data = registry.get_data("alpha.std")
+    data = registry.get_data("alpha.std", 20200102, 20200106)
 
-    assert torch.isnan(data[0]).all()
+    assert torch.equal(data[0], torch.tensor([1.0, 2.0, 3.0]))
     assert torch.equal(data[1], torch.tensor([1.0, 2.0, 3.0]))
     assert torch.equal(data[2], torch.tensor([1.0, 2.0, 3.0]))
-    assert torch.equal(data[3], torch.tensor([1.0, 2.0, 3.0]))
 
 
 def test_data_registry_axis_aware_ops_use_requested_axis() -> None:
@@ -1618,10 +1614,9 @@ def test_data_registry_builtin_factorsim_2d_direct_load(tmp_path) -> None:
         config_path=None,
     )
 
-    registry._ensure_range(("alpha.base",), 20200102, 20200106)
-    loaded = registry.get_data("alpha.base")
-    assert torch.equal(loaded[1], torch.tensor([3.0, 4.0, 5.0]))
-    assert torch.equal(loaded[3], torch.tensor([9.0, 10.0, 11.0]))
+    loaded = registry.get_data("alpha.base", 20200102, 20200106)
+    assert torch.equal(loaded[0], torch.tensor([3.0, 4.0, 5.0]))
+    assert torch.equal(loaded[2], torch.tensor([9.0, 10.0, 11.0]))
 
 
 def test_data_registry_builtin_factorsim_3d_preserves_cube_by_freq(tmp_path) -> None:

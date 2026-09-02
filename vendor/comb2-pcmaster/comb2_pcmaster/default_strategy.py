@@ -101,6 +101,7 @@ class AlphaStrategy(StrategyBase):
         super().__init__(strategy_config, dataloader)
         assert "optimizer" in strategy_config
         self.optimizer = dict(strategy_config["optimizer"])
+        assert self.optimizer["type"] in {"opt1", "opt2"}
         self.hard_univ = _parse_limits(
             self.optimizer["univ_list"], soft=False, label="univ_list"
         )
@@ -321,11 +322,13 @@ class AlphaStrategy(StrategyBase):
             raise ValueError(f"{label}: date {date} lacks delay={delay} history")
         return frame.iloc[row_pos].to_numpy(dtype=np.float64)
 
-    def _actual_previous(self, last_hold: pd.Series | None) -> tuple[np.ndarray, bool]:
+    def _actual_previous(self, current_amount: pd.Series | None) -> tuple[np.ndarray, bool]:
         assert self.columns is not None
-        if last_hold is None:
+        if current_amount is None:
             return np.zeros(len(self.columns), dtype=np.float64), False
-        values = pd.to_numeric(last_hold.reindex(self.columns), errors="coerce").to_numpy(dtype=np.float64)
+        values = pd.to_numeric(
+            current_amount.reindex(self.columns), errors="coerce"
+        ).to_numpy(dtype=np.float64)
         values = np.where(np.isfinite(values) & (values > 0), values, 0.0)
         total = float(values.sum())
         if total <= 0:
@@ -481,17 +484,46 @@ class AlphaStrategy(StrategyBase):
             objective = Expr.sub(objective, Expr.mul(penalty, Expr.add(lower, upper)))
         return objective
 
-    def generate_positions(self, signals, last_hold):
+    def generate_orders(
+        self,
+        signals,
+        sellable_amount,
+        locked_amount,
+        target_stock_amount,
+        executed_turnover_today,
+    ):
         from mosek.fusion import Domain, Expr, Model, ObjectiveSense, SolutionStatus
 
         if self.columns is None:
             self._bind_columns(signals.index)
         assert self.columns is not None
+        optimizer_type = self.optimizer["type"]
+        target_stock_amount = float(target_stock_amount)
+        executed_turnover_today = float(executed_turnover_today)
+        assert np.isfinite(target_stock_amount) and target_stock_amount > 0
+        assert np.isfinite(executed_turnover_today) and executed_turnover_today >= 0
+        sellable_values = pd.to_numeric(
+            sellable_amount.reindex(self.columns), errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        locked_values = pd.to_numeric(
+            locked_amount.reindex(self.columns), errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        assert np.isfinite(sellable_values).all() and (sellable_values >= 0).all()
+        assert np.isfinite(locked_values).all() and (locked_values >= 0).all()
+        current_values = sellable_values + locked_values
+        current_total = float(current_values.sum())
+        if optimizer_type == "opt1":
+            previous, has_previous = self._actual_previous(
+                pd.Series(current_values, index=self.columns)
+            )
+        else:
+            previous = current_values / target_stock_amount
+            has_previous = current_total > 0
+        locked_weight = locked_values / target_stock_amount
         date = int(self.dataloader.date)
         signal_values = pd.to_numeric(signals.reindex(self.columns), errors="coerce").to_numpy(dtype=np.float64)
         alpha = _normalize_alpha(signal_values, float(self.optimizer["trim_threshold"]))
         benchmark = self._benchmark(date)
-        previous, has_previous = self._actual_previous(last_hold)
         hard_univ_rows = [
             (
                 limit_spec,
@@ -506,6 +538,12 @@ class AlphaStrategy(StrategyBase):
             if limit_spec.hi == 0:
                 forced_exit |= (previous > 0) & (membership > 0)
         forced_exit_weight = float(previous[forced_exit].sum())
+        if optimizer_type == "opt2":
+            forced_turnover_weight = float(
+                sellable_values[forced_exit].sum() / target_stock_amount
+            )
+        else:
+            forced_turnover_weight = forced_exit_weight
 
         liquidity_enabled = (
             float(self.optimizer["maxtrd"]) > 0
@@ -582,7 +620,7 @@ class AlphaStrategy(StrategyBase):
         if lambda_slp > 0:
             slippage_excluded_candidates = int((buy_candidate & ~slippage_valid).sum())
             buy_candidate &= slippage_valid
-        held = previous > 0
+        held = current_values > 0
         candidate_idx = np.flatnonzero(buy_candidate | held)
         if len(candidate_idx) < int(self.optimizer["min_valid_instruments"]):
             raise ValueError(
@@ -599,7 +637,8 @@ class AlphaStrategy(StrategyBase):
         target_size = float(self.optimizer["target_size"])
         maxpos = float(self.optimizer["maxpos"])
         if maxpos > 0:
-            capacity_upper = maxpos * liquidity[candidate_idx] / target_size
+            capacity_scale = target_size if optimizer_type == "opt1" else target_stock_amount
+            capacity_upper = maxpos * liquidity[candidate_idx] / capacity_scale
             capacity_upper = np.where(
                 np.isfinite(capacity_upper) & (capacity_upper >= 0),
                 capacity_upper,
@@ -611,11 +650,15 @@ class AlphaStrategy(StrategyBase):
         if maxpos > 0:
             upper = np.maximum(upper, local_previous)
         local_forced_exit = forced_exit[candidate_idx]
-        upper[local_forced_exit] = 0.0
+        if optimizer_type == "opt2":
+            upper[local_forced_exit] = locked_weight[candidate_idx][local_forced_exit]
+        else:
+            upper[local_forced_exit] = 0.0
 
         maxtrd = float(self.optimizer["maxtrd"])
         if maxtrd > 0:
-            trade_upper = maxtrd * liquidity[candidate_idx] / target_size
+            trade_scale = target_size if optimizer_type == "opt1" else target_stock_amount
+            trade_upper = maxtrd * liquidity[candidate_idx] / trade_scale
             trade_upper = np.where(
                 np.isfinite(trade_upper) & (trade_upper >= 0), trade_upper, 0.0
             )
@@ -623,8 +666,13 @@ class AlphaStrategy(StrategyBase):
             trade_upper = np.full(len(candidate_idx), np.inf, dtype=np.float64)
         if lambda_slp > 0:
             trade_upper[~slippage_valid[candidate_idx]] = 0.0
+        forced_trade_weight = (
+            sellable_values[candidate_idx] / target_stock_amount
+            if optimizer_type == "opt2"
+            else local_previous
+        )
         trade_upper[local_forced_exit] = np.maximum(
-            trade_upper[local_forced_exit], local_previous[local_forced_exit]
+            trade_upper[local_forced_exit], forced_trade_weight[local_forced_exit]
         )
         slippage_rate = np.divide(
             slippage[candidate_idx],
@@ -675,9 +723,25 @@ class AlphaStrategy(StrategyBase):
             if float(self.optimizer["max_time"]) > 0:
                 model.setSolverParam("optimizerMaxTime", float(self.optimizer["max_time"]))
 
-            weights = model.variable("weights", len(candidate_idx), Domain.greaterThan(0.0))
+            if optimizer_type == "opt1":
+                position = model.variable(
+                    "weights", len(candidate_idx), Domain.greaterThan(0.0)
+                )
+                weights = position
+                current_decision = local_previous
+                normalized_trade_scale = 1.0
+            else:
+                local_locked_amount = locked_values[candidate_idx]
+                position = model.variable(
+                    "amounts",
+                    len(candidate_idx),
+                    Domain.greaterThan(local_locked_amount.tolist()),
+                )
+                weights = Expr.mul(1.0 / target_stock_amount, position)
+                current_decision = current_values[candidate_idx]
+                normalized_trade_scale = 1.0 / target_stock_amount
             model.constraint("position_upper", weights, Domain.lessThan(upper.tolist()))
-            model.constraint("booksize", Expr.sum(weights), Domain.equalsTo(1.0))
+            model.constraint("stock_budget", Expr.sum(weights), Domain.equalsTo(1.0))
             objective = Expr.dot(local_alpha.tolist(), weights)
 
             absolute_trade = model.variable(
@@ -685,26 +749,32 @@ class AlphaStrategy(StrategyBase):
             )
             model.constraint(
                 "trade_positive",
-                Expr.sub(Expr.sub(weights, local_previous.tolist()), absolute_trade),
+                Expr.sub(Expr.sub(position, current_decision.tolist()), absolute_trade),
                 Domain.lessThan(0.0),
             )
             model.constraint(
                 "trade_negative",
-                Expr.sub(Expr.sub(local_previous.tolist(), weights), absolute_trade),
+                Expr.sub(Expr.sub(current_decision.tolist(), position), absolute_trade),
                 Domain.lessThan(0.0),
             )
+            normalized_trade = Expr.mul(normalized_trade_scale, absolute_trade)
             if maxtrd > 0:
                 model.constraint(
                     "maxtrd",
-                    absolute_trade,
+                    normalized_trade,
                     Domain.lessThan(trade_upper.tolist()),
                 )
-            if has_previous:
+            if has_previous or executed_turnover_today > 0:
+                remaining_turnover = max(
+                    float(self.optimizer["maxtvr"])
+                    - executed_turnover_today / target_stock_amount,
+                    0.0,
+                )
                 model.constraint(
                     "maxtvr",
-                    Expr.sum(absolute_trade),
+                    Expr.sum(normalized_trade),
                     Domain.lessThan(
-                        float(self.optimizer["maxtvr"]) + forced_exit_weight
+                        remaining_turnover + forced_turnover_weight
                     ),
                 )
             if lambda_slp > 0:
@@ -712,15 +782,20 @@ class AlphaStrategy(StrategyBase):
                     objective,
                     Expr.mul(
                         lambda_slp,
-                        Expr.dot(slippage_rate.tolist(), absolute_trade),
+                        Expr.dot(slippage_rate.tolist(), normalized_trade),
                     ),
                 )
 
             for index, (limit_spec, membership) in enumerate(hard_univ_rows):
                 coefficient = membership[candidate_idx]
+                exposure_weights = weights
+                if optimizer_type == "opt2" and limit_spec.hi == 0:
+                    exposure_weights = Expr.sub(
+                        weights, locked_weight[candidate_idx].tolist()
+                    )
                 model.constraint(
                     f"univ_{index}_{_safe_name(limit_spec.name)}",
-                    Expr.dot(coefficient.tolist(), weights),
+                    Expr.dot(coefficient.tolist(), exposure_weights),
                     Domain.inRange(limit_spec.lo, limit_spec.hi),
                 )
 
@@ -850,13 +925,15 @@ class AlphaStrategy(StrategyBase):
             if solver_fallback:
                 warnings.warn(
                     f"{date}: MOSEK solution status is {solution_status}; "
-                    "keeping previous holdings",
+                    "returning zero orders",
                     RuntimeWarning,
                     stacklevel=2,
                 )
                 solution = local_previous.copy()
             else:
-                solution = np.asarray(weights.level(), dtype=np.float64)
+                solution = np.asarray(position.level(), dtype=np.float64)
+                if optimizer_type == "opt2":
+                    solution /= target_stock_amount
 
         if not np.isfinite(solution).all() or float(solution.min()) < -1.0e-7:
             raise RuntimeError(f"{date}: MOSEK returned invalid target weights")
@@ -864,29 +941,58 @@ class AlphaStrategy(StrategyBase):
         if not solver_fallback:
             trim_threshold = float(self.optimizer["trim_threshold"])
             if trim_threshold > 0:
-                solution[solution < trim_threshold] = 0.0
+                can_trim = locked_weight[candidate_idx] <= 0
+                solution[(solution < trim_threshold) & can_trim] = 0.0
             if bool(self.optimizer["post_trim_renorm"]):
-                total = float(solution.sum())
-                if total > 0:
-                    solution /= total
+                if optimizer_type == "opt1":
+                    total = float(solution.sum())
+                    if total > 0:
+                        solution /= total
+                else:
+                    local_locked_weight = locked_weight[candidate_idx]
+                    excess = np.maximum(solution - local_locked_weight, 0.0)
+                    excess_total = float(excess.sum())
+                    target_excess = max(1.0 - float(local_locked_weight.sum()), 0.0)
+                    if excess_total > 0:
+                        solution = local_locked_weight + excess * (
+                            target_excess / excess_total
+                        )
 
         result = np.zeros(len(self.columns), dtype=np.float64)
         result[candidate_idx] = solution
-        output = pd.Series(result, index=self.columns, name=date, dtype=float)
-        output.attrs["solve_seconds"] = solve_seconds
-        output.attrs["solver_status"] = str(solution_status)
-        output.attrs["solver_fallback"] = solver_fallback
-        output.attrs["slippage_valid_candidates"] = int(
+        target_weight = pd.Series(result, index=self.columns, name=date, dtype=float)
+        target_weight.attrs["optimizer_type"] = optimizer_type
+        target_weight.attrs["solve_seconds"] = solve_seconds
+        target_weight.attrs["solver_status"] = str(solution_status)
+        target_weight.attrs["solver_fallback"] = solver_fallback
+        target_weight.attrs["slippage_valid_candidates"] = int(
             slippage_valid[candidate_idx].sum()
         )
-        output.attrs["candidate_count"] = int(len(candidate_idx))
-        output.attrs["slippage_excluded_candidates"] = slippage_excluded_candidates
-        output.attrs["forced_exit_count"] = int(forced_exit.sum())
-        output.attrs["forced_exit_weight"] = forced_exit_weight
-        output.attrs["forced_exit_unpriced_count"] = int(
+        target_weight.attrs["candidate_count"] = int(len(candidate_idx))
+        target_weight.attrs["slippage_excluded_candidates"] = slippage_excluded_candidates
+        target_weight.attrs["forced_exit_count"] = int(forced_exit.sum())
+        target_weight.attrs["forced_exit_weight"] = forced_exit_weight
+        target_weight.attrs["forced_exit_sellable_amount"] = float(
+            sellable_values[forced_exit].sum()
+        )
+        target_weight.attrs["forced_exit_unpriced_count"] = int(
             (forced_exit & ~slippage_valid).sum()
         )
-        output.attrs["forced_exit_unpriced_weight"] = float(
+        target_weight.attrs["forced_exit_unpriced_weight"] = float(
             previous[forced_exit & ~slippage_valid].sum()
         )
-        return output
+        if solver_fallback:
+            delta_amount = np.zeros(len(self.columns), dtype=np.float64)
+        else:
+            delta_amount = target_weight.to_numpy(dtype=np.float64) * target_stock_amount
+            delta_amount -= current_values
+        orders = pd.DataFrame(
+            {
+                "buy_amount": np.maximum(delta_amount, 0.0),
+                "sell_amount": np.maximum(-delta_amount, 0.0),
+            },
+            index=self.columns,
+        )
+        orders.attrs.update(target_weight.attrs)
+        orders.attrs["target_weight"] = target_weight
+        return orders

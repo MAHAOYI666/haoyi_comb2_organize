@@ -57,8 +57,27 @@ def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
         "mode": "read_dump",
         "config_path": None,
         "ops": (),
-        "params": {},
+        "params": {"freq": "1d"},
     }
+
+
+def _builtin_target_item(freq: str) -> dict[str, Any]:
+    assert freq in {"5m", "1m"}
+    return {
+        "name": "returns.default",
+        "module": "builtin.factorsim",
+        "path": f"{freq}_IntvReturns/IntvReturns.c2c",
+        "role": "target",
+        "mode": "read_dump",
+        "config_path": None,
+        "ops": (),
+        "params": {"freq": freq},
+    }
+
+
+def _default_data_items(freq: str) -> tuple[dict[str, Any], ...]:
+    supervision = _builtin_label_item() if freq == "1d" else _builtin_target_item(freq)
+    return (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), supervision)
 
 
 DEFAULT_FACTOR_PATHS = (
@@ -74,6 +93,7 @@ DEFAULT_FACTOR_PATHS = (
 
 
 DEFAULT_OPTIMIZER_CONFIG = {
+    "type": "opt1",
     "lambda0": 0.5,
     "shrinkage": 0.5,
     "ret_days": 60,
@@ -154,6 +174,7 @@ DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
         "output_root": str(COMB2_ROOT / "output"),
+        "freq": "1d",
     },
     "strategy": {
         "start_ds": 20160111,
@@ -191,7 +212,7 @@ DEFAULT_CONFIG = {
         "model": {},
         "data": {
             "imports": (),
-            "items": (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), _builtin_label_item()),
+            "items": _default_data_items("1d"),
             "presets": (),
             "attrs": {},
         },
@@ -203,6 +224,7 @@ DEFAULT_CONFIG = {
             "data_items": (),
             "data_presets": (),
             "config_path": None,
+            "registry_cache_days": 64,
         },
     },
     "backtest": {
@@ -269,6 +291,7 @@ DATA_ATTR_DEFAULTS = {
         "compression",
         "data_start_ds",
         "data_offset",
+        "registry_cache_days",
     )
 }
 
@@ -367,7 +390,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
     path = attrs.pop("path", None)
     config_path = attrs.pop("config_path", None)
     mode = attrs.pop("mode", "read_dump")
-    role = attrs.pop("role", "aux")
+    role = attrs.pop("role", "data")
     module = attrs.pop("module", "builtin.factorsim")
     legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
     if legacy_keys:
@@ -385,9 +408,7 @@ def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
         supported = ", ".join(DATA_FREQ_ORDER)
         raise ValueError(f"<item name='{name}'> has unsupported freq={freq!r}; expected one of {supported}")
     if role == "label" and freq != "1d":
-        raise ValueError(f"<item name='{name}'> role='label' only supports freq='1d'")
-    if role == "label" and not path:
-        path = "vwap30_label1d"
+        raise ValueError(f"<item name='{name}'> role='label' requires freq='1d'")
     params = {key: _parse_scalar(value) for key, value in attrs.items()}
     params["freq"] = freq
     return {
@@ -475,6 +496,11 @@ def _resolve_data_item_path(
         return value
     if field == "path" and str(role).strip().lower() == "label":
         return str(daily_label_path(cache_path, str(value)).resolve())
+    if field == "path" and str(role).strip().lower() == "target":
+        cache_root = Path(cache_path)
+        if path.parts and path.parts[0] == "AshareCache":
+            path = Path(*path.parts[1:])
+        return str((cache_root / "AshareCache" / path).resolve())
     return str((base_dir / path).resolve())
 
 
@@ -559,7 +585,9 @@ def _apply_constant_paths(config: dict) -> dict:
     return updated
 
 
-def _replace_default_vwap_label(data_items: list[dict[str, Any]], cache_path: str, snap_ti: Any) -> list[dict[str, Any]]:
+def _replace_default_vwap_label(
+    data_items: list[dict[str, Any]], cache_path: str, snap_ti: Any
+) -> list[dict[str, Any]]:
     if snap_ti is None:
         return data_items
     default_path = str(daily_label_path(cache_path, "vwap30_label1d").resolve())
@@ -604,11 +632,12 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
         seen_paths=set(),
         presets=presets,
     )
-    data_items = _replace_default_vwap_label(
-        data_items,
-        resolved["constants"]["cache_path"],
-        resolved["combo"]["runtime"].get("snap_ti"),
-    )
+    if resolved["constants"]["freq"] == "1d":
+        data_items = _replace_default_vwap_label(
+            data_items,
+            resolved["constants"]["cache_path"],
+            resolved["combo"]["runtime"].get("snap_ti"),
+        )
     resolved["combo"]["data"] = {
         "attrs": dict(resolved["combo"].get("data", {}).get("attrs", {})),
         "items": tuple(data_items),
@@ -622,6 +651,11 @@ def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
 
 
 def _validate_config(config: dict) -> None:
+    freq = str(config["constants"]["freq"])
+    if freq not in SUPPORTED_DATA_FREQS:
+        supported = ", ".join(DATA_FREQ_ORDER)
+        raise ValueError(f"constants.freq must be one of {supported}")
+
     runtime = config["combo"]["runtime"]
     nonnegative = ("trainDelay",)
     positive = ("retDays", "tsDays", "max_train_days", "torch_threads", "torch_interop_threads")
@@ -642,11 +676,32 @@ def _validate_config(config: dict) -> None:
     loader = config["combo"]["loader"]
     if int(loader["data_offset"]) < 0:
         raise ValueError("combo.data.data_offset must be nonnegative")
-
+    if int(loader["registry_cache_days"]) <= 0:
+        raise ValueError("combo.data.registry_cache_days must be positive")
+    items = tuple(loader["data_items"])
+    labels = tuple(item for item in items if item["role"] == "label")
+    targets = tuple(item for item in items if item["role"] == "target")
+    if freq == "1d":
+        if targets:
+            raise ValueError("constants.freq='1d' requires role='label', not role='target'")
+        if len(labels) > 1:
+            raise ValueError("constants.freq='1d' supports at most one role='label' item")
+    else:
+        if labels:
+            raise ValueError(f"constants.freq='{freq}' requires role='target', not role='label'")
+        if len(targets) != 1:
+            raise ValueError(f"constants.freq='{freq}' requires exactly one role='target' item")
+        target_freq = str(targets[0]["params"]["freq"])
+        if target_freq != freq:
+            raise ValueError(
+                f"constants.freq='{freq}' does not match target freq='{target_freq}'"
+            )
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")
     optimizer = strategy["optimizer"]
+    if optimizer["type"] not in {"opt1", "opt2"}:
+        raise ValueError("strategy.optimizer.type must be opt1 or opt2")
     for name in ("ret_days", "min_valid_instruments", "min_return_obs", "num_mosek_threads"):
         if int(optimizer[name]) <= 0:
             raise ValueError(f"strategy.optimizer.{name} must be positive")
@@ -766,4 +821,13 @@ def load_config(path: str | None = None) -> dict:
         raise ValueError("config file must be an XML file")
     loaded = _load_xml_config(str(config_path))
     merged = _deep_merge(DEFAULT_CONFIG, loaded)
+    loaded_data = loaded.get("combo", {}).get("data")
+    if loaded_data is None or (
+        "items" not in loaded_data and "imports" not in loaded_data
+    ):
+        freq = str(merged["constants"]["freq"])
+        if freq not in SUPPORTED_DATA_FREQS:
+            supported = ", ".join(DATA_FREQ_ORDER)
+            raise ValueError(f"constants.freq must be one of {supported}")
+        merged["combo"]["data"]["items"] = _default_data_items(freq)
     return _resolve_loaded_paths(merged, config_path.parent)

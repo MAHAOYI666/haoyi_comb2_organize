@@ -253,13 +253,16 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert 'model_path="Model.py"' in config_text
     assert 'combo_base_path=""' in config_text
     assert 'trainDelay="0"' in config_text
+    assert 'retDays="1"' in config_text
     assert 'hidden_size=' not in config_text
     assert 'fc_size=' not in config_text
     assert 'path="example_factor"' in config_text
     assert 'path="vwap30_label1d"' in config_text
+    assert 'role="label"' in config_text
     root = ET.fromstring(config_text)
     assert root.find("./strategy").get("path") is None
-    assert set(root.find("./constants").attrib) == {"cache_path", "output_root"}
+    assert set(root.find("./constants").attrib) == {"cache_path", "output_root", "freq"}
+    assert root.find("./constants").get("freq") == "1d"
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
@@ -276,10 +279,12 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["strategy"]["path"].endswith("comb2_pcmaster/default_strategy.py")
     assert parsed["combo"]["paths"]["combo_base_path"] is None
     assert parsed["combo"]["runtime"]["trainDelay"] == 0
+    assert parsed["combo"]["runtime"]["retDays"] == 1
     assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
     assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
     assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
     assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
+    assert parsed["constants"]["freq"] == "1d"
     assert set(parsed["combo"]["loader"]) == {
         "dtype",
         "compression",
@@ -288,6 +293,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
         "data_items",
         "data_presets",
         "config_path",
+        "registry_cache_days",
     }
     assert len(parsed["combo"]["loader"]["data_items"]) == 2
 
@@ -305,6 +311,86 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
         load_config(str(unknown_constant))
 
+    invalid_freq = tmp_path / "invalid-freq.xml"
+    invalid_freq.write_text('<config><constants freq="tick" /></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="constants.freq must be one of"):
+        load_config(str(invalid_freq))
+
+    intraday_default = tmp_path / "intraday-default.xml"
+    intraday_default.write_text('<config><constants freq="1m" /></config>', encoding="utf-8")
+    parsed = load_config(str(intraday_default))
+    target = [item for item in parsed["combo"]["loader"]["data_items"] if item["role"] == "target"]
+    assert len(target) == 1
+    assert target[0]["params"]["freq"] == "1m"
+    assert target[0]["path"].endswith("AshareCache/1m_IntvReturns/IntvReturns.c2c")
+
+    mismatch = tmp_path / "mismatch.xml"
+    mismatch.write_text(
+        '<config><constants freq="5m" /><combo><data>'
+        '<item name="factor.x" path="x" />'
+        '<item name="returns" path="returns" role="target" freq="1m" />'
+        '</data></combo></config>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not match target freq"):
+        load_config(str(mismatch))
+
+
+def test_starter_model_runs_daily_and_intraday_sample_contracts():
+    from torch.utils.data import Dataset
+
+    from comb2 import FeatureGroups
+    from comboHelloWorld import MODEL_TEMPLATE
+
+    namespace = {}
+    exec(MODEL_TEMPLATE, namespace)
+    research_model = namespace["ResearchModel"]
+
+    class DailyDataset(Dataset):
+        validinsts = torch.arange(3)
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, idx):
+            x = FeatureGroups(
+                {
+                    "1d": torch.tensor(
+                        [[[1.0], [2.0], [3.0]], [[2.0], [3.0], [4.0]]]
+                    )
+                    + idx
+                },
+                ("1d",),
+            )
+            return idx, x, torch.tensor([-1.0, 0.0, 1.0]), torch.ones(3)
+
+    common = {
+        "dtype": torch.float32,
+        "tsDays": 2,
+        "num_features_by_freq": {"1d": 1},
+        "epochs": 1,
+        "batch_size": 1,
+        "hidden_size": 8,
+        "fc_size": 8,
+        "dropout": 0.0,
+    }
+    daily = research_model({**common, "freq": "1d"}).fit(DailyDataset())
+    assert daily.predict(DailyDataset()[0][1]).shape == (3,)
+
+    class MinuteDataset(DailyDataset):
+        times = (93100, 93200)
+
+        def __getitem__(self, idx):
+            _, x, y, w = super().__getitem__(idx)
+            return idx, 20200102, self.times[idx], x, y, w.to(torch.bool)
+
+    minute = research_model(
+        {**common, "freq": "1m", "target_times": MinuteDataset.times}
+    ).fit(MinuteDataset())
+    assert minute.predict(
+        MinuteDataset()[0][3], di=20200102, ti=93100
+    ).shape == (3,)
+
 
 def test_config_loads_researcher_optimizer_parameters(tmp_path):
     from config import DEFAULT_OPTIMIZER_CONFIG, load_config
@@ -315,12 +401,20 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
 <config>
   <strategy start_ds="20241028" end_ds="20241029">
     <optimizer
+      type="opt2"
       lambda0="0.75"
       maxtvr="0.25"
       max_weight="0.006"
+      target_size="200000000"
+      maxtrd="0.002"
+      maxpos="0.03"
+      lambda_slp="0.07"
+      parti_penalty="0.2"
       num_mosek_threads="2"
       post_trim_renorm="true"
+      soft_group_penalty="0.0003"
       risk_list="returns120:-0.10:0.10,1|BarraCNE5.BETA:-0.15:0.20,1"
+      group_list="WindIndustry.sw1:-0.06:0.06,1"
     />
   </strategy>
 </config>
@@ -330,17 +424,77 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
 
     optimizer = load_config(str(config_path))["strategy"]["optimizer"]
 
+    assert optimizer["type"] == "opt2"
     assert optimizer["lambda0"] == 0.75
     assert optimizer["maxtvr"] == 0.25
     assert optimizer["max_weight"] == 0.006
+    assert optimizer["target_size"] == 200000000.0
+    assert optimizer["maxtrd"] == 0.002
+    assert optimizer["maxpos"] == 0.03
+    assert optimizer["lambda_slp"] == 0.07
+    assert optimizer["parti_penalty"] == 0.2
     assert optimizer["num_mosek_threads"] == 2
     assert optimizer["post_trim_renorm"] is True
+    assert optimizer["soft_group_penalty"] == 0.0003
     assert optimizer["risk_list"].endswith("BarraCNE5.BETA:-0.15:0.20,1")
+    assert optimizer["group_list"] == "WindIndustry.sw1:-0.06:0.06,1"
     assert optimizer["ret_delay"] == 1
     assert optimizer["benchmark_delay"] == 1
-    for name in ("univ_list", "soft_univ_list", "risk_list", "soft_risk_list"):
-        assert all(entry.rsplit(",", 1)[-1] == "1" for entry in optimizer[name].split("|"))
+    assert optimizer["liquidity_delay"] == 1
+    assert optimizer["slippage_delay"] == 1
+    for name in (
+        "univ_list",
+        "soft_univ_list",
+        "risk_list",
+        "soft_risk_list",
+        "group_list",
+        "soft_group_list",
+    ):
+        assert all(entry.split(",")[1] == "1" for entry in optimizer[name].split("|"))
     assert DEFAULT_OPTIMIZER_CONFIG["ret_delay"] == 1
+    assert DEFAULT_OPTIMIZER_CONFIG["type"] == "opt1"
+    assert DEFAULT_OPTIMIZER_CONFIG["maxtrd"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["maxpos"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["min_participation_ratio"] == 0.07
+    assert DEFAULT_OPTIMIZER_CONFIG["parti_penalty"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["risk_list"].startswith(
+        "cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|"
+    )
+    assert DEFAULT_OPTIMIZER_CONFIG["soft_risk_list"].startswith(
+        "cap:-0.02:0.07:2.0,1,4|"
+    )
+    hard_universes = {
+        entry.split(":", 1)[0] for entry in optimizer["univ_list"].split("|")
+    }
+    soft_universes = {
+        entry.split(":", 1)[0] for entry in optimizer["soft_univ_list"].split("|")
+    }
+    assert hard_universes == {
+        "ZZ500",
+        "AshareST",
+        "AshareSH",
+        "AshareSZ",
+        "NONETOP3000",
+        "AshareCYB",
+    }
+    assert soft_universes == {
+        "ZZ1800",
+        "ZZ500",
+        "AshareSH",
+        "AshareCYB",
+        "AshareSZ",
+        "HS300",
+        "NONETOP3000",
+    }
+    assert "AshareDelistRisk" not in optimizer["univ_list"]
+    assert DEFAULT_OPTIMIZER_CONFIG["group_list"] == (
+        "WindIndustry.sw1:-0.065:0.065,1"
+    )
+    assert DEFAULT_OPTIMIZER_CONFIG["soft_group_list"] == (
+        "WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
+    )
+    assert "WindIndustry.wind1" not in DEFAULT_OPTIMIZER_CONFIG["group_list"]
+    assert "WindIndustry.wind1" not in DEFAULT_OPTIMIZER_CONFIG["soft_group_list"]
 
 
 def test_config_rejects_invalid_optimizer_parameters(tmp_path):
@@ -353,6 +507,13 @@ def test_config_rejects_invalid_optimizer_parameters(tmp_path):
     )
 
     with pytest.raises(ValueError, match="strategy.optimizer.ret_delay must be nonnegative"):
+        load_config(str(config_path))
+
+    config_path.write_text(
+        '<config><strategy><optimizer type="opt3" /></strategy></config>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="strategy.optimizer.type must be opt1 or opt2"):
         load_config(str(config_path))
 
 

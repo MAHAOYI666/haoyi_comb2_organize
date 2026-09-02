@@ -33,7 +33,9 @@ from .DataRegistry import (
     _coerce_data_item,
     _maybe_section,
     _require_memmaper2_cls,
+    available_bar_count,
     item_freq,
+    target_bar_index,
 )
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, to_bool_mask, truncate, winsorize_by_quantile
 
@@ -189,19 +191,25 @@ class LoaderConfig:
     data_items: Sequence[_DataItem | dict[str, Any]] = ()
     data_presets: Sequence[str] = ()
     config_path: str | None = None
+    registry_cache_days: int = 64
+    freq: str = "1d"
     verbose: bool = False
 
 
 def _build_loader_data_items(config: LoaderConfig) -> tuple[_DataItem, ...]:
     items = tuple(_coerce_data_item(item) for item in config.data_items)
-    if not any(item.role == "factor" for item in items):
-        raise ValueError("LoaderConfig.data_items requires at least one role='factor' data item")
+    if not items:
+        raise ValueError("LoaderConfig.data_items cannot be empty")
+    if config.freq == "1d" and not any(item.role == "factor" for item in items):
+        raise ValueError("daily mode requires at least one role='factor' data item")
     return tuple(items)
 
 
 class ComboDataLoader:
     def __init__(self, config: LoaderConfig, label_cache_size: int = 2500):
         self.config = config
+        self.execution_freq = str(config.freq)
+        assert self.execution_freq in FREQ_ORDER
         self.dtype = self.config.dtype
         self.codec = build_codec(self.config.compression, self.dtype)
         self.group_codec: GroupCodec | None = None
@@ -220,27 +228,41 @@ class ComboDataLoader:
             config_path=self.config.config_path,
             presets=self.config.data_presets,
             verbose=bool(getattr(config, "verbose", False)),
+            cache_days=int(self.config.registry_cache_days),
         )
-        self.factor_names = tuple(item.name for item in data_items if item.role == "factor")
-        label_names = tuple(item.name for item in data_items if item.role == "label")
-        if len(label_names) > 1:
-            raise ValueError(f"only one label data item is supported, got {label_names}")
-        self.label_name = label_names[0] if label_names else None
-        if not self.factor_names:
-            raise ValueError("at least one role='factor' data item is required")
+        if self.execution_freq == "1d":
+            self.input_names = tuple(item.name for item in data_items if item.role == "factor")
+            label_names = tuple(item.name for item in data_items if item.role == "label")
+            if len(label_names) > 1:
+                raise ValueError(f"only one label data item is supported, got {label_names}")
+            self.label_name = label_names[0] if label_names else None
+            self.target_name = None
+            self.target_freq = "1d"
+            self.target_times = ()
+            self.target_bar_ids = ()
+        else:
+            self.input_names, target_name = self.assign_data_items(data_items)
+            self.target_name = target_name
+            self.label_name = None
+            self.target_freq = item_freq(self.registry.items[target_name])
+            assert self.target_freq == self.execution_freq
+            self.target_times = tuple(CANONICAL_BAR_TIMES[self.target_freq][1:])
+            self.target_bar_ids = tuple(target_bar_index(self.target_freq, ti) for ti in self.target_times)
 
-        self.factor_names_by_freq = {
-            freq: tuple(name for name in self.factor_names if item_freq(self.registry.items[name]) == freq)
+        self.input_names_by_freq = {
+            freq: tuple(name for name in self.input_names if item_freq(self.registry.items[name]) == freq)
             for freq in FREQ_ORDER
         }
-        self.freqs = tuple(freq for freq in FREQ_ORDER if self.factor_names_by_freq[freq])
-        self.num_features_by_freq = {freq: len(self.factor_names_by_freq[freq]) for freq in self.freqs}
+        self.freqs = tuple(freq for freq in FREQ_ORDER if self.input_names_by_freq[freq])
+        self.num_features_by_freq = {freq: len(self.input_names_by_freq[freq]) for freq in self.freqs}
         self.num_features = sum(self.num_features_by_freq.values())
         self.feature_names_by_freq = {
-            freq: tuple(str(self.registry.items[name].params.get("display_name", name)) for name in self.factor_names_by_freq[freq])
+            freq: tuple(str(self.registry.items[name].params.get("display_name", name)) for name in self.input_names_by_freq[freq])
             for freq in self.freqs
         }
         self.feature_names = tuple(name for freq in self.freqs for name in self.feature_names_by_freq[freq])
+        self.factor_names = self.input_names
+        self.factor_names_by_freq = self.input_names_by_freq
         self.valid_source = MemmapMaskSource(str(stock_mask_path(self.config.cache_path, VALID_MASK_NAME)) if self.config.cache_path else None)
         self.filtered_source = MemmapMaskSource(str(stock_mask_path(self.config.cache_path, FILTERED_MASK_NAME)) if self.config.cache_path else None)
         self.base_universe_source = MemmapMaskSource(
@@ -252,6 +274,14 @@ class ComboDataLoader:
         self._label_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
         self._label_cache_size = int(label_cache_size)
 
+    def assign_data_items(self, items: Sequence[_DataItem]) -> tuple[tuple[str, ...], str]:
+        targets = tuple(item.name for item in items if item.role == "target")
+        assert len(targets) == 1, f"expected exactly one target item, got {targets}"
+        target_name = targets[0]
+        input_names = tuple(item.name for item in items if item.name != target_name)
+        assert input_names, "at least one input item is required"
+        return input_names, target_name
+
     def _sync_monitor_refs(self):
         self.valid_source.monitor = self.monitor
         self.filtered_source.monitor = self.monitor
@@ -260,6 +290,17 @@ class ComboDataLoader:
 
     def set_current_ti(self, ti: int):
         self.current_ti = int(ti)
+
+    def _label_cache_get(self, key: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor] | None:
+        return self._label_cache.get(key)
+
+    def _label_cache_set(self, key: tuple[int, int], value: tuple[torch.Tensor, torch.Tensor]) -> None:
+        if self._label_cache_size <= 0:
+            return
+        self._label_cache[key] = value
+        while len(self._label_cache) > self._label_cache_size:
+            oldest = next(iter(self._label_cache))
+            del self._label_cache[oldest]
 
     def date2didx(self, ds: int) -> int:
         didx = self.universe.date2idx(int(ds))
@@ -273,16 +314,15 @@ class ComboDataLoader:
         aligned = self.didx2date(self.date2didx(ds))
         return max(aligned, self.data_start_ds)
 
-    def _label_cache_get(self, key: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor] | None:
-        return self._label_cache.get(key)
+    def previous_date(self, ds: int, offset: int = 1) -> int:
+        didx = self.date2didx(ds) - int(offset)
+        assert didx >= self.data_start_didx, f"date {ds} has no {offset}-day input history"
+        return self.didx2date(didx)
 
-    def _label_cache_set(self, key: tuple[int, int], value: tuple[torch.Tensor, torch.Tensor]) -> None:
-        if self._label_cache_size <= 0:
-            return
-        self._label_cache[key] = value
-        while len(self._label_cache) > self._label_cache_size:
-            oldest = next(iter(self._label_cache))
-            del self._label_cache[oldest]
+    def source_date(self, ds: int, freq: str) -> int:
+        if self.execution_freq != "1d" and freq == "1d":
+            return self.previous_date(ds)
+        return int(ds)
 
     def feature_group_shapes(self, inst_count: int) -> dict[str, tuple[int, ...]]:
         shapes: dict[str, tuple[int, ...]] = {}
@@ -302,11 +342,13 @@ class ComboDataLoader:
     def build_raw_feature(self, ds: int) -> FeatureGroups:
         self._sync_monitor_refs()
         with _maybe_section(self.monitor, "gen_feature.feature_load", ds, level="full"):
-            self.registry._ensure_range(self.factor_names, ds, ds)
-            idx = self.universe.date2idx(ds)
             groups: dict[str, torch.Tensor] = {}
             for freq in self.freqs:
-                tensors = [self.registry.get_data(name)[idx].to(torch.float32) for name in self.factor_names_by_freq[freq]]
+                source_ds = self.source_date(ds, freq)
+                tensors = [
+                    self.registry.get_data(name, source_ds, source_ds)[0].to(torch.float32)
+                    for name in self.input_names_by_freq[freq]
+                ]
                 if freq == "1d":
                     group = torch.stack(tensors, dim=-1)
                 else:
@@ -343,25 +385,54 @@ class ComboDataLoader:
 
     def prefetch_features(self, days: Sequence[int]):
         days = [self.align_date(ds) for ds in days]
+        cache_days = int(getattr(self.registry, "cache_days", self.config.registry_cache_days))
+        assert len(days) <= cache_days, (
+            f"feature prefetch chunk has {len(days)} days, cache_days={cache_days}"
+        )
         self._sync_monitor_refs()
-        stats = LoadStats(request_days=len(days))
-        if days:
-            stats = self.registry._ensure_range(self.factor_names, min(days), max(days))
+        stats = LoadStats()
+        for freq in self.freqs:
+            source_days = [self.source_date(ds, freq) for ds in days]
+            if source_days:
+                loaded_stats = self.registry._ensure_range(
+                    self.input_names_by_freq[freq], min(source_days), max(source_days)
+                )
+                if loaded_stats is not None:
+                    stats.merge(loaded_stats)
         return stats
 
-    def prefetch_labels(self, days: Sequence[int], ret_days: int = 1):
+    def prefetch_labels(self, days: Sequence[int], ret_days: int = 1) -> LoadStats:
+        assert self.execution_freq == "1d"
         if self.label_name is None:
             return LoadStats()
-        label_days: list[int] = []
+        assert 0 < int(ret_days) <= self.registry.cache_days, (
+            f"ret_days={ret_days} exceeds registry cache_days={self.registry.cache_days}"
+        )
+        stats = LoadStats()
         for ds in days:
             end_didx = self.date2didx(self.align_date(ds))
             start_didx = end_didx - int(ret_days) + 1
             if start_didx < self.data_start_didx:
                 raise ValueError(f"not enough label history for ds={ds}, ret_days={ret_days}")
-            label_days.extend(self.didx2date(didx) for didx in range(start_didx, end_didx + 1))
-        if label_days:
-            return self.registry._ensure_range((self.label_name,), min(label_days), max(label_days))
-        return LoadStats()
+            stats.merge(
+                self.registry._ensure_range(
+                    (self.label_name,),
+                    self.didx2date(start_didx),
+                    self.didx2date(end_didx),
+                )
+            )
+        return stats
+
+    def prefetch_targets(self, days: Sequence[int]) -> LoadStats:
+        assert self.execution_freq != "1d"
+        days = [self.align_date(ds) for ds in days]
+        assert len(days) <= self.registry.cache_days, (
+            f"target prefetch chunk has {len(days)} days, cache_days={self.registry.cache_days}"
+        )
+        if not days:
+            return LoadStats()
+        assert self.target_name is not None
+        return self.registry._ensure_range((self.target_name,), min(days), max(days))
 
     def gen_base_universe_mask(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
@@ -370,10 +441,32 @@ class ComboDataLoader:
 
     def gen_valid_mask(self, ds: int) -> torch.Tensor:
         ds = self.align_date(ds)
+        if self.execution_freq != "1d":
+            ds = self.previous_date(ds)
         self._sync_monitor_refs()
         valid = self.valid_source.load_day(ds)
         filtered = self.filtered_source.load_day(ds)
         return valid & filtered & self.gen_base_universe_mask(ds)
+
+    def preprocess_target(
+        self,
+        target_values: torch.Tensor,
+        valid_mask: torch.Tensor,
+        ds: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        target_values = target_values.clone()
+        valid_values = target_values[valid_mask]
+        if valid_values.numel() > 0:
+            valid_values = winsorize_by_quantile(valid_values, 0.01, 0.99)
+            valid_values = valid_values - nanmedian(valid_values)
+            valid_values = valid_values / (nanstd(valid_values) + 1e-8)
+            valid_values = truncate(valid_values, -3.0, 3.0)
+            valid_values = normalize_by_max_abs(valid_values)
+            target_values[valid_mask] = valid_values
+
+        target_values[~valid_mask] = 0.0
+        target_values = nan_to_num(target_values, 0.0).to(self.dtype)
+        return target_values, to_bool_mask(valid_mask)
 
     def preprocess_label(
         self,
@@ -382,20 +475,10 @@ class ComboDataLoader:
         ds: int,
         ret_days: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        valid_values = label_values[valid_mask]
-        if valid_values.numel() > 0:
-            valid_values = winsorize_by_quantile(valid_values, 0.01, 0.99)
-            valid_values = valid_values - nanmedian(valid_values)
-            valid_values = valid_values / (nanstd(valid_values) + 1e-8)
-            valid_values = truncate(valid_values, -3.0, 3.0)
-            valid_values = normalize_by_max_abs(valid_values)
-            label_values[valid_mask] = valid_values
-
-        label_values[~valid_mask] = 0.0
-        label_values = nan_to_num(label_values, 0.0).to(self.dtype)
-        return label_values, to_bool_mask(valid_mask)
+        return self.preprocess_target(label_values, valid_mask, ds)
 
     def gen_label(self, ds: int, ret_days: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
+        assert self.execution_freq == "1d"
         if self.label_name is None:
             raise ValueError("gen_label requires one role='label' data item")
         ds = self.align_date(ds)
@@ -403,65 +486,95 @@ class ComboDataLoader:
         cached = self._label_cache_get(cache_key)
         if cached is not None:
             return cached
-
-        self._sync_monitor_refs()
         end_didx = self.date2didx(ds)
-        start_didx = end_didx - ret_days + 1
+        start_didx = end_didx - int(ret_days) + 1
         if start_didx < self.data_start_didx:
             raise ValueError(f"not enough label history for ds={ds}, ret_days={ret_days}")
-
-        dates = [self.didx2date(didx) for didx in range(start_didx, end_didx + 1)]
+        start_ds = self.didx2date(start_didx)
         with _maybe_section(self.monitor, "gen_label.load_returns", ds, level="full"):
-            self.registry._ensure_range((self.label_name,), dates[0], dates[-1])
-            label_data = self.registry.get_data(self.label_name)
-            returns = [label_data[self.universe.date2idx(cur_ds)].to(torch.float32) for cur_ds in dates]
+            label_data = self.registry.get_data(self.label_name, start_ds, ds).to(torch.float32)
         with _maybe_section(self.monitor, "gen_label.aggregate", ds, level="full"):
-            cret = torch.stack(returns, dim=0)
-            cret = nan_to_num(cret, 0.0)
-            decay_weights = torch.arange(ret_days, 0, -1, dtype=torch.float32, device=cret.device)
-            cret = torch.tensordot(decay_weights, cret, dims=([0], [0]))
+            returns = nan_to_num(label_data, 0.0)
+            decay_weights = torch.arange(
+                int(ret_days), 0, -1, dtype=torch.float32, device=returns.device
+            )
+            cret = torch.tensordot(decay_weights, returns, dims=([0], [0]))
             cret[torch.isinf(cret)] = torch.nan
-
         with _maybe_section(self.monitor, "gen_label.valid_mask", ds, level="full"):
-            valid_mask = self.gen_valid_mask(self.didx2date(start_didx)) & (~torch.isnan(cret))
-        label = self.preprocess_label(cret, valid_mask, ds, ret_days=ret_days)
+            valid_mask = self.gen_valid_mask(start_ds) & torch.isfinite(cret)
+        label = self.preprocess_label(cret, valid_mask, ds, ret_days=int(ret_days))
         self._label_cache_set(cache_key, label)
         return label
+
+    def gen_raw_target(self, ds: int, ti: int) -> torch.Tensor:
+        assert self.execution_freq != "1d"
+        ds = self.align_date(ds)
+        self._sync_monitor_refs()
+        bar_id = target_bar_index(self.target_freq, int(ti))
+        with _maybe_section(self.monitor, "gen_target.load_returns", ds, level="full"):
+            assert self.target_name is not None
+            values = self.registry.get_data(self.target_name, ds, ds)[0]
+        return values[bar_id].to(torch.float32)
+
+    def gen_target(self, ds: int, ti: int) -> tuple[torch.Tensor, torch.Tensor]:
+        assert self.execution_freq != "1d"
+        values = self.gen_raw_target(ds, ti)
+        valid_mask = self.gen_valid_mask(ds) & torch.isfinite(values)
+        return self.preprocess_target(values, valid_mask, ds)
 
     def _feature_available_mask(self, feature_window: FeatureGroups) -> torch.Tensor:
         return torch.ones(feature_window.stock_count(), dtype=torch.bool)
 
-    def _mask_window_tail_by_ti(self, feature_window: FeatureGroups) -> FeatureGroups:
-        if self.current_ti >= 150000:
-            return feature_window
+    def _mask_window_tail_by_ti(self, feature_window: FeatureGroups, target_ti: int) -> FeatureGroups:
+        if self.execution_freq != "1d":
+            target_bar_index(self.target_freq, int(target_ti))
         masked: dict[str, torch.Tensor] = {}
         for freq, tensor in feature_window.items():
             if freq == "1d":
                 masked[freq] = tensor
                 continue
-            future_mask = torch.as_tensor(
-                np.asarray(CANONICAL_BAR_TIMES[freq], dtype=np.int64) > int(self.current_ti),
-                dtype=torch.bool,
-                device=tensor.device,
-            )
-            if not future_mask.any().item():
-                masked[freq] = tensor
-                continue
             cur = tensor.clone()
-            cur[-1, :, future_mask, :] = torch.nan
+            if self.execution_freq == "1d":
+                future_mask = torch.as_tensor(
+                    np.asarray(CANONICAL_BAR_TIMES[freq], dtype=np.int64) > int(target_ti),
+                    dtype=torch.bool,
+                    device=tensor.device,
+                )
+                if not future_mask.any().item():
+                    masked[freq] = tensor
+                    continue
+                cur[-1, :, future_mask, :] = torch.nan
+            else:
+                available = available_bar_count(freq, self.target_freq, int(target_ti))
+                if available >= tensor.shape[-2]:
+                    masked[freq] = tensor
+                    continue
+                cur[-1, :, available:, :] = torch.nan
             masked[freq] = cur
         return FeatureGroups(masked, feature_window.freqs)
 
-    def transform_feature_window(self, feature_window: FeatureGroups, *, stage: str) -> FeatureGroups:
-        feature_window = self._mask_window_tail_by_ti(feature_window)
+    def transform_feature_window(
+        self, feature_window: FeatureGroups, *, target_ti: int | None = None, stage: str
+    ) -> FeatureGroups:
+        if self.execution_freq == "1d" and self.current_ti < 150000:
+            feature_window = self._mask_window_tail_by_ti(feature_window, self.current_ti)
+        elif self.execution_freq != "1d":
+            assert target_ti is not None
+            feature_window = self._mask_window_tail_by_ti(feature_window, target_ti)
         return feature_window.to(dtype=self.dtype)
 
-    def process_feature_window(self, feature_window: FeatureGroups) -> tuple[FeatureGroups, torch.Tensor]:
-        feature_window = self.transform_feature_window(feature_window, stage="predict")
+    def process_feature_window(
+        self, feature_window: FeatureGroups, *, target_ti: int | None = None
+    ) -> tuple[FeatureGroups, torch.Tensor]:
+        feature_window = self.transform_feature_window(
+            feature_window, target_ti=target_ti, stage="predict"
+        )
         available_mask = self._feature_available_mask(feature_window)
         return feature_window.select_stocks(torch.where(available_mask)[0]), available_mask
 
-    def load_feature_window(self, end_ds: int, ts_days: int) -> tuple[FeatureGroups, torch.Tensor]:
+    def load_feature_window(
+        self, end_ds: int, ts_days: int, target_ti: int | None = None
+    ) -> tuple[FeatureGroups, torch.Tensor]:
         end_didx = self.date2didx(end_ds)
         start_didx = max(self.data_start_didx, end_didx - ts_days + 1)
         days = [self.didx2date(didx) for didx in range(start_didx, end_didx + 1)]
@@ -472,7 +585,9 @@ class ComboDataLoader:
             pad_data = {freq: torch.full_like(features[0][freq], torch.nan) for freq in features[0].freqs}
             pad = [FeatureGroups(pad_data, features[0].freqs) for _ in range(ts_days - len(features))]
             features = pad + features
-        return self.process_feature_window(FeatureGroups.stack(features, dim=0))
+        return self.process_feature_window(
+            FeatureGroups.stack(features, dim=0), target_ti=target_ti
+        )
 
 
 class ComboTrainDataset(Dataset):
@@ -481,8 +596,8 @@ class ComboTrainDataset(Dataset):
         loader: ComboDataLoader,
         end_ds: int,
         ndays: int,
-        x_delay: int,
-        ts_days: int,
+        x_delay: int | None = None,
+        ts_days: int = 8,
         validinsts: torch.Tensor | None = None,
         load_chunk_days: int | None = None,
         codec: Codec | None = None,
@@ -492,12 +607,29 @@ class ComboTrainDataset(Dataset):
         self.group_codec = GroupCodec(self.codec, loader.freqs)
         self.end_ds = loader.align_date(end_ds)
         self.ndays = int(ndays)
-        self.x_delay = int(x_delay)
+        self.x_delay = int(x_delay or 1)
         self.ts_days = int(ts_days)
-        self.load_chunk_days = int(load_chunk_days or self.ts_days)
+        self.load_chunk_days = min(
+            int(load_chunk_days or loader.registry.cache_days), loader.registry.cache_days
+        )
         self.end_didx = loader.date2didx(self.end_ds)
-        self.start_didx = max(loader.data_start_didx + self.x_delay - 1, self.end_didx - self.ndays + 1)
+        if loader.execution_freq == "1d":
+            self.start_didx = max(
+                loader.data_start_didx + self.x_delay - 1,
+                self.end_didx - self.ndays + 1,
+            )
+        else:
+            self.start_didx = max(
+                loader.data_start_didx + self.ts_days,
+                self.end_didx - self.ndays + 1,
+            )
         self.ndays = self.end_didx - self.start_didx + 1
+        if loader.execution_freq == "1d":
+            self.storage_start_didx = self.start_didx - self.x_delay + 1
+            self.storage_days = self.ndays
+        else:
+            self.storage_start_didx = self.start_didx - self.ts_days + 1
+            self.storage_days = self.end_didx - self.storage_start_didx + 1
 
         monitor = getattr(loader, "monitor", None)
         instsz = len(MASK.code)
@@ -512,7 +644,7 @@ class ComboTrainDataset(Dataset):
             self.numValidinsts = instsz
         with _maybe_section(monitor, "dataset_init.alloc_xyw", self.end_ds, level="full"):
             group_shapes = {
-                freq: (self.ndays, *shape)
+                freq: (self.storage_days, *shape)
                 for freq, shape in loader.feature_group_shapes(self.numValidinsts).items()
             }
             self.X, self.X_meta = self.group_codec.allocate(
@@ -520,67 +652,157 @@ class ComboTrainDataset(Dataset):
                 device="cpu",
                 logical_dtype=loader.dtype,
             )
-            self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
-            self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
+            if loader.execution_freq == "1d":
+                self.Y = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
+                self.W = torch.zeros((self.ndays, self.numValidinsts), dtype=loader.dtype)
+            else:
+                parts = len(loader.target_times)
+                self.Y = torch.zeros((self.ndays, parts, self.numValidinsts), dtype=loader.dtype)
+                self.W = torch.zeros((self.ndays, parts, self.numValidinsts), dtype=torch.bool)
 
         progress_start = time.perf_counter()
         loaded_days = 0
         with _maybe_section(monitor, "dataset_init.loop_total", self.end_ds, level="full"):
-            for window_start in range(0, self.ndays, self.load_chunk_days):
-                window_end = min(window_start + self.load_chunk_days, self.ndays)
-                feature_days = [
-                    loader.didx2date(self.start_didx + offset - self.x_delay + 1)
-                    for offset in range(window_start, window_end)
-                ]
-                label_days = [loader.didx2date(self.start_didx + offset) for offset in range(window_start, window_end)]
-                load_start = time.perf_counter()
-                feature_stats = loader.prefetch_features(feature_days)
-                label_stats = loader.prefetch_labels(label_days, ret_days=self.x_delay)
-                load_time = time.perf_counter() - load_start
-                if loader.verbose:
-                    raw_time = feature_stats.raw_time + label_stats.raw_time
-                    ops_time = feature_stats.ops_time + label_stats.ops_time
-                    detail = (
-                        f"days {feature_days[0]}-{feature_days[-1]}, chunk {window_end - window_start}, "
-                        f"raw {raw_time:.2f}s, ops {ops_time:.2f}s, load {load_time:.2f}s"
-                    )
-                    print_progress(
-                        "Stage:load_train_days",
-                        window_end,
-                        self.ndays,
-                        progress_start,
-                        detail,
-                        final=window_end == self.ndays,
-                    )
-                for offset in range(window_start, window_end):
-                    label_didx = self.start_didx + offset
-                    feature_didx = label_didx - self.x_delay + 1
-                    label_ds = loader.didx2date(label_didx)
-                    feature_ds = loader.didx2date(feature_didx)
-                    x = loader.gen_feature(feature_ds).select_stocks(self.validinsts)
-                    y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
-                    self.group_codec.encode_into(self.X, self.X_meta, offset, x)
-                    self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
-                    self.W[offset] = w[self.validinsts].to(loader.dtype)
-                    loaded_days += 1
+            if loader.execution_freq == "1d":
+                for window_start in range(0, self.ndays, self.load_chunk_days):
+                    window_end = min(window_start + self.load_chunk_days, self.ndays)
+                    feature_days = [
+                        loader.didx2date(self.storage_start_didx + offset)
+                        for offset in range(window_start, window_end)
+                    ]
+                    label_days = [
+                        loader.didx2date(self.start_didx + offset)
+                        for offset in range(window_start, window_end)
+                    ]
+                    load_start = time.perf_counter()
+                    feature_stats = loader.prefetch_features(feature_days)
+                    label_stats = loader.prefetch_labels(label_days, ret_days=self.x_delay)
+                    load_time = time.perf_counter() - load_start
+                    if loader.verbose:
+                        raw_time = feature_stats.raw_time + label_stats.raw_time
+                        ops_time = feature_stats.ops_time + label_stats.ops_time
+                        detail = (
+                            f"days {feature_days[0]}-{feature_days[-1]}, chunk {window_end - window_start}, "
+                            f"raw {raw_time:.2f}s, ops {ops_time:.2f}s, load {load_time:.2f}s"
+                        )
+                        print_progress(
+                            "Stage:load_train_days",
+                            window_end,
+                            self.ndays,
+                            progress_start,
+                            detail,
+                            final=window_end == self.ndays,
+                        )
+                    for offset in range(window_start, window_end):
+                        label_ds = loader.didx2date(self.start_didx + offset)
+                        feature_ds = loader.didx2date(self.storage_start_didx + offset)
+                        x = loader.gen_feature(feature_ds).select_stocks(self.validinsts)
+                        y, w = loader.gen_label(label_ds, ret_days=self.x_delay)
+                        self.group_codec.encode_into(self.X, self.X_meta, offset, x)
+                        self.Y[offset] = torch.nan_to_num(y[self.validinsts], nan=0.0)
+                        self.W[offset] = w[self.validinsts].to(loader.dtype)
+                        loaded_days += 1
+            else:
+                for window_start in range(0, self.storage_days, self.load_chunk_days):
+                    window_end = min(window_start + self.load_chunk_days, self.storage_days)
+                    feature_days = [
+                        loader.didx2date(self.storage_start_didx + offset)
+                        for offset in range(window_start, window_end)
+                    ]
+                    load_start = time.perf_counter()
+                    feature_stats = loader.prefetch_features(feature_days)
+                    load_time = time.perf_counter() - load_start
+                    if loader.verbose:
+                        detail = (
+                            f"days {feature_days[0]}-{feature_days[-1]}, chunk {window_end - window_start}, "
+                            f"raw {feature_stats.raw_time:.2f}s, ops {feature_stats.ops_time:.2f}s, "
+                            f"load {load_time:.2f}s"
+                        )
+                        print_progress(
+                            "Stage:load_train_days",
+                            window_end,
+                            self.storage_days,
+                            progress_start,
+                            detail,
+                            final=window_end == self.storage_days,
+                        )
+                    for offset in range(window_start, window_end):
+                        feature_ds = loader.didx2date(self.storage_start_didx + offset)
+                        x = loader.gen_feature(feature_ds).select_stocks(self.validinsts)
+                        self.group_codec.encode_into(self.X, self.X_meta, offset, x)
+                        loaded_days += 1
+
+                for window_start in range(0, self.ndays, self.load_chunk_days):
+                    window_end = min(window_start + self.load_chunk_days, self.ndays)
+                    target_days = [
+                        loader.didx2date(self.start_didx + offset)
+                        for offset in range(window_start, window_end)
+                    ]
+                    loader.prefetch_targets(target_days)
+                    for offset in range(window_start, window_end):
+                        target_ds = loader.didx2date(self.start_didx + offset)
+                        for part, ti in enumerate(loader.target_times):
+                            y, w = loader.gen_target(target_ds, ti)
+                            self.Y[offset, part] = y[self.validinsts]
+                            self.W[offset, part] = w[self.validinsts]
+
+        self._decoded_day: int | None = None
+        self._decoded_window: FeatureGroups | None = None
 
     def _build_validinsts(self) -> torch.Tensor:
         masks = []
         for didx in range(self.start_didx, self.end_didx + 1):
-            ds = self.loader.didx2date(didx - self.x_delay + 1)
+            ds = self.loader.didx2date(didx)
+            if self.loader.execution_freq == "1d":
+                ds = self.loader.didx2date(didx - self.x_delay + 1)
+            else:
+                ds = self.loader.previous_date(ds)
             masks.append(self.loader.gen_base_universe_mask(ds))
         stacked = torch.stack(masks, dim=0)
         return torch.where(stacked.any(dim=0))[0]
 
     def __len__(self) -> int:
-        return max(0, self.ndays - self.ts_days + 1)
+        if self.loader.execution_freq == "1d":
+            return max(0, self.ndays - self.ts_days + 1)
+        return max(0, self.ndays * len(self.loader.target_times))
+
+    def sample_coordinates(self, idx: int) -> tuple[int, int, int, int]:
+        assert self.loader.execution_freq != "1d"
+        if idx < 0 or idx >= len(self):
+            raise IndexError(idx)
+        day_offset, part = divmod(int(idx), len(self.loader.target_times))
+        di = self.loader.didx2date(self.start_didx + day_offset)
+        ti = int(self.loader.target_times[part])
+        return day_offset, di, ti, int(self.loader.target_bar_ids[part])
 
     def __getitem__(self, idx: int):
-        x = self.group_codec.decode(self.X, self.X_meta, slice(idx, idx + self.ts_days), out_dtype=self.loader.dtype)
-        x = self.loader.transform_feature_window(x, stage="train")
-        y = self.Y[idx + self.ts_days - 1]
-        w = self.W[idx + self.ts_days - 1]
-        return idx, x, y, w
+        if self.loader.execution_freq == "1d":
+            x = self.group_codec.decode(
+                self.X,
+                self.X_meta,
+                slice(idx, idx + self.ts_days),
+                out_dtype=self.loader.dtype,
+            )
+            x = self.loader.transform_feature_window(x, stage="train")
+            y = self.Y[idx + self.ts_days - 1]
+            w = self.W[idx + self.ts_days - 1]
+            return idx, x, y, w
+        day_offset, di, ti, _ = self.sample_coordinates(idx)
+        if self._decoded_day != day_offset:
+            self._decoded_window = self.group_codec.decode(
+                self.X,
+                self.X_meta,
+                slice(day_offset, day_offset + self.ts_days),
+                out_dtype=self.loader.dtype,
+            )
+            self._decoded_day = day_offset
+        assert self._decoded_window is not None
+        x = self.loader.transform_feature_window(
+            self._decoded_window, target_ti=ti, stage="train"
+        )
+        y = self.Y[day_offset, self.loader.target_times.index(ti)]
+        w = self.W[day_offset, self.loader.target_times.index(ti)]
+        return idx, di, ti, x, y, w
 
 
 class ComboBuffer:
@@ -604,6 +826,9 @@ class ComboBuffer:
             device="cpu",
             logical_dtype=self.dtype,
         )
+        self.start_didx = -1
+
+    def clear(self):
         self.start_didx = -1
 
     def append(self, x: FeatureGroups, didx: int):
