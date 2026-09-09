@@ -446,10 +446,32 @@ class FactorsimReader:
     def __init__(self, path: str):
         self.path = str(path)
         self.mmap = Memmaper2(path)
+        self.codes = pd.Index(self.mmap._columns).astype(str).str.zfill(6)
+        self.column_indices = None
 
     def load(self, item, registry, start_ds, end_ds):
+        dates = tuple(registry.universe.idx2date(i) for i in range(
+            registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1
+        ))
+        if int(self.mmap._meta[1]) == 1:
+            source_dates = self.mmap._index
+            lo = np.searchsorted(source_dates, start_ds)
+            hi = np.searchsorted(source_dates, end_ds, side="right")
+            assert tuple(map(int, source_dates[lo:hi])) == dates, f"{item.name}: incomplete date axis"
+            values = self.mmap.load(start_ds=start_ds, end_ds=end_ds, df_type=False)[:]
+            if self.column_indices is None:
+                self.column_indices = (
+                    slice(None) if self.codes.equals(pd.Index(registry.universe.codes))
+                    else self.codes.get_indexer(registry.universe.codes)
+                )
+            if not isinstance(self.column_indices, slice):
+                aligned = np.full((len(dates), len(registry.universe.codes)), np.nan, dtype=values.dtype)
+                present = self.column_indices >= 0
+                aligned[:, present] = values[:, self.column_indices[present]]
+                values = aligned
+            return LoadedSource(torch.as_tensor(values[..., None]), dates, registry.universe.codes, (item.name,))
         frame = self.mmap.load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
-        frame.columns = frame.columns.astype(str).str.zfill(6)
+        frame.columns = self.codes
         frame = frame.reindex(columns=registry.universe.codes)
         dates = tuple(registry.universe.idx2date(i) for i in range(
             registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1
@@ -554,7 +576,10 @@ class DataRegistry:
         assert hi - lo + 1 <= self.cache_days, "request exceeds registry_cache_days; read in chunks"
         self._ensure_processed_range(name, start_ds, end_ds)
         ti = self.runtime_context["ti"]
-        return torch.stack([self.processed_cache[name][(i, ti)] for i in range(lo, hi + 1)])
+        cache = self.processed_cache[name]
+        for i in range(lo, hi + 1):
+            cache.move_to_end((i, ti))
+        return torch.stack([cache[(i, ti)] for i in range(lo, hi + 1)])
 
     def get_field(self, name, field, start_ds, end_ds):
         name = self._resolve_name(name)
@@ -564,7 +589,7 @@ class DataRegistry:
     def _cache_day(self, name, idx, value):
         cache = self.processed_cache[name]
         key = (int(idx), self.runtime_context["ti"])
-        cache[key] = value
+        cache[key] = value.clone(memory_format=torch.contiguous_format)
         cache.move_to_end(key)
         while len(cache) > self.cache_days:
             cache.popitem(last=False)
@@ -581,9 +606,13 @@ class DataRegistry:
         if not missing:
             return
         requirements = _op_requirements(item.ops)
-        for offset in range(0, len(missing), self.cache_days):
-            indices = missing[offset:offset + self.cache_days]
-            first, last = indices[0], indices[-1]
+        ranges = []
+        for idx in missing:
+            if ranges and idx == ranges[-1][1] + 1 and idx - ranges[-1][0] < self.cache_days:
+                ranges[-1] = (ranges[-1][0], idx)
+            else:
+                ranges.append((idx, idx))
+        for first, last in ranges:
             raw_lo = max(self.data_start_idx, first - requirements.lookback_days + 1)
             assert raw_lo - item.delay >= 0, f"{name}: insufficient delay history"
             logical_start = self.universe.idx2date(raw_lo)
@@ -616,7 +645,7 @@ class DataRegistry:
                 stats.raw_points += last - raw_lo + 1
             began = time.perf_counter()
             values = self._apply_ops(item, values, raw_lo, last)
-            for idx in indices:
+            for idx in range(first, last + 1):
                 self._cache_day(name, idx, values[idx - raw_lo])
             if stats:
                 stats.ops_time += time.perf_counter() - began
@@ -628,6 +657,8 @@ class DataRegistry:
         return stats
 
     def _apply_ops(self, item, values, lo_idx, hi_idx):
+        if not item.ops:
+            return values
         columns = []
         for column in values.unbind(-1):
             out = column
@@ -679,6 +710,7 @@ def _load_snap_label(item, registry, start_ds, end_ds):
     labels = load_snap_vwap_labels(
         Path(registry.ashare_cache_path).parent,
         registry.runtime_context["ti"], start_ds, end_ds,
+        periods=(1,),
     )[1]
     labels = labels.reindex(columns=registry.universe.codes)
     return LoadedSource(torch.as_tensor(labels.to_numpy(copy=True)[..., None]),

@@ -213,19 +213,28 @@ def print_live_metrics(meta: dict):
     _print_metric_table("[LIVE]", columns)
 
 
-def calculate_alpha_ic(alpha, combo):
+def calculate_alpha_ic(alpha, combo, *, sample_inputs=None):
     rows = []
-    for (ds, ti), prediction in alpha.iterrows():
-        target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
-        valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
-        values = prediction.to_numpy(dtype=float)
-        valid &= np.isfinite(values) & np.isfinite(target)
-        count = int(valid.sum())
-        ic = np.nan
-        if count >= 2 and np.std(values[valid]) > 0 and np.std(target[valid]) > 0:
-            ic = float(np.corrcoef(values[valid], target[valid])[0, 1])
-        rows.append((int(ds), int(ti), ic, count))
-    return pd.DataFrame(rows, columns=["date", "time", "ic", "count"]).set_index(["date", "time"])
+    for ti, frame in alpha.groupby(level=1):
+        frame = frame.sort_index()
+        combo.loader.set_current_ti(int(ti))
+        width = combo.loader.registry.cache_days
+        for offset in range(0, len(frame), width):
+            chunk = frame.iloc[offset:offset + width]
+            combo.loader.prefetch_targets(chunk.index.get_level_values(0).astype(int))
+            for (ds, ti), prediction in chunk.iterrows():
+                target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
+                valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
+                values = prediction.to_numpy(dtype=float)
+                valid &= np.isfinite(values) & np.isfinite(target)
+                if sample_inputs is not None:
+                    sample_inputs[(int(ds), int(ti))] = (target, valid)
+                count = int(valid.sum())
+                ic = np.nan
+                if count >= 2 and np.std(values[valid]) > 0 and np.std(target[valid]) > 0:
+                    ic = float(np.corrcoef(values[valid], target[valid])[0, 1])
+                rows.append((int(ds), int(ti), ic, count))
+    return pd.DataFrame(rows, columns=["date", "time", "ic", "count"]).set_index(["date", "time"]).reindex(alpha.index)
 
 
 def dump_alpha_analysis(node, combo, organize_config):

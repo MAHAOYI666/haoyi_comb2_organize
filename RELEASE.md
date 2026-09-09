@@ -5,27 +5,35 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.1`
-- Version date: `2026-09-07`
+- Version: `1.0.2`
+- Version date: `2026-09-09`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.1-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: source version updated; the `1.0.1` wheel has not yet been built or published.
+- Status: the `1.0.2` wheel was built and installed locally; it has not been published to a remote package registry.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.1-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
-Execution and valuation fixes:
+No unreleased changes.
 
-- Build one point-in-time buyable/market-sellable contract from raw execution prices and factorsim base, limit, and suspension masks. The optimizer freezes non-tradable holdings at their actual amount, and execution fails on any order outside the corresponding pool instead of silently skipping it.
-- Stop forward-filling VWAP/open execution prices. Continue marking temporary suspensions at the last valid close, but use factorsim `StockMask2.StockListedDays` transitions to write off confirmed legacy delistings at zero before optimization.
-- Record zero-value delisting events in `settlements.csv` and expose daily delisting counts and write-offs in backtest metrics. Custom strategies now receive explicit `buyable_mask` and `market_sellable_mask` arguments.
+## 1.0.2
+
+Bug fixes:
+
+- Apply the default `BaseUnivMask`, `NoNewStockMask`, and `LimitMask` intersection consistently to training, signals, and IC evaluation when `cache_path` is configured. Explicit researcher validity sources continue to replace that default.
+- Preload training feature windows and targets once per dataset, reuse rolling prediction windows across dates and sample times, and refresh only the current live source point after a cache update. Feature compression remains limited to feature storage.
+- Read snapshot targets with their declared delay and prefetch them in bounded ranges so evaluation reuses the same target and validity arrays for IC and decile calculations.
+- Align two-dimensional factor sources to the configured instrument axis, preserving missing instruments as `NaN` and source precision. Normalize infinite feature values as missing before preprocessing.
+- Build execution buyable and market-sellable pools from valid prices and market masks. Freeze non-tradable holdings at their actual amount, reject orders outside the corresponding pool, and write off confirmed delistings at zero with settlement records and daily metrics.
+- Preserve the configured optimizer benchmark independently from the `ZZ500` universe constraints and use actual stock-book holdings for `opt1` turnover normalization.
+- Validation covers 116 passing regression tests and 11 conditional skips.
 
 ## 1.0.0
 

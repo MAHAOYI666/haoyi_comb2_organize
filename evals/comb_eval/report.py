@@ -154,7 +154,8 @@ def run_config_evaluation(
     assert not alpha.empty, "no alpha samples in evaluation range"
     node = runCombo.Node(config)
     combo = runCombo.load_combo_base_class(config["combo"])(node)
-    ic = runCombo.calculate_alpha_ic(alpha, combo)
+    sample_inputs = {} if not skip_deciles else None
+    ic = runCombo.calculate_alpha_ic(alpha, combo, sample_inputs=sample_inputs)
     ic_summary = ic.groupby(level="time")["ic"].agg(["mean", "std", "count"])
     ic.to_csv(artifacts.report_dir / "daily_ic.csv")
     daily_path = Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]
@@ -177,8 +178,7 @@ def run_config_evaluation(
     if not skip_deciles:
         layers = []
         for (ds, ti), row in alpha.iterrows():
-            target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
-            valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
+            target, valid = sample_inputs[(int(ds), int(ti))]
             values = row.to_numpy(dtype=float)
             valid &= np.isfinite(values) & np.isfinite(target)
             selected = np.flatnonzero(valid)

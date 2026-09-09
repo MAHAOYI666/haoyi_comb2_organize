@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 import inspect
 from pathlib import Path
@@ -9,7 +8,10 @@ from typing import Sequence
 import torch
 from torch.utils.data import Dataset
 
-from comb2_simbase.cache_layout import ashare_cache_path
+from comb2_simbase.cache_layout import (
+    ashare_cache_path, stock_mask_path, BASE_UNIVERSE_MASK_NAME,
+    VALID_MASK_NAME, FILTERED_MASK_NAME,
+)
 from .DataRegistry import DataItem, DataRegistry, LoadedSource, LoadStats, MASK, Universe, _coerce_data_item
 from .codec import build_codec, PassthroughCodec
 from .op_utils import cs_zscore, nan_to_num, nanmedian, nanstd, normalize_by_max_abs, truncate, winsorize_by_quantile
@@ -52,19 +54,26 @@ class ComboDataLoader:
                 item = replace(item, path=str((path if path.is_absolute() else root / path).resolve()))
             sources.append(item)
         assert sources, "data_requirements must declare at least one source"
+        self.validity = self.model_validity_source()
+        if self.validity is None and config.cache_path:
+            sources.extend(DataItem(
+                f"mask.{name}", path=str(stock_mask_path(config.cache_path, field)), delay=1,
+            ) for name, field in (
+                ("base", BASE_UNIVERSE_MASK_NAME), ("valid", VALID_MASK_NAME),
+                ("filtered", FILTERED_MASK_NAME),
+            ))
         self.registry = DataRegistry(
             sources, universe=self.universe, data_start_ds=self.data_start_ds,
             ashare_cache_path=str(ashare_cache_path(config.cache_path)) if config.cache_path else None,
             config_path=str(root), cache_days=config.registry_cache_days,
             process_source=self.process_source, verbose=config.verbose,
         )
+        self.registry.set_current_ti(self.current_ti)
         self.input_names = tuple(self.model_input_sources())
         assert self.input_names and len(set(self.input_names)) == len(self.input_names)
         assert set(self.input_names) <= self.registry.items.keys()
         self.target = self.model_target()
-        self.validity = self.model_validity_source()
         self._feature_names = ()
-        self._features = OrderedDict()
 
     def data_requirements(self) -> Sequence[DataItem]:
         raise NotImplementedError("declare Memmap sources in ResearchLoader.data_requirements")
@@ -92,10 +101,6 @@ class ComboDataLoader:
         self.current_date = int(ds)
         self.set_current_ti(ti)
         self.registry.set_point(ds, ti, refresh=refresh)
-        if refresh:
-            for point in list(self._features):
-                if point[0] >= int(ds):
-                    del self._features[point]
 
     def date2didx(self, ds):
         return self.universe.date2idx(int(ds))
@@ -133,7 +138,9 @@ class ComboDataLoader:
         if self._feature_names:
             assert names == self._feature_names, "model feature order changed"
         self._feature_names = names
-        return torch.cat(sources, dim=-1)
+        values = torch.cat(sources, dim=-1)
+        values[torch.isinf(values)] = torch.nan
+        return values
 
     def preprocess_features(self, values, ds, ti):
         values = cs_zscore(values.transpose(0, 1)).transpose(0, 1)
@@ -143,18 +150,9 @@ class ComboDataLoader:
         ds = self.align_date(ds)
         if ti is not None:
             self.set_current_ti(ti)
-        key = (ds, self.current_ti)
-        if key not in self._features:
-            value = self.preprocess_features(self.build_raw_feature(ds), ds, self.current_ti)
-            assert value.shape == (len(self.mask.code), self.num_features)
-            storage, meta = self.codec.allocate((1, *value.shape), "cpu", self.dtype)
-            self.codec.encode_into(storage, meta, 0, value)
-            self._features[key] = (storage, meta)
-            while len(self._features) > self.config.registry_cache_days:
-                self._features.popitem(last=False)
-        self._features.move_to_end(key)
-        storage, meta = self._features[key]
-        return self.codec.decode(storage, meta, 0, out_dtype=self.dtype)
+        value = self.preprocess_features(self.build_raw_feature(ds), ds, self.current_ti)
+        assert value.shape == (len(self.mask.code), self.num_features)
+        return value
 
     def prefetch_features(self, days, chunk_days=None):
         stats = LoadStats()
@@ -163,17 +161,29 @@ class ComboDataLoader:
         assert width > 0
         for offset in range(0, len(days), width):
             chunk = days[offset:offset + width]
-            if all((ds, self.current_ti) in self._features for ds in chunk):
-                continue
             stats.merge(self.registry._ensure_range(self.input_names, chunk[0], chunk[-1]))
-            for ds in chunk:
-                self.gen_feature(ds)
+        return stats
+
+    def prefetch_targets(self, days):
+        days = list(days)
+        names = [self.target[0]] if self.target is not None else []
+        if self.validity is not None:
+            names.append(self.validity[0])
+        elif self.config.cache_path:
+            names.extend(("mask.base", "mask.valid", "mask.filtered"))
+        stats = LoadStats()
+        for offset in range(0, len(days), self.registry.cache_days):
+            chunk = days[offset:offset + self.registry.cache_days]
+            stats.merge(self.registry._ensure_range(tuple(dict.fromkeys(names)), chunk[0], chunk[-1]))
         return stats
 
     def gen_base_universe_mask(self, ds):
         if self.validity is None:
-            return torch.ones(len(self.mask.code), dtype=torch.bool)
-        name, _, field = self.validity
+            if not self.config.cache_path:
+                return torch.ones(len(self.mask.code), dtype=torch.bool)
+            name = field = "mask.base"
+        else:
+            name, _, field = self.validity
         values = self.source_field(name, field, ds, ds)[0]
         return torch.isfinite(values) & (values != 0)
 
@@ -185,6 +195,10 @@ class ComboDataLoader:
             name, fields, _ = self.validity
             for field in fields:
                 values = self.source_field(name, field, ds, ds)[0]
+                valid &= torch.isfinite(values) & (values != 0)
+        elif self.config.cache_path:
+            for name in ("mask.valid", "mask.filtered"):
+                values = self.source_field(name, name, ds, ds)[0]
                 valid &= torch.isfinite(values) & (values != 0)
         return valid
 
@@ -227,16 +241,17 @@ class ComboDataLoader:
         start = end - int(ts_days) + 1
         assert start >= self.data_start_didx, "insufficient feature history"
         self.set_current_ti(target_ti)
-        self.prefetch_features([self.didx2date(i) for i in range(start, end + 1)])
-        values = torch.stack([
-            self.gen_feature(self.didx2date(idx), target_ti)
-            for idx in range(start, end + 1)
-        ])
+        features = []
+        for first in range(start, end + 1, self.registry.cache_days):
+            days = [self.didx2date(i) for i in range(first, min(first + self.registry.cache_days, end + 1))]
+            self.prefetch_features(days)
+            features.extend(self.gen_feature(ds, target_ti) for ds in days)
+        values = torch.stack(features)
         return self.transform_feature_window(values, target_ti=target_ti, stage="predict")
 
 
 class ComboTrainDataset(Dataset):
-    """Bounded feature cache; samples retain same-time snapshots across trading days."""
+    """Preloaded training snapshot with same-time windows across trading days."""
 
     def __init__(self, loader, end_ds, ndays, x_delay=None, ts_days=8,
                  validinsts=None, load_chunk_days=None, codec=None):
@@ -251,11 +266,41 @@ class ComboTrainDataset(Dataset):
         self.first_sample = self.start_didx + self.ts_days - 1
         self.last_sample = self.end_didx - self.ret_days + 1
         assert self.first_sample <= self.last_sample, "not enough training history"
-        loader.gen_feature(loader.didx2date(self.first_sample), loader.sample_times[0])
+        loader.build_raw_feature(loader.didx2date(self.first_sample))
         self.ndays = self.end_didx - self.start_didx + 1
         self.validinsts = self._build_validinsts() if validinsts is None else validinsts.to(torch.long)
         self.numValidinsts = len(self.validinsts)
         assert self.numValidinsts > 0, "no training instruments"
+        self.codec = codec or PassthroughCodec(loader.dtype)
+        self.X = {}
+        self.X_meta = {}
+        sample_days = self.last_sample - self.first_sample + 1
+        self.Y = torch.empty((sample_days, len(loader.sample_times), self.numValidinsts), dtype=loader.dtype)
+        self.W = torch.empty_like(self.Y, dtype=torch.bool)
+        storage_days = self.last_sample - self.start_didx + 1
+        for part, ti in enumerate(loader.sample_times):
+            loader.set_current_ti(ti)
+            self.X[ti], self.X_meta[ti] = self.codec.allocate(
+                (storage_days, self.numValidinsts, loader.num_features), "cpu", loader.dtype,
+            )
+            for offset in range(0, storage_days, self.load_chunk_days):
+                stop = min(offset + self.load_chunk_days, storage_days)
+                days = [loader.didx2date(self.start_didx + i) for i in range(offset, stop)]
+                loader.prefetch_features(days, self.load_chunk_days)
+                for i, ds in enumerate(days, offset):
+                    values = loader.gen_feature(ds, ti).index_select(0, self.validinsts)
+                    self.codec.encode_into(self.X[ti], self.X_meta[ti], i, values)
+            for offset in range(0, sample_days, self.load_chunk_days):
+                stop = min(offset + self.load_chunk_days, sample_days)
+                loader.prefetch_targets([
+                    loader.didx2date(self.first_sample + i)
+                    for i in range(offset, stop + self.ret_days - 1)
+                ])
+                for day in range(offset, stop):
+                    ds = loader.didx2date(self.first_sample + day)
+                    y, w = loader.gen_target(ds, ti, ret_days=self.ret_days)
+                    self.Y[day, part] = y[self.validinsts]
+                    self.W[day, part] = w[self.validinsts]
 
     def _build_validinsts(self):
         valid = torch.zeros(len(self.loader.mask.code), dtype=torch.bool)
@@ -275,19 +320,14 @@ class ComboTrainDataset(Dataset):
 
     def __getitem__(self, idx):
         ds, ti = self.sample_coordinates(idx)
-        end = self.loader.date2didx(ds)
+        day, part = divmod(int(idx), len(self.loader.sample_times))
         self.loader.set_current_ti(ti)
-        self.loader.prefetch_features(
-            [self.loader.didx2date(i) for i in range(end - self.ts_days + 1, end + 1)],
-            self.load_chunk_days,
+        values = self.codec.decode(
+            self.X[ti], self.X_meta[ti], slice(day, day + self.ts_days),
+            out_dtype=self.loader.dtype,
         )
-        values = torch.stack([
-            self.loader.gen_feature(self.loader.didx2date(i), ti).index_select(0, self.validinsts)
-            for i in range(end - self.ts_days + 1, end + 1)
-        ])
         x = self.loader.transform_feature_window(values, target_ti=ti, stage="train")
-        y, w = self.loader.gen_target(ds, ti, ret_days=self.ret_days)
-        return idx, ds, ti, x, y[self.validinsts], w[self.validinsts]
+        return idx, ds, ti, x, self.Y[day, part], self.W[day, part]
 
 
 class ComboBuffer:

@@ -72,3 +72,57 @@ def test_registry_snapshot_label_is_an_ordinary_source(tmp_path):
     actual = registry.get_field("y","y",20240102,20240103)
     expected = load_snap_vwap_labels(tmp_path,100000,20240102,20240103)[1]
     np.testing.assert_allclose(actual, expected)
+
+
+def test_evaluation_prefetches_snapshot_labels_and_reuses_inputs(tmp_path):
+    import cProfile
+    import pstats
+    from types import SimpleNamespace
+    from comb2 import ComboDataLoader, LoaderConfig
+    from comb2_simbase import IndexMask
+    from runCombo import calculate_alpha_ic
+
+    dates = np.asarray(IndexMask().intv_trade_day(20230103, 20230531), dtype=int)[:90]
+    codes = np.array(["000001", "000002"], dtype=object)
+    prices = np.arange(len(dates) * 2).reshape(-1, 2) / 100 + 10
+    root = tmp_path / "AshareCache"
+    for relative, values in (
+        ("1d_IntraVwap/IntraVwap.Vwap30.100000", prices),
+        ("1d_IntraVwap/IntraVwap.Vwap30.110000", prices + .5),
+        ("1d_DailyKline/DailyKline.close_hfq", prices + 1),
+        ("1d_DailyKline/DailyKline.adj_factor", np.ones_like(prices)),
+        ("1d_StockMask2/StockMask2.BaseUnivMask", np.ones_like(prices)),
+        ("1d_StockMask2/StockMask2.LimitMask", np.ones_like(prices)),
+        ("1d_StockMask2/StockMask2.NoNewStockMask", np.ones_like(prices)),
+    ):
+        _write_memmaper2(root / relative, values, dates, codes)
+
+    class ResearchLoader(ComboDataLoader):
+        def data_requirements(self):
+            return (DataItem("label", module="builtin.snap_label", delay=1),
+                    DataItem("price", path=str(root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}")))
+
+        def model_input_sources(self):
+            return ("price",)
+
+        def model_target(self):
+            return "label", "label"
+
+    loader = ResearchLoader(LoaderConfig(cache_path=str(tmp_path), data_start_ds=int(dates[1]),
+                                        sample_times=(100000, 110000), registry_cache_days=64))
+    alpha = pd.DataFrame(np.tile(np.arange(len(loader.mask.code)), (144, 1)),
+                         index=pd.MultiIndex.from_product([dates[1:73], loader.sample_times], names=["date", "time"]))
+    sample_inputs = {}
+    with cProfile.Profile() as profile:
+        result = calculate_alpha_ic(alpha, SimpleNamespace(loader=loader), sample_inputs=sample_inputs)
+    reads = sum(v[1] for (filename, _, name), v in pstats.Stats(profile).stats.items()
+                if filename.endswith("snap_labels.py") and name == "_load_frame")
+    assert reads == 20
+    assert (result["count"] == 2).all() and len(sample_inputs) == 144
+    for ti in loader.sample_times:
+        expected = load_snap_vwap_labels(tmp_path, ti, int(dates[0]), int(dates[71]))[1]
+        for offset, ds in enumerate(dates[1:73]):
+            target, valid = sample_inputs[(int(ds), ti)]
+            np.testing.assert_allclose(target[:2], expected.iloc[offset].to_numpy(dtype=np.float32), rtol=0, atol=0)
+            assert valid[:2].all() and not valid[2:].any()
+            np.testing.assert_allclose(result.loc[(ds, ti), "ic"], np.corrcoef([0., 1.], target[:2])[0, 1])

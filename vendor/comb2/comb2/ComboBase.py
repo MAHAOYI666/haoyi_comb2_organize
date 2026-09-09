@@ -18,7 +18,7 @@ from typing import Any
 import torch
 import numpy as np
 
-from .DataLoader import ComboDataLoader, ComboTrainDataset
+from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset
 
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
@@ -66,6 +66,10 @@ class ComboBase:
         self.loader = self.research_loader_cls(node.loader_config)
         self.loader.monitor = getattr(node, "monitor", None)
         self.loader.set_point(int(node.start_ds), self.sample_times[0])
+        self.buffer = {}
+        self.buffer_end_didx = {}
+        self._predict_feature_window = {}
+        self._predict_model_windows = {}
         self.model = None
         self.oldModel = None
         self.model_dt = -1
@@ -235,9 +239,45 @@ class ComboBase:
             return None
         return torch.as_tensor(trainii, dtype=torch.long)
 
+    def buffer_load(self, ds, ti):
+        end = self.loader.date2didx(ds)
+        start = end - self.tsDays + 1
+        previous = self.buffer_end_didx.get(ti)
+        if previous is None or end < previous or end - previous >= self.tsDays:
+            self.buffer[ti] = ComboBuffer(
+                (len(self.loader.mask.code), self.loader.num_features),
+                self.tsDays, self.loader.dtype, self.loader.codec,
+            )
+            first = start
+        else:
+            first = previous + 1
+            if self.livetrading:
+                first = min(first, end)
+        days = [self.loader.didx2date(i) for i in range(first, end + 1)]
+        self.loader.set_current_ti(ti)
+        width = self.loader.registry.cache_days
+        for offset in range(0, len(days), width):
+            chunk = days[offset:offset + width]
+            self.loader.prefetch_features(chunk)
+            for idx, day in enumerate(chunk, first + offset):
+                self.buffer[ti].append(self.loader.gen_feature(day, ti), idx)
+        if days:
+            self._predict_feature_window[ti] = self.buffer[ti].get(range(start, end + 1))
+            self._predict_model_windows = {
+                key: value for key, value in self._predict_model_windows.items() if key[0] != ti
+            }
+        self.buffer_end_didx[ti] = end
+
     def _predict_with_refill(self, model, feature_window, *, di, ti):
         trainii = self._model_trainii(model)
-        window = feature_window if trainii is None else feature_window.index_select(1, trainii)
+        key = (ti, id(model))
+        cached = self._predict_model_windows.get(key)
+        if cached is None or cached[0] is not model:
+            window = feature_window if trainii is None else feature_window.index_select(1, trainii)
+            self._predict_model_windows[key] = (model, window)
+        else:
+            window = cached[1]
+        window = self.loader.transform_feature_window(window, target_ti=ti, stage="predict")
         pred = torch.as_tensor(model.predict(window, di=di, ti=ti), dtype=self.loader.dtype)
         if trainii is None:
             assert pred.shape == (len(self.loader.mask.code),)
@@ -252,7 +292,8 @@ class ComboBase:
             self._clear_alpha()
             self._record_alpha(ds, ti)
             return None
-        window = self.loader.load_feature_window(ds, self.tsDays, ti)
+        self.buffer_load(ds, ti)
+        window = self._predict_feature_window[ti]
         pred = self._predict_with_refill(self.model, window, di=ds, ti=ti)
         if self.oldModel is not None and self.model_smooth_rate < 1:
             old = self._predict_with_refill(self.oldModel, window, di=ds, ti=ti)
@@ -264,6 +305,10 @@ class ComboBase:
         return self.node.alpha
 
     def Train(self, ds: int):
+        self.buffer.clear()
+        self.buffer_end_didx.clear()
+        self._predict_feature_window.clear()
+        self._predict_model_windows.clear()
         target_ds = self._train_target_ds(ds)
         target_didx = self.loader.date2didx(target_ds)
         loading_days = target_didx - self.loader.data_start_didx + 1
@@ -377,6 +422,7 @@ class ComboBase:
             return False
         self.model = None
         self.oldModel = None
+        self._predict_model_windows.clear()
         self._release_torch_cache("before_checkpoint_load")
         self.model = self.research_model_cls(self._model_config())
         self.model.load(model_path)

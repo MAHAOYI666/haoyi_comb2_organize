@@ -36,7 +36,7 @@ runCombo config.xml
 runEval config.xml
 ```
 
-在 ResearchLoader.data_requirements 中声明数据与 delay，在 process_source 中对分钟数据按时点降维。通过 model_input_sources、model_target 和 model_validity_source 选择 X、Y 及有效性字段。Python 数据路径相对研究员文件解析。
+在 ResearchLoader.data_requirements 中声明数据与 delay，在 process_source 中对分钟数据按时点降维。通过 model_input_sources、model_target 选择 X、Y；配置 cache_path 时默认交集使用 delay=1 的 BaseUnivMask、NoNewStockMask、LimitMask，model_validity_source 可显式替换默认筛选。Python 数据路径相对研究员文件解析。
 
 数据集返回 (idx, ds, ti, x, y, w)。x 是 [tsDays, stock, feature] 普通张量，窗口取过去 tsDays 个交易日的同一时点快照。模型实现 fit、predict(x_window, di=..., ti=...)、save、load。
 
@@ -50,6 +50,6 @@ alpha.parquet 使用 (date,time) 索引。runEval 使用研究员原始目标计
 
 ## 内存和监控
 
-<combo><loader compression="fp4" registry_cache_days="64" /></combo> 配置特征缓存。来源分块处理后释放原始数组，数据集按需组装窗口。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。
+<combo><loader compression="fp4" registry_cache_days="64" /></combo> 配置特征编码和源级 LRU 缓存。来源分块处理后释放原始数组，训练数据集一次性保存各时点的特征和标签，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。训练存储不受 registry_cache_days 限制，需按训练天数、时点数、股票数和特征数评估内存；源数据更新后需重建数据集。
 
 monitor 可记录读取、训练、预测和回测耗时及内存。长任务须按 cgroup 可用资源评估峰值。

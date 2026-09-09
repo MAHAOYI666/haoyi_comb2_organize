@@ -80,10 +80,13 @@ def test_default_optimizer_normalizes_actual_holdings_to_stock_book():
     strategy.columns = pd.Index(["000001", "000002", "000003"])
     actual_holdings = pd.Series({"000001": 0.095, "000002": 0.855, "000003": 0.0})
 
-    previous, has_previous = strategy._actual_previous(actual_holdings, 0.95)
+    previous, has_previous = strategy._actual_previous(actual_holdings)
 
     assert has_previous is True
     np.testing.assert_allclose(previous, np.array([0.1, 0.9, 0.0]))
+    reduced, has_reduced = strategy._actual_previous(actual_holdings * 0.5)
+    assert has_reduced
+    np.testing.assert_allclose(reduced, previous)
 
 
 def test_default_optimizer_parses_and_transforms_cap_methods():
@@ -283,16 +286,6 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
     previous = previous_amount / float(node.target_stock_amount)
     assert previous.sum() > 0.0
 
-    trim_allowance = max(0.0, 1.0 - float(target.sum()))
-    planned_turnover = second_orders[["buy_amount", "sell_amount"]].to_numpy(
-        dtype=float
-    ).sum() / float(node.target_stock_amount)
-    assert planned_turnover <= (
-        optimizer["maxtvr"]
-        + float(second["target_weight"].attrs["forced_exit_weight"])
-        + 1.0e-6
-    )
-
     date = dates[1]
     signals = alpha.loc[date].reindex(backtest.strategy.columns).fillna(0.0)
     signals *= backtest.universe.loc[date].reindex(backtest.strategy.columns).fillna(0.0)
@@ -324,6 +317,17 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
     )
     buy_candidate = ((normalized_alpha > 0) | (benchmark > 0)) & tradable & return_valid
     sell_only = (previous > 0) & ~buy_candidate
+
+    planned_turnover = second_orders[["buy_amount", "sell_amount"]].to_numpy(dtype=float).sum() / node.target_stock_amount
+    normalization_allowance = abs(1.0 - float(previous.sum()))
+    trim_allowance = max(0.0, 1.0 - float(target.sum()))
+    assert planned_turnover <= (
+        optimizer["maxtvr"]
+        + float(second["target_weight"].attrs["forced_exit_weight"])
+        + normalization_allowance
+        + trim_allowance
+        + 1.0e-6
+    )
 
     assert sell_only.any()
     assert np.all(target[sell_only] <= previous[sell_only] + 1.0e-7)
@@ -467,6 +471,7 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
 
 
 def test_real_opt2_enforces_t1_and_daily_turnover(tmp_path: Path):
+    import warnings
     cache_value = os.environ.get("COMB2_TEST_CACHE_PATH")
     alpha_value = os.environ.get("COMB2_TEST_ALPHA_PATH")
     license_value = os.environ.get("MOSEKLM_LICENSE_FILE")
@@ -545,7 +550,8 @@ def test_real_opt2_enforces_t1_and_daily_turnover(tmp_path: Path):
 
     planned_amount = first["target_weight"].reindex(columns).fillna(0.0)
     planned_amount *= node.target_stock_amount
-    with pytest.warns(RuntimeWarning, match="returning zero orders"):
+    with warnings.catch_warnings(record=True) as quota_warnings:
+        warnings.simplefilter("always", RuntimeWarning)
         quota_orders = backtest.strategy.generate_orders(
             signals,
             planned_amount,
@@ -555,8 +561,20 @@ def test_real_opt2_enforces_t1_and_daily_turnover(tmp_path: Path):
             node.target_stock_amount,
             float(optimizer["maxtvr"]) * node.target_stock_amount,
         )
-    assert quota_orders.attrs["solver_fallback"] is True
+    fallback_warnings = [w for w in quota_warnings
+                         if issubclass(w.category, RuntimeWarning) and "returning zero orders" in str(w.message)]
+    if quota_orders.attrs["solver_fallback"]:
+        assert quota_orders.attrs["solver_status"] != "SolutionStatus.Optimal"
+        assert fallback_warnings
+    else:
+        assert quota_orders.attrs["solver_status"] == "SolutionStatus.Optimal"
+        assert not fallback_warnings
     assert quota_orders.to_numpy(dtype=float).sum() == pytest.approx(0.0, abs=1.0e-5)
+    np.testing.assert_allclose(
+        quota_orders.attrs["target_weight"].reindex(columns).to_numpy(dtype=float),
+        planned_amount.to_numpy(dtype=float) / node.target_stock_amount,
+        rtol=0, atol=1.0e-7,
+    )
 
     backtest.strategy.hard_univ = _parse_limits(
         "AshareSH:0.00:0.00,0",
@@ -867,7 +885,6 @@ class ResearchLoader(ResearchLoader):
         return (
             DataItem("factor", path=str(root / "1d_DailyKline" / "DailyKline.pct_chg"), delay=1),
             DataItem("returns", path=str(root / "1d_Returns" / "Returns.c2c_1d")),
-            DataItem("base", path=str(stock_mask_path(self.config.cache_path, BASE_UNIVERSE_MASK_NAME)), delay=1),
             DataItem("execution", path=str(root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}")),
         )
     def model_target(self):

@@ -338,10 +338,9 @@ class AlphaStrategy(StrategyBase):
         return frame.iloc[row_pos].to_numpy(dtype=np.float64)
 
     def _actual_previous(
-        self, current_amount: pd.Series | None, target_stock_amount: float
+        self, current_amount: pd.Series | None
     ) -> tuple[np.ndarray, bool]:
         assert self.columns is not None
-        assert np.isfinite(target_stock_amount) and target_stock_amount > 0
         if current_amount is None:
             return np.zeros(len(self.columns), dtype=np.float64), False
         values = pd.to_numeric(
@@ -351,7 +350,7 @@ class AlphaStrategy(StrategyBase):
         total = float(values.sum())
         if total <= 0:
             return np.zeros(len(self.columns), dtype=np.float64), False
-        return values / target_stock_amount, True
+        return values / total, True
 
     def _benchmark(self, date: int) -> np.ndarray:
         benchmark = self.optimizer["benchmark"]
@@ -540,9 +539,13 @@ class AlphaStrategy(StrategyBase):
         market_sellable_values = market_sellable_series.to_numpy(dtype=bool)
         assert not (buyable_values & ~market_sellable_values).any()
         current_values = sellable_values + locked_values
-        previous, has_previous = self._actual_previous(
-            pd.Series(current_values, index=self.columns), target_stock_amount
-        )
+        if optimizer_type == "opt1":
+            previous, has_previous = self._actual_previous(
+                pd.Series(current_values, index=self.columns)
+            )
+        else:
+            previous = current_values / target_stock_amount
+            has_previous = float(current_values.sum()) > 0
         locked_weight = locked_values / target_stock_amount
         date = int(self.dataloader.date)
         signal_values = pd.to_numeric(signals.reindex(self.columns), errors="coerce").to_numpy(dtype=np.float64)

@@ -76,9 +76,9 @@ data_requirements 返回 DataItem 序列，复用来源时直接在 Python 导�
 
 model_input_sources 指定 X 来源及顺序；来源内部按处理结果 columns 的顺序拼接。feature_names 使用 source:column 标识最终特征列。来源可以同时用于输入和目标，缓存共用。
 
-model_target 返回 (source, column)。默认 gen_raw_target 读取该字段的 ds 行；研究员覆盖这个方法完成目标索引。IC 直接使用此方法的原始值。默认 gen_target 对 ds 开始连续 retDays 个原始目标按 retDays,...,1 加权，再调用 preprocess_target；数据集为聚合预留 retDays-1 个结束日。自定义目标聚合可覆盖 gen_target，并自行确保与研究目标一致。
+model_target 返回 (source, column)。默认 gen_raw_target 读取该字段的 ds 行；研究员覆盖这个方法完成目标索引。IC 直接使用此方法的原始值。固定日期偏移可通过来源的 delay 表达；prefetch_targets(days) 按逻辑日期分块预取目标及有效性来源，自定义目标索引需要在此方法中声明对应的预取日期。默认 gen_target 对 ds 开始连续 retDays 个原始目标按 retDays,...,1 加权，再调用 preprocess_target；数据集为聚合预留 retDays-1 个结束日。自定义目标聚合可覆盖 gen_target，并自行确保与研究目标一致。
 
-model_validity_source 可返回 (source, validity_fields, base_field)。有效性字段影响样本权重和最终信号，base_field 决定训练股票池。默认返回 None，表示研究员没有附加股票筛选。mask 同样是普通来源，可在 process_source 中由多个原始字段组合。
+配置 cache_path 时，model_validity_source 默认返回 None，启用 StockMask2.BaseUnivMask、StockMask2.NoNewStockMask 和 StockMask2.LimitMask 三种掩码的交集，均使用 delay=1，缺文件时直接报错。默认来源名称为 mask.base、mask.valid、mask.filtered；base 决定训练股票池，三种掩码共同决定标签权重、最终信号和 IC 的有效股票。不配置 cache_path 的独立 loader 不加载默认掩码。研究员可显式返回 (source, validity_fields, base_field) 替换默认筛选；mask 同样是普通来源，可在 process_source 中组合字段。
 
 ## Memmap 与源级降维
 
@@ -139,9 +139,9 @@ class ResearchModel:
 
 config 注入 dtype、tsDays、num_features、feature_names、sample_times。predict 返回 [stock] 张量或可转为张量的数组。模型可设置 trainii 为训练股票索引，框架筛选输入并将预测回填到完整股票轴。
 
-preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。默认按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 处理训练/预测窗口。
+preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
 
-数据集按需构建 X，使用有界特征缓存，不分配所有年份和时点的全量 X。none/fp4/fp8 使用现有 Codec；压缩只作用于特征缓存，来源、目标及成交价格保留其数值精度。大型训练仍需评估模型、batch 和数据缓存的合计峰值内存。
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。registry_cache_days 限制源级 LRU 缓存条目数，不限制训练数据集存储。大型训练需评估全量训练特征、标签、模型、batch 和数据缓存的合计峰值内存；源数据更新后需重建数据集。
 
 ## 日期口径与训练
 
@@ -201,7 +201,7 @@ monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sy
 
 - 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
 - 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对基准方差约束下求目标权重。
-- 换手基准来自回测已真实成交的股数持仓；先按当日价格换算为市值，再剔除现金并归一化到股票 book。当前不可买的已有持仓仍进入候选集，但只能维持或减仓。
+- 换手基准来自回测已真实成交的股数持仓，按当前估值换算为市值。opt1 将已有持仓除以实际股票持仓总额；opt2 除以当天目标股票预算。当前不可买的已有持仓仍进入候选集，但只能维持或减仓；不可交易持仓固定在实际金额。
 - 基准指数权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认基准为中证 500，收益、指数、universe 和风险因子 delay 均为 `1`。
 - 缺数据、候选数不足、许可证不可用或 MOSEK 调用失败时直接报错；MOSEK 正常完成但没有返回 `Optimal` 解时维持上一日实际股票 book，首日无持仓时保持空仓，并输出 RuntimeWarning。
 
