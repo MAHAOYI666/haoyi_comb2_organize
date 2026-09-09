@@ -19,7 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from comb2 import FeatureGroups
+from comb2 import ComboDataLoader, DataItem
 
 
 class Model(nn.Module):
@@ -107,11 +107,10 @@ TrainLoss = ICLoss
 class ResearchModel:
     def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.freq = str(config.get("freq", "1d"))
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 8))
-        self.num_features = int(config.get("num_features_by_freq", {}).get("1d", config.get("num_features", 1)))
-        self.target_times = tuple(int(value) for value in config.get("target_times", ()))
+        self.num_features = int(config["num_features"])
+        self.sample_times = tuple(int(value) for value in config.get("sample_times", ()))
         self.device = torch.device(config.get("device", "cpu"))
         adaptive_hidden_size = max(64, self.num_features * 8)
         self.hidden_size = int(config.get("hidden_size", adaptive_hidden_size))
@@ -152,7 +151,7 @@ class ResearchModel:
             hidden_size=self.hidden_size,
             fc_size=self.fc_size,
             trainii=trainii,
-            time_embedding_size=None if self.freq == "1d" else len(self.target_times) + 1,
+            time_embedding_size=len(self.sample_times) + 1,
             dropout=self.dropout,
         )
         return model.to(self.device)
@@ -161,14 +160,10 @@ class ResearchModel:
         return next(iterator)
 
     def _batch_to_device(self, *batch):
-        if self.freq == "1d":
-            x, y, w = batch
-            bar_id = None
-        else:
-            ti, x, y, w = batch
-            bar_id = torch.as_tensor(
-                [self.target_times.index(int(value)) + 1 for value in ti], dtype=torch.long
-            ).to(self.device, non_blocking=True)
+        ti, x, y, w = batch
+        bar_id = torch.as_tensor(
+            [self.sample_times.index(int(value)) + 1 for value in ti], dtype=torch.long
+        ).to(self.device, non_blocking=True)
         return (
             bar_id,
             x.to(self.device, dtype=torch.float32, non_blocking=True),
@@ -179,8 +174,8 @@ class ResearchModel:
     def _zero_grad(self, optimizer):
         optimizer.zero_grad(set_to_none=True)
 
-    def _forward_batch(self, x: FeatureGroups, bar_id: torch.Tensor | None) -> torch.Tensor:
-        return self.model(x["1d"], bar_id)
+    def _forward_batch(self, x: torch.Tensor, bar_id: torch.Tensor | None) -> torch.Tensor:
+        return self.model(x, bar_id)
 
     def _compute_loss(self, pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         return self.loss_fn(pred, y, w)
@@ -228,12 +223,8 @@ class ResearchModel:
                     batch = self._next_batch(iterator)
                 except StopIteration:
                     break
-                if self.freq == "1d":
-                    _, x, y, w = batch
-                    bar_id, x, y, w = self._batch_to_device(x, y, w)
-                else:
-                    _, _, ti, x, y, w = batch
-                    bar_id, x, y, w = self._batch_to_device(ti, x, y, w)
+                _, _, ti, x, y, w = batch
+                bar_id, x, y, w = self._batch_to_device(ti, x, y, w)
                 self._zero_grad(optimizer)
                 pred = self._forward_batch(x, bar_id)
                 loss = self._compute_loss(pred, y, w)
@@ -263,20 +254,17 @@ class ResearchModel:
 
     @torch.no_grad()
     def predict(
-        self, x_window: FeatureGroups, *, di: int | None = None, ti: int | None = None
+        self, x_window: torch.Tensor, *, di: int | None = None, ti: int | None = None
     ) -> torch.Tensor:
         if self.model is None:
             raise ValueError("model is not fitted")
-        x_1d = x_window["1d"]
+        x_1d = x_window
         if x_1d.dim() != 3:
             raise ValueError(f"expected 3D 1d feature tensor, got shape={tuple(x_1d.shape)}")
         self.model.eval()
         x = x_1d.unsqueeze(0).to(self.device, dtype=torch.float32)
-        if self.freq == "1d":
-            bar_id = None
-        else:
-            assert di is not None and ti is not None
-            bar_id = torch.tensor([self.target_times.index(int(ti)) + 1], device=self.device)
+        assert di is not None and ti is not None
+        bar_id = torch.tensor([self.sample_times.index(int(ti)) + 1], device=self.device)
         pred = self.model(x, bar_id).squeeze(0)
         return pred.detach().cpu().to(dtype=self.dtype)
 
@@ -298,6 +286,38 @@ class ResearchModel:
         self.model.eval()
         return self
 
+
+from pathlib import Path
+from comb2 import ComboDataLoader, DataItem
+from comb2_simbase.cache_layout import ashare_cache_path, stock_mask_path, BASE_UNIVERSE_MASK_NAME
+
+
+class ResearchLoader(ComboDataLoader):
+    """Same-time daily factors and the researcher-indexed snapshot label."""
+
+    def data_requirements(self):
+        root = ashare_cache_path(self.config.cache_path)
+        return (
+            DataItem("factor", path="factors/example", delay=1),
+            DataItem("label", module="builtin.snap_label"),
+            DataItem("base", path=str(stock_mask_path(self.config.cache_path, BASE_UNIVERSE_MASK_NAME)), delay=1),
+            DataItem("execution", path=str(root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}")),
+        )
+
+    def model_input_sources(self):
+        return ("factor",)
+
+    def model_target(self):
+        return "label", "label"
+
+    def model_validity_source(self):
+        return "base", ("base",), "base"
+
+    def gen_raw_target(self, ds, ti):
+        self.set_current_ti(ti)
+        label_ds = self.previous_date(ds)
+        return self.source_field(*self.model_target(), label_ds, label_ds)[0].float()
+
 '''
 
 
@@ -306,7 +326,7 @@ CONFIG_TEMPLATE = '''
   <constants
     cache_path="data/Cache"
     output_root="output"
-    freq="1d"
+
   />
 
   <strategy
@@ -320,6 +340,7 @@ CONFIG_TEMPLATE = '''
       ret_days="60"
       ret_delay="1"
       ret_method="2"
+      benchmark="000905.SH"
       benchmark_delay="1"
       target_size="100000000.0"
       maxtvr="0.4"
@@ -353,7 +374,7 @@ CONFIG_TEMPLATE = '''
     <paths
       model_path="Model.py"
       combo_base_path=""
-      research_loader_path=""
+      research_loader_path="Model.py"
       research_dataset_path=""
     />
 
@@ -363,9 +384,9 @@ CONFIG_TEMPLATE = '''
 
     <runtime
       snaptime="mlp_minimal"
-      snap_ti=""
+      sample_times="100000"
       livetrading="false"
-      trainDelay="0"
+      trainDelay="2"
       retDays="1"
       tsDays="8"
       load_chunk_days=""
@@ -390,17 +411,7 @@ CONFIG_TEMPLATE = '''
       early_stopping_patience="5"
     />
 
-    <data
-      dtype="float16"
-      compression="none"
-      data_start_ds="20160101"
-    >
-      <!-- Factor paths can be absolute or relative to this config.xml. -->
-      <item name="factor.example_factor" path="example_factor" role="factor" display_name="example_factor" />
-
-      <!-- Daily labels resolve under constants.cache_path/AshareCache/1d_DailyLabel. -->
-      <item name="label.example_label_1d" path="vwap30_label1d" role="label" />
-    </data>
+    <loader dtype="float16" compression="none" data_start_ds="20160101" />
 
   </combo>
 
@@ -411,7 +422,7 @@ CONFIG_TEMPLATE = '''
     reserve_cash="0.95"
     verbose="false"
     universe="base"
-    execution_price="vwap30"
+    execution_price="execution:execution"
     drawdown_stop="0.0"
     cooldown_days="0"
   />
@@ -477,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
         path.write_text(content, encoding="utf-8")
         print(f"created {path}")
 
-    print("next: edit config.xml data paths, then run: runCombo config.xml")
+    print("next: edit ResearchLoader.data_requirements() in Model.py and config.xml, then run: runCombo config.xml")
     return 0
 
 

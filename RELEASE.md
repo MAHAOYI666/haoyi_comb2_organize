@@ -3,24 +3,55 @@
 The repository-root `VERSION` file is the single source of truth for the wheel
 version. This file records release notes, published artifacts, and install targets.
 
-## Current Release
+## Current Version
 
-- Version: `0.1.10`
-- Release date: `2026-09-02`
+- Version: `1.0.1`
+- Version date: `2026-09-07`
 - Package name: `combo2`
-- Protected wheel: `dist_protected/combo2-0.1.10-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.1-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Installed target in this workspace: `python3` (`Python 3.13.11`), package `combo2 0.1.10`
+- Status: source version updated; the `1.0.1` wheel has not yet been built or published.
 
-Install the current wheel:
+Build and install this version:
 
 ```bash
-python -m pip install dist_protected/combo2-0.1.10-cp313-cp313-linux_x86_64.whl
+python packaging/build_protected_wheel.py --python python3.13
+python -m pip install dist_protected/combo2-1.0.1-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
-No unreleased changes.
+Execution and valuation fixes:
+
+- Build one point-in-time buyable/market-sellable contract from raw execution prices and factorsim base, limit, and suspension masks. The optimizer freezes non-tradable holdings at their actual amount, and execution fails on any order outside the corresponding pool instead of silently skipping it.
+- Stop forward-filling VWAP/open execution prices. Continue marking temporary suspensions at the last valid close, but use factorsim `StockMask2.StockListedDays` transitions to write off confirmed legacy delistings at zero before optimization.
+- Record zero-value delisting events in `settlements.csv` and expose daily delisting counts and write-offs in backtest metrics. Custom strategies now receive explicit `buyable_mask` and `market_sellable_mask` arguments.
+
+## 1.0.0
+
+Research interfaces:
+
+- Declare ordinary Memmap sources in `ResearchLoader.data_requirements()`. Source paths are relative to the defining Python file; each source has an explicit nonnegative trading-day `delay`, applied once during reading.
+- Use `process_source(source, loaded)` for sampling-time selection, dimensionality reduction, and derived feature columns. Its result is `[date, stock, feature]`; raw minute/bar arrays are released after processing.
+- Select model inputs, target fields, and validity fields in `model_input_sources()`, `model_target()`, and `model_validity_source()`. Researchers index label/returns fields in the loader and remain responsible for target observability at the configured training cutoff.
+- Use `runtime.sample_times` for both single-time and intraday runs. A history window contains the same sampling time across `tsDays` trading days. Dataset samples are `(idx, ds, ti, x, y, w)`, and `predict(x_window, di=..., ti=...)` receives a plain `[tsDays, stock, feature]` tensor.
+- Replace XML data declarations, `role`, frequency-grouped inputs, `FeatureGroups`, and `GroupCodec` with the Python source and array interfaces. Reading settings belong under `<combo><loader>`. Existing research projects must update their declarations, sample unpacking, and prediction signatures; interface examples are in [config.human](config.human).
+- Retain training scheduling, `trainDelay`, checkpoint IO, and model smoothing. Feature windows are built on demand using bounded caches and chunked prefetch; FP4/FP8 codecs operate on tensors without quantizing source prices or targets. Torch and LightGBM examples preserve their declared factor lists in Python.
+
+Execution and evaluation:
+
+- Set `backtest.execution_price="source:column"` to select a researcher-provided execution price. Multiple intraday sample times require `opt2`; execution-window consistency is owned by the researcher.
+- Preserve cash, actual holdings, T+1 locked shares, the daily budget, and cumulative executed turnover across intraday steps. Unlock and reset daily state only when the trading day changes, and settle daily PnL once at the final configured time.
+- Record timestamped orders and fills in `executions.csv`, timestamped target positions, and daily execution metrics. Include the initial trading day's PnL and fees in performance summaries.
+- Evaluate `(date, time)` alpha with the research loader's raw target and validity definitions. Report per-time IC, target deciles, Barra/CAP exposures, and PnL from actual execution records. Configuration evaluation no longer accepts separate CLI label overrides.
+- Preserve sampling times when reading CSV/Parquet matrices for correlation and exposure; correlation lookbacks continue to count trading days.
+- Added `strategy.optimizer.benchmark`, defaulting to `000905.SH`, so optimizer risk, industry, and relative-variance calculations can use a configured index without changing the independent `ZZ500` universe constraints or backtest reporting benchmark.
+
+Integration and fixes:
+
+- Handle partially written intraday Memmap indexes under pandas 3 and refresh live source/feature caches at the current point. Skip invalid or nonpositive execution prices.
+- Resolve researcher loader/dataset paths and cache paths when Optuna renders trial configs. Exclude generated build directories from package discovery during repeated protected-wheel builds.
+- Update the starter, examples, researcher documentation, evaluation commands, and package exports together. Source validation includes 104 passing regression tests (10 conditional skips), plus a real two-day/four-time Torch–MOSEK execution and evaluation pipeline, T+1 and exhausted-turnover checks, live/historical prediction consistency, and protected-wheel installation checks performed before the version bump.
 
 ## 0.1.10
 

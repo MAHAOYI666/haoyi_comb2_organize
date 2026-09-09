@@ -4,7 +4,7 @@
 
 这个框架本身只负责“改 XML 参数并评估结果”。真正模型能不能跑，取决于 baseline XML 指向的 comb2 模型是否能被 `runCombo.py` 正常执行。
 
-当前 Optuna 目标函数读取日频回测的 `daily_pnl.csv` 和 `pnl_summary.csv`，因此 baseline 必须使用 `constants.freq="1d"`。`5m`/`1m` 模式不调用日频回测，不能直接用于这套搜索和筛选流程。
+Optuna 目标函数读取实际成交日终汇总 `daily_pnl.csv` 和 `pnl_summary.csv`。baseline 可使用一个或多个 sample_times，多时点回测使用 opt2。数据在 ResearchLoader 中声明，渲染器将研究员代码路径和 cache_path 解析为绝对路径，保证 trial 的数据基准一致。
 
 所有命令请在有完整因子运行环境的远程实例、仓库根目录下执行。下面统一用 `python` 表示当前运行环境的 Python 入口。
 
@@ -124,7 +124,7 @@ optuna_runs/<study.name>/
 <baseline config_path="eg-torch/config_hybrid_tcn.xml" />
 ```
 
-这个 XML 必须显式设置 `constants.freq="1d"` 并能直接跑通 `runCombo.py`。所有 trial config 都从它复制并打补丁。
+这个 XML 必须能直接跑通 `runCombo.py`，并提供实际成交日报。所有 trial config 都从它复制并打补丁。
 
 ### 1.3 训练和评分窗口
 

@@ -49,82 +49,26 @@ def test_snapshot_labels_use_matching_price_field_formula_and_mask(tmp_path: Pat
     assert labels[5].iloc[0, 1] == 0.0
 
 
-def test_config_routes_default_training_label_to_snapshot_source(tmp_path: Path):
-    config_path = tmp_path / "config.xml"
-    config_path.write_text(
-        """
-<config>
-  <constants cache_path="cache" output_root="output" />
-  <combo>
-    <runtime snap_ti="100000" />
-    <data>
-      <item name="factor.close" module="builtin.factorsim" path="factor" role="factor" />
-      <item name="label.default" module="builtin.factorsim" path="vwap30_label1d" role="label" />
-    </data>
-  </combo>
-</config>
-""",
-        encoding="utf-8",
-    )
-
-    loaded = load_config(str(config_path))
-    label = next(item for item in loaded["combo"]["loader"]["data_items"] if item["role"] == "label")
-
-    assert label["module"] == "builtin.snap_label"
-    assert label["path"] is None
-    assert label["params"]["snap_ti"] == 100000
-
-
-def test_registry_loads_snapshot_label_for_training(monkeypatch, tmp_path: Path):
-    dates = (20240102, 20240103)
-    codes = ("000001", "000002")
-    expected = pd.DataFrame([[0.1, 0.2], [0.3, 0.4]], index=dates, columns=codes)
-    data_registry = importlib.import_module("comb2.DataRegistry")
-    calls = []
-
-    def fake_load(cache_path, snap_ti, start_ds, end_ds):
-        calls.append((Path(cache_path), snap_ti, start_ds, end_ds))
-        return {1: expected, 5: expected}
-
-    monkeypatch.setattr(data_registry, "load_snap_vwap_labels", fake_load)
+def test_registry_snapshot_label_is_an_ordinary_source(tmp_path):
+    from comb2.DataRegistry import FactorsimReader
+    dates = np.array([20240102,20240103,20240104,20240105,20240108,20240109,20240110])
+    codes = np.array(["000001","000002"], dtype=object)
+    root = tmp_path / "AshareCache"
+    prices = np.arange(14).reshape(7,2) + 10.
+    for relative, values in (
+        ("1d_IntraVwap/IntraVwap.Vwap30.100000", prices),
+        ("1d_DailyKline/DailyKline.close_hfq", prices + 1),
+        ("1d_DailyKline/DailyKline.adj_factor", np.ones_like(prices)),
+        ("1d_StockMask2/StockMask2.BaseUnivMask", np.ones_like(prices)),
+        ("1d_StockMask2/StockMask2.LimitMask", np.ones_like(prices)),
+    ):
+        _write_memmaper2(root / relative, values, dates, codes)
     registry = DataRegistry(
-        (DataItem(name="label.default", module="builtin.snap_label", role="label", params={"snap_ti": 100000}),),
-        universe=Universe(dates=dates, codes=codes, dtype=torch.float32),
-        data_start_ds=dates[0],
-        ashare_cache_path=str(tmp_path / "cache" / "AshareCache"),
-        config_path=None,
+        (DataItem("y", module="builtin.snap_label"),),
+        universe=Universe(tuple(dates), tuple(codes), torch.float32),
+        data_start_ds=int(dates[0]), ashare_cache_path=str(root),
     )
-
-    actual = registry.get_data("label.default", dates[0], dates[-1])
-
-    assert calls == [(tmp_path / "cache", 100000, dates[0], dates[-1])]
-    np.testing.assert_allclose(actual.numpy(), expected.to_numpy())
-
-
-def test_config_evaluation_uses_snapshot_labels_without_explicit_overrides(tmp_path: Path):
-    output_root = tmp_path / "output"
-    output_root.mkdir()
-    pd.DataFrame([[1.0]], index=[20240102], columns=["000001"]).to_parquet(output_root / "alpha.parquet")
-    config = {
-        "constants": {"cache_path": str(tmp_path / "cache"), "output_root": str(output_root)},
-        "combo": {"runtime": {"snap_ti": 100000}},
-        "backtest": {"cash": 1e7, "fee_rate": 0.0},
-    }
-
-    artifacts = _resolve_artifacts(
-        tmp_path / "config.xml",
-        config,
-        report_dir=None,
-        plot_path=None,
-        label_path=None,
-        label_5d_path=None,
-        label_is_table=False,
-        label_5d_is_table=False,
-        label_df_type=True,
-        booksize=None,
-        tradecost_ratio=None,
-    )
-
-    assert artifacts.snap_ti == 100000
-    assert artifacts.label_path is None
-    assert artifacts.label_5d_path is None
+    registry.set_current_ti(100000)
+    actual = registry.get_field("y","y",20240102,20240103)
+    expected = load_snap_vwap_labels(tmp_path,100000,20240102,20240103)[1]
+    np.testing.assert_allclose(actual, expected)

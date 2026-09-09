@@ -52,13 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-dir", help="For overall mode, directory for eval artifacts; defaults to <output_root>/eval_report")
     parser.add_argument("--plot-output", help="For overall mode, path for the signal analysis long image")
     parser.add_argument("--pnlzz500", help="Optional benchmark pnl path")
-    parser.add_argument("--label", "--label-1d", dest="label", help="For overall mode, 1d forward-return label path for PNL/IC/decile calculation")
-    parser.add_argument("--label-5d", help="For overall mode, 5d forward-return label path for IC calculation")
-    parser.add_argument("--label-is-table", "--label-1d-is-table", dest="label_is_table", action="store_true", help="For overall mode, read --label as csv/tsv/parquet instead of Memmaper2 cache")
-    parser.add_argument("--label-5d-is-table", action="store_true", help="For overall mode, read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
-    parser.add_argument("--label-df-type", default="true", help="For overall mode, df_type passed to Memmaper2.load for label paths")
-    parser.add_argument("--booksize", type=float, help="For overall/va mode, booksize for generated evaluation metrics")
-    parser.add_argument("--tradecost-ratio", type=float, help="For overall mode, cost multiplier; cost = tradevalue * 0.003 * ratio")
+    parser.add_argument("--booksize", type=float, help="For --va, booksize used to normalize PnL")
     parser.add_argument("--normalize-names", action="store_true", help="For --sim, map ic/5dic to 1d_IC/5d_IC names")
     parser.add_argument("--corr-days", type=int, default=240, help="For --corr, use only the most recent N overlapping dates; default 240")
     parser.add_argument("--min-valid", type=int, default=1000, help="For --corr, minimum nonzero overlapping instruments per day")
@@ -124,13 +118,6 @@ def run_overall(args: argparse.Namespace) -> int:
         report_dir=args.report_dir,
         plot_path=args.plot_output,
         pnlzz500_path=args.pnlzz500,
-        label_path=args.label,
-        label_5d_path=args.label_5d,
-        label_is_table=args.label_is_table,
-        label_5d_is_table=args.label_5d_is_table,
-        label_df_type=_parse_df_type(args.label_df_type),
-        booksize=args.booksize,
-        tradecost_ratio=args.tradecost_ratio,
         start=args.start,
         end=args.end,
         skip_deciles=args.skip_deciles,
@@ -180,13 +167,22 @@ def run_pnl(args: argparse.Namespace) -> int:
 def run_exposure(args: argparse.Namespace) -> int:
     _reject_config_for_single_mode(args, "--exposure")
     signal = read_matrix(args.exposure, start=args.start, end=args.end)
-    exposure = compute_barra_style_exposure(
-        signal,
-        start_ds=int(args.start) if args.start is not None else None,
-        end_ds=int(args.end) if args.end is not None else None,
-        mode=args.exposure_mode,
-        cache_path=_resolve_cache_path(args),
-    )
+    results = []
+    times = signal.index.hour * 10000 + signal.index.minute * 100 + signal.index.second
+    for ti, frame in signal.groupby(times):
+        frame = frame.copy()
+        frame.index = frame.index.normalize()
+        result = compute_barra_style_exposure(
+            frame,
+            start_ds=int(args.start) if args.start is not None else None,
+            end_ds=int(args.end) if args.end is not None else None,
+            mode=args.exposure_mode,
+            cache_path=_resolve_cache_path(args),
+        )
+        seconds = (int(ti) // 10000) * 3600 + (int(ti) // 100 % 100) * 60 + int(ti) % 100
+        result.index = pd.to_datetime(result.index.astype(str)) + pd.to_timedelta(seconds, unit="s")
+        results.append(result)
+    exposure = pd.concat(results).sort_index()
     _write_frame_if_requested(exposure, args.output)
     summary = summarize_exposure(exposure)
     text = output_frame_to_text(summary)

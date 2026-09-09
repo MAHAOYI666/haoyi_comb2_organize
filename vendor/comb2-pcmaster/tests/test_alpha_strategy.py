@@ -49,7 +49,10 @@ def make_strategy() -> AlphaStrategy:
 
 def generate_orders(signals: pd.Series) -> pd.DataFrame:
     zero = pd.Series(0.0, index=signals.index)
-    return make_strategy().generate_orders(signals, zero, zero, 100.0, 0.0)
+    tradable = pd.Series(True, index=signals.index)
+    return make_strategy().generate_orders(
+        signals, zero, zero, tradable, tradable, 100.0, 0.0
+    )
 
 
 def test_generate_orders_longs_above_cross_section_median():

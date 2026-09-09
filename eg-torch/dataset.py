@@ -8,7 +8,7 @@ from comb2 import ComboTrainDataset
 class ResearchDataset(ComboTrainDataset):
     """eg-torch train dataset scaffold.
 
-    Default sample format is kept as (idx, x, y, w), which is what model.py expects.
+    Samples are (idx, ds, ti, x, y, w), with a tensor history window.
     """
 
     def _build_validinsts(self) -> torch.Tensor:

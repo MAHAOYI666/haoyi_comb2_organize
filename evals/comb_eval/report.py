@@ -132,147 +132,95 @@ def run_config_evaluation(
     skip_deciles: bool = False,
     skip_exposure: bool = False,
 ) -> ConfigEvalResult:
+    assert label_path is None and label_5d_path is None, "define evaluation targets in ResearchLoader"
+    import torch
+    import runCombo
+    import matplotlib.pyplot as plt
+
     config = _load_organize_config(config_path)
-    eval_start = start or _strategy_date(config, "start_ds")
-    eval_end = end or _strategy_date(config, "end_ds")
     artifacts = _resolve_artifacts(
-        Path(config_path).expanduser().resolve(),
-        config,
-        report_dir=report_dir,
-        plot_path=plot_path,
-        label_path=label_path,
-        label_5d_path=label_5d_path,
-        label_is_table=label_is_table,
-        label_5d_is_table=label_5d_is_table,
-        label_df_type=label_df_type,
-        booksize=booksize,
-        tradecost_ratio=tradecost_ratio,
+        Path(config_path).expanduser().resolve(), config,
+        report_dir=report_dir, plot_path=plot_path, label_path=None, label_5d_path=None,
+        label_is_table=False, label_5d_is_table=False, label_df_type=label_df_type,
+        booksize=booksize, tradecost_ratio=tradecost_ratio,
     )
     artifacts.report_dir.mkdir(parents=True, exist_ok=True)
-
-    messages: list[str] = []
-    alpha = _read_alpha(artifacts.alpha_path, start=eval_start, end=eval_end)
-    if alpha.empty:
-        raise ValueError(f"alpha has no rows after date filtering: {artifacts.alpha_path}")
-
-    snap_labels = None
-    if artifacts.snap_ti is not None and (artifacts.label_path is None or artifacts.label_5d_path is None):
-        start_ds = int(normalize_date_index(alpha).index.min().strftime("%Y%m%d"))
-        end_ds = int(normalize_date_index(alpha).index.max().strftime("%Y%m%d"))
-        snap_labels = load_snap_vwap_labels(artifacts.cache_path, artifacts.snap_ti, start_ds, end_ds)
-    label_1d = (
-        snap_labels[1]
-        if artifacts.label_path is None
-        else _read_label_for_signal(alpha, artifacts, path=artifacts.label_path, is_table=artifacts.label_is_table)
-    )
-    label_5d = (
-        snap_labels[5]
-        if artifacts.label_5d_path is None
-        else _read_label_for_signal(alpha, artifacts, path=artifacts.label_5d_path, is_table=artifacts.label_5d_is_table)
-    )
-    evaluation_mask = load_evaluation_mask(alpha, artifacts.cache_path)
-    alpha, label_1d, label_5d = align_and_mask_evaluation_inputs(alpha, label_1d, label_5d, evaluation_mask)
-    daily_ic = calculate_daily_ic_from_signal(alpha, label_1d, label_5d)
-    daily_pnl = calculate_daily_pnl_from_signal(
-        alpha,
-        label_1d,
-        booksize=artifacts.booksize,
-        tradecost_ratio=artifacts.tradecost_ratio,
-    )
-
-    ic_result = summarize_ic(daily_ic, start=eval_start, end=eval_end, normalize_names=True)
-    pnl_result = summarize_pnl_with_benchmark(daily_pnl, pnlzz500_path, start=eval_start, end=eval_end)
-    ic_summary = ic_result.table if ic_result is not None else None
-    pnl_summary = pnl_result.table if pnl_result is not None else None
-    ic_checks = evaluate_result(ic_result) if ic_result is not None else None
-    pnl_checks = evaluate_result(pnl_result) if pnl_result is not None else None
-
-    decile_daily: dict[str, pd.DataFrame] = {}
+    alpha = pd.read_parquet(artifacts.alpha_path)
+    assert isinstance(alpha.index, pd.MultiIndex) and alpha.index.nlevels == 2
+    dates = alpha.index.get_level_values(0).astype(int)
+    lo = int(str(start).replace("-", "")) if start else config["strategy"]["start_ds"]
+    hi = int(str(end).replace("-", "")) if end else config["strategy"]["end_ds"]
+    alpha = alpha.loc[(dates >= lo) & (dates <= hi)].sort_index()
+    assert not alpha.empty, "no alpha samples in evaluation range"
+    node = runCombo.Node(config)
+    combo = runCombo.load_combo_base_class(config["combo"])(node)
+    ic = runCombo.calculate_alpha_ic(alpha, combo)
+    ic_summary = ic.groupby(level="time")["ic"].agg(["mean", "std", "count"])
+    ic.to_csv(artifacts.report_dir / "daily_ic.csv")
+    daily_path = Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]
+    daily = pd.read_csv(daily_path).set_index("date")
+    daily = daily.loc[(daily.index >= lo) & (daily.index <= hi)]
+    assert not daily.empty
+    initial_asset = float(daily.total_asset.iloc[0] - daily.pnl.iloc[0])
+    returns = daily.total_asset.pct_change()
+    returns.iloc[0] = daily.pnl.iloc[0] / initial_asset
+    equity = np.r_[initial_asset, daily.total_asset.to_numpy()]
+    drawdown = equity / np.maximum.accumulate(equity) - 1
+    pnl_summary = pd.DataFrame([{
+        "days": len(daily), "pnl": daily.pnl.sum(),
+        "return_pct": (daily.total_asset.iloc[-1] / initial_asset - 1) * 100,
+        "sharpe": returns.mean() / returns.std() * np.sqrt(250) if returns.std() > 0 else np.nan,
+        "max_drawdown_pct": drawdown.min() * 100,
+        "trade_cost": daily.trade_cost.sum(), "turnover_mean": daily.tvr.mean(),
+    }], index=["actual_execution"])
     decile_summary = None
-    top10_excess = None
-    if skip_deciles:
-        messages.append("decile backtest skipped by --skip-deciles")
-    else:
-        try:
-            decile_daily = calculate_decile_daily_pnls(
-                alpha,
-                label_1d,
-                booksize=artifacts.booksize,
-                tradecost_ratio=artifacts.tradecost_ratio,
-            )
-            decile_summary = summarize_decile_daily_pnls(decile_daily, start=eval_start, end=eval_end)
-            top10_excess = compute_top10_excess(decile_daily, daily_pnl, artifacts.booksize)
-        except Exception as exc:  # pragma: no cover - depends on local data/cache availability
-            messages.append(f"decile backtest unavailable: {exc}")
-
+    if not skip_deciles:
+        layers = []
+        for (ds, ti), row in alpha.iterrows():
+            target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
+            valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
+            values = row.to_numpy(dtype=float)
+            valid &= np.isfinite(values) & np.isfinite(target)
+            selected = np.flatnonzero(valid)
+            buckets = pd.qcut(values[selected], 10, labels=False, duplicates="drop") if len(selected) else np.array([])
+            complete = len(np.unique(buckets[np.isfinite(buckets)])) == 10
+            for layer in range(1, 11):
+                indices = selected[buckets == layer - 1] if complete else np.array([], dtype=int)
+                layers.append((ti, layer, float(target[indices].mean()) if len(indices) else np.nan))
+        decile_summary = pd.DataFrame(layers, columns=["time", "decile", "target_mean"]).groupby(["time", "decile"]).mean()
     exposure_summary = None
     cap_corr_summary = None
-    if skip_exposure:
-        messages.append("Barra exposure and CAP correlation skipped by --skip-exposure")
-    else:
-        try:
-            exposure = compute_barra_style_exposure(
-                alpha,
-                start_ds=int(eval_start) if eval_start is not None else None,
-                end_ds=int(eval_end) if eval_end is not None else None,
-                mode=0,
-                cache_path=artifacts.cache_path,
-            )
-            exposure_summary = summarize_exposure(exposure)
-        except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
-            messages.append(f"Barra exposure unavailable: {exc}")
-        try:
-            cap_corr = compute_cap_corr(
-                alpha,
-                start_ds=int(eval_start) if eval_start is not None else None,
-                end_ds=int(eval_end) if eval_end is not None else None,
-                cache_path=artifacts.cache_path,
-            )
-            cap_corr_summary = summarize_cap_corr(cap_corr)
-        except Exception as exc:  # pragma: no cover - depends on local AshareCache availability
-            messages.append(f"CAP correlation unavailable: {exc}")
-
+    if not skip_exposure:
+        exposures, caps = [], []
+        for ti, frame in alpha.groupby(level=1):
+            signal = frame.droplevel(1)
+            exposure = compute_barra_style_exposure(signal, start_ds=lo, end_ds=hi, mode=0, cache_path=artifacts.cache_path)
+            exposures.append(pd.concat({ti: summarize_exposure(exposure)}, names=["time"]))
+            cap = compute_cap_corr(signal, start_ds=lo, end_ds=hi, cache_path=artifacts.cache_path)
+            caps.append(pd.concat({ti: summarize_cap_corr(cap)}, names=["time"]))
+        exposure_summary = pd.concat(exposures)
+        cap_corr_summary = pd.concat(caps)
+    messages = ["IC and deciles use ResearchLoader.gen_raw_target; PnL uses actual execution and daily settlement."]
     _write_outputs(
-        artifacts,
-        ic_summary=ic_summary,
-        pnl_summary=pnl_summary,
-        ic_checks=ic_checks,
-        pnl_checks=pnl_checks,
-        decile_summary=decile_summary,
-        exposure_summary=exposure_summary,
-        cap_corr_summary=cap_corr_summary,
-        top10_excess=top10_excess,
-        messages=messages,
-        start=eval_start,
-        end=eval_end,
+        artifacts, ic_summary=ic_summary, pnl_summary=pnl_summary,
+        ic_checks=None, pnl_checks=None, decile_summary=decile_summary,
+        exposure_summary=exposure_summary, cap_corr_summary=cap_corr_summary,
+        top10_excess=None, messages=messages, start=str(lo), end=str(hi),
     )
-    plot_signal_analysis(
-        artifacts.plot_path,
-        alpha=alpha,
-        daily_ic=daily_ic,
-        daily_pnl=daily_pnl,
-        ic_summary=ic_summary,
-        pnl_summary=pnl_summary,
-        decile_daily=decile_daily,
-        decile_summary=decile_summary,
-        exposure_summary=exposure_summary,
-        cap_corr_summary=cap_corr_summary,
-        top10_excess=top10_excess,
-        messages=messages,
-        booksize=artifacts.booksize,
-    )
-
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+    for ti, frame in ic.groupby(level="time"):
+        axes[0].plot(pd.to_datetime(frame.index.get_level_values(0).astype(str)), frame.ic, label=str(ti))
+    axes[0].set_ylabel("Target IC")
+    axes[0].legend()
+    axes[1].plot(pd.to_datetime(daily.index.astype(str)), daily.total_asset / initial_asset)
+    axes[1].set_ylabel("Actual execution NAV")
+    fig.tight_layout()
+    artifacts.plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(artifacts.plot_path)
+    plt.close(fig)
     return ConfigEvalResult(
-        artifacts=artifacts,
-        ic_summary=ic_summary,
-        pnl_summary=pnl_summary,
-        ic_checks=ic_checks,
-        pnl_checks=pnl_checks,
-        decile_summary=decile_summary,
-        exposure_summary=exposure_summary,
-        cap_corr_summary=cap_corr_summary,
-        top10_excess=top10_excess,
-        messages=messages,
+        artifacts, ic_summary, pnl_summary, None, None, decile_summary,
+        exposure_summary, cap_corr_summary, None, messages,
     )
 
 
@@ -283,6 +231,7 @@ def check_config_outputs(config_path: str | Path) -> ConfigOutputCheck:
     alpha_path = _find_existing_alpha_path(output_root) or output_root / "alpha.parquet"
     files = (
         _file_status("alpha.parquet", alpha_path),
+        _file_status("daily execution metrics", Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]),
     )
     return ConfigOutputCheck(
         config_path=resolved_config_path,
@@ -568,12 +517,9 @@ def _resolve_artifacts(
     alpha_path = _find_alpha_path(output_root)
     resolved_report_dir = Path(report_dir).expanduser().resolve() if report_dir else output_root / "eval_report"
     resolved_plot_path = Path(plot_path).expanduser().resolve() if plot_path else resolved_report_dir / "signal_analysis.png"
-    snap_ti = config["combo"]["runtime"].get("snap_ti")
+    snap_ti = None
     resolved_label_path = Path(label_path).expanduser().resolve() if label_path else None
     resolved_label_5d_path = Path(label_5d_path).expanduser().resolve() if label_5d_path else None
-    if snap_ti is None:
-        resolved_label_path = resolved_label_path or _default_label_path(config)
-        resolved_label_5d_path = resolved_label_5d_path or _default_label_5d_path(config)
     resolved_booksize = float(booksize if booksize is not None else config["backtest"].get("cash", 1e7))
     resolved_tradecost_ratio = float(
         tradecost_ratio
@@ -767,8 +713,8 @@ def _write_outputs(
         "output_root": str(artifacts.output_root),
         "alpha_path": str(artifacts.alpha_path),
         "plot_path": str(artifacts.plot_path),
-        "label_path": _label_source(artifacts.label_path, artifacts.snap_ti, 1),
-        "label_5d_path": _label_source(artifacts.label_5d_path, artifacts.snap_ti, 5),
+        "target_source": "ResearchLoader.gen_raw_target",
+        "pnl_source": "actual daily execution metrics",
         "start": start,
         "end": end,
         "messages": messages,
@@ -779,7 +725,7 @@ def _write_outputs(
 def _label_source(path: Path | None, snap_ti: int | None, period: int) -> str:
     if path is not None:
         return str(path)
-    return f"dynamic:{snap_vwap_price_name(snap_ti)}:label{period}d"
+    return "ResearchLoader.gen_raw_target"
 
 
 def config_eval_to_text(result: ConfigEvalResult) -> str:
@@ -795,13 +741,13 @@ def config_eval_to_text(result: ConfigEvalResult) -> str:
         lines.extend(f"- {message}" for message in result.messages)
     if result.ic_summary is not None:
         lines.append("\n[ic.summary]")
-        lines.append(output_frame_to_text(_select_columns(result.ic_summary, IC_KEY_COLUMNS)))
+        lines.append(output_frame_to_text(result.ic_summary))
     if result.ic_checks is not None:
         lines.append("\n[ic.checks]")
         lines.append(output_frame_to_text(result.ic_checks))
     if result.pnl_summary is not None:
         lines.append("\n[pnl.summary]")
-        lines.append(output_frame_to_text(_select_columns(result.pnl_summary, PNL_KEY_COLUMNS)))
+        lines.append(output_frame_to_text(result.pnl_summary))
     if result.pnl_checks is not None:
         lines.append("\n[pnl.checks]")
         lines.append(output_frame_to_text(result.pnl_checks))

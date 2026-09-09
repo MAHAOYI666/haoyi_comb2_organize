@@ -79,7 +79,8 @@ def daily_matrix_correlation(
     pool_df = read_matrix(pool, start=start, end=end)
     dates = candidate_df.index.intersection(pool_df.index).sort_values()
     if corr_days is not None:
-        dates = dates[-corr_days:]
+        selected_days = dates.normalize().unique()[-corr_days:]
+        dates = dates[dates.normalize().isin(selected_days)]
     columns = candidate_df.columns.intersection(pool_df.columns)
     rows = []
     for date in dates:
@@ -106,7 +107,8 @@ def daily_top_overlap(
     pool_df = read_matrix(pool, start=start, end=end)
     dates = candidate_df.index.intersection(pool_df.index).sort_values()
     if corr_days is not None:
-        dates = dates[-corr_days:]
+        selected_days = dates.normalize().unique()[-corr_days:]
+        dates = dates[dates.normalize().isin(selected_days)]
     columns = candidate_df.columns.intersection(pool_df.columns)
     rows = []
     for date in dates:
@@ -152,14 +154,15 @@ def position_correlation(
         "avg_corr": float(valid.mean()),
         "max_corr": float(valid.max()),
         "min_corr": float(valid.min()),
-        "n_days": int(len(valid)),
-        "corr_days": int(corr_days) if corr_days is not None else int(len(daily)),
+        "n_days": int(valid.index.normalize().nunique()),
+        "n_samples": int(len(valid)),
+        "corr_days": int(corr_days) if corr_days is not None else int(daily.index.normalize().nunique()),
         "min_valid": int(min_valid),
         "long_top_pct": float(top_pct),
         "avg_long_overlap": float(overlap_valid.mean()) if not overlap_valid.empty else np.nan,
         "max_long_overlap": float(overlap_valid.max()) if not overlap_valid.empty else np.nan,
         "min_long_overlap": float(overlap_valid.min()) if not overlap_valid.empty else np.nan,
-        "n_overlap_days": int(len(overlap_valid)),
+        "n_overlap_days": int(overlap_valid.index.normalize().nunique()),
         "start": valid.index.min().strftime("%Y%m%d"),
         "end": valid.index.max().strftime("%Y%m%d"),
     }

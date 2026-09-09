@@ -84,13 +84,6 @@ def main() -> int:
     eval_parser.add_argument("--pnl")
     eval_parser.add_argument("--pnlzz500")
     eval_parser.add_argument("--ic")
-    eval_parser.add_argument("--label", help="1d forward-return label path for PNL/IC/decile calculation")
-    eval_parser.add_argument("--label-5d", help="5d forward-return label path for IC calculation")
-    eval_parser.add_argument("--label-is-table", action="store_true", help="Read --label as csv/tsv/parquet instead of Memmaper2 cache")
-    eval_parser.add_argument("--label-5d-is-table", action="store_true", help="Read --label-5d as csv/tsv/parquet instead of Memmaper2 cache")
-    eval_parser.add_argument("--label-df-type", default="true", help="df_type passed to Memmaper2.load for label paths")
-    eval_parser.add_argument("--booksize", type=float, help="Booksize for generated daily pnl and decile backtests")
-    eval_parser.add_argument("--tradecost-ratio", type=float, help="Cost multiplier; cost = tradevalue * 0.003 * ratio")
     eval_parser.add_argument("--skip-deciles", action="store_true", help="Skip 10-group backtests")
     eval_parser.add_argument("--skip-exposure", action="store_true", help="Skip Barra exposure analysis")
     _add_date_args(eval_parser)
@@ -143,13 +136,6 @@ def main() -> int:
                 report_dir=args.report_dir,
                 plot_path=args.plot_output,
                 pnlzz500_path=args.pnlzz500,
-                label_path=args.label,
-                label_5d_path=args.label_5d,
-                label_is_table=args.label_is_table,
-                label_5d_is_table=args.label_5d_is_table,
-                label_df_type=_parse_df_type(args.label_df_type),
-                booksize=args.booksize,
-                tradecost_ratio=args.tradecost_ratio,
                 start=args.start,
                 end=args.end,
                 skip_deciles=args.skip_deciles,

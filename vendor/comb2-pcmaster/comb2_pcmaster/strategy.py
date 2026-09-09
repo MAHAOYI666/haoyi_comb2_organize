@@ -12,6 +12,8 @@ class StrategyBase(metaclass=ABCMeta):
         signals,
         sellable_amount,
         locked_amount,
+        buyable_mask,
+        market_sellable_mask,
         target_stock_amount,
         executed_turnover_today,
     ):

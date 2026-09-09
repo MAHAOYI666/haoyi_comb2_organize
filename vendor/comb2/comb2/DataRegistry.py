@@ -63,8 +63,6 @@ FACTORSIM_BASE_ITEMS = {
     "size": ("base.size", "1d_BarraCNE5/BarraCNE5.SIZE"),
     "btop": ("base.btop", "1d_BarraCNE5/BarraCNE5.BTOP"),
 }
-FREQ_ORDER = ("1d", "5m", "1m")
-SUPPORTED_FREQS = set(FREQ_ORDER)
 SUPPORTED_OPS = {
     "cs_zscore",
     "zscore",
@@ -82,72 +80,7 @@ ROLLING_OPS = {
     "rolling_mean": rolling_mean,
     "rolling_std": rolling_std,
 }
-AXIS_NAME_TO_INDEX = {"date": 0, "bar": 1, "code": -1}
-
-
-def _hms_range(start_hhmm: int, end_hhmm: int, step_minutes: int) -> tuple[int, ...]:
-    start_hour, start_minute = divmod(int(start_hhmm), 100)
-    end_hour, end_minute = divmod(int(end_hhmm), 100)
-    cur = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-    values: list[int] = []
-    while cur <= end:
-        hour, minute = divmod(cur, 60)
-        values.append(hour * 10000 + minute * 100)
-        cur += int(step_minutes)
-    return tuple(values)
-
-
-CANONICAL_BAR_TIMES = {
-    "1m": (
-        *_hms_range(930, 1130, 1),
-        *_hms_range(1301, 1457, 1),
-        150000,
-    ),
-    "5m": (
-        *_hms_range(930, 1130, 5),
-        *_hms_range(1305, 1455, 5),
-        150000,
-    ),
-}
-BAR_COUNT_BY_FREQ = {freq: len(times) for freq, times in CANONICAL_BAR_TIMES.items()}
-
-
-def _intraday_progress(freq: str) -> tuple[int, ...]:
-    if freq == "5m":
-        return tuple((*range(0, 236, 5), 240))
-    if freq == "1m":
-        return tuple((*range(0, 238), 240))
-    raise ValueError(f"frequency {freq!r} has no intraday bar axis")
-
-
-BAR_PROGRESS_BY_FREQ = {
-    freq: _intraday_progress(freq) for freq in ("5m", "1m")
-}
-
-
-def target_bar_index(freq: str, ti: int) -> int:
-    if freq not in CANONICAL_BAR_TIMES:
-        raise ValueError(f"target frequency must be intraday, got {freq!r}")
-    try:
-        bar_id = CANONICAL_BAR_TIMES[freq].index(int(ti))
-    except ValueError:
-        raise ValueError(f"time {ti} is not on the canonical {freq} axis") from None
-    if bar_id == 0:
-        raise ValueError(f"time {ti} is the special opening-auction bar and has no sample")
-    return int(bar_id)
-
-
-def available_bar_count(source_freq: str, target_freq: str, target_ti: int) -> int:
-    target_index = target_bar_index(target_freq, target_ti)
-    cutoff_progress = BAR_PROGRESS_BY_FREQ[target_freq][target_index - 1]
-    return int(
-        np.searchsorted(
-            np.asarray(BAR_PROGRESS_BY_FREQ[source_freq], dtype=np.int64),
-            cutoff_progress,
-            side="right",
-        )
-    )
+AXIS_NAME_TO_INDEX = {"date": 0, "code": -1}
 
 
 def _require_index_mask_cls():
@@ -240,9 +173,9 @@ class Universe:
 @dataclass(frozen=True)
 class DataItem:
     name: str
-    module: str
+    module: str = "builtin.factorsim"
     path: str | None = None
-    role: str = "data"
+    delay: int = 0
     mode: str = "read_dump"
     config_path: str | None = None
     ops: tuple[OpSpec, ...] = ()
@@ -310,66 +243,16 @@ class LoadStats:
 
 
 def _coerce_data_item(value: DataItem | dict[str, Any]) -> DataItem:
-    if isinstance(value, DataItem):
-        return _normalize_data_item(value)
-    for legacy_key in ("dump_path", "source", "loader"):
-        if legacy_key in value:
-            raise ValueError(f"data item {value.get('name')!r} uses unsupported legacy key {legacy_key!r}; use path/module")
-    module = value.get("module")
-    if not module:
-        raise ValueError(f"data item {value.get('name')!r} requires module")
-    ops = tuple(_coerce_op_spec(op) for op in value.get("ops", ()))
-    return _normalize_data_item(DataItem(
-        name=str(value["name"]),
-        module=str(module),
-        path=value.get("path"),
-        role=str(value.get("role", "data") or "data").lower(),
-        mode=str(value.get("mode", "read_dump")),
-        config_path=value.get("config_path"),
-        ops=ops,
-        params=dict(value.get("params", {})),
-    ))
-
-
-def _normalize_freq(value: Any, *, item_name: str) -> str:
-    freq = "1d" if value is None or str(value).strip() == "" else str(value).strip().lower()
-    if freq not in SUPPORTED_FREQS:
-        supported = ", ".join(FREQ_ORDER)
-        raise ValueError(f"item {item_name!r} has unsupported freq={value!r}; expected one of {supported}")
-    return freq
-
-
-def _normalize_data_item(item: DataItem) -> DataItem:
-    params = dict(item.params)
-    if "nbar" in params:
-        raise ValueError(f"item {item.name!r} uses unsupported attribute nbar")
-    freq = _normalize_freq(params.get("freq"), item_name=item.name)
-    role = str(item.role or "data").lower()
-    if role == "label" and freq != "1d":
-        raise ValueError(f"label item {item.name!r} requires freq='1d'")
-    params["freq"] = freq
+    item = value if isinstance(value, DataItem) else DataItem(
+        **{**value, "ops": tuple(_coerce_op_spec(op) for op in value.get("ops", ()))}
+    )
+    assert item.name and item.module
+    assert isinstance(item.delay, int) and item.delay >= 0, "delay must be a nonnegative trading-day count"
+    assert not ({"role", "freq", "nbar"} & set(item.params)), "source roles/frequencies are not supported"
     for op in item.ops:
         name, _ = _parse_op_call(op.name)
-        if name not in SUPPORTED_OPS:
-            raise ValueError(f"unsupported data op: {op.name}")
-        if name in ROLLING_OPS and _op_axis_name(op, default="date") != "date":
-            raise ValueError(f"{op.name} only supports axis='date'")
-        if name == "neut" and freq != "1d":
-            raise ValueError(f"neut only supports freq='1d', got item {item.name!r} freq={freq!r}")
-    return DataItem(
-        name=item.name,
-        module=item.module,
-        path=item.path,
-        role=role,
-        mode=item.mode,
-        config_path=item.config_path,
-        ops=item.ops,
-        params=params,
-    )
-
-
-def item_freq(item: DataItem) -> str:
-    return _normalize_freq(item.params.get("freq"), item_name=item.name)
+        assert name in SUPPORTED_OPS, f"unsupported data op: {op.name}"
+    return item
 
 
 def _parse_op_call(raw_name: str) -> tuple[str, tuple[str, ...]]:
@@ -527,61 +410,6 @@ def _op_requirements(ops: Sequence[OpSpec]) -> OpRequirements:
     return OpRequirements(data_deps=tuple(deps), lookback_days=max(1, lookback))
 
 
-def _missing_ranges(loaded: torch.Tensor, lo: int, hi: int) -> list[tuple[int, int]]:
-    if hi < lo:
-        return []
-    missing = ~loaded[lo : hi + 1]
-    ranges: list[tuple[int, int]] = []
-    start: int | None = None
-    for offset, is_missing in enumerate(missing.tolist()):
-        idx = lo + offset
-        if is_missing and start is None:
-            start = idx
-        elif (not is_missing) and start is not None:
-            ranges.append((start, idx - 1))
-            start = None
-    if start is not None:
-        ranges.append((start, hi))
-    return ranges
-
-
-def _missing_index_ranges(cache: Mapping[int, torch.Tensor], lo: int, hi: int) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    start: int | None = None
-    for idx in range(int(lo), int(hi) + 1):
-        if idx not in cache:
-            if start is None:
-                start = idx
-        elif start is not None:
-            ranges.append((start, idx - 1))
-            start = None
-    if start is not None:
-        ranges.append((start, int(hi)))
-    return ranges
-
-def _as_ranked_tensor(value: Any, *, dtype: torch.dtype, allowed_ndims: tuple[int, ...], rank_label: str) -> torch.Tensor:
-    if isinstance(value, torch.Tensor):
-        tensor = value.detach().to(device="cpu", dtype=dtype)
-    else:
-        tensor = torch.as_tensor(np.asarray(value), dtype=dtype)
-    if tensor.ndim == 1:
-        tensor = tensor.reshape(1, -1)
-    if tensor.ndim not in allowed_ndims:
-        raise ValueError(f"data module must return {rank_label} data, got shape {tuple(tensor.shape)}")
-    return tensor
-
-
-def _as_2d_tensor(value: Any, *, dtype: torch.dtype) -> torch.Tensor:
-    return _as_ranked_tensor(value, dtype=dtype, allowed_ndims=(2,), rank_label="2-D")
-
-
-def _as_data_tensor(value: Any, *, dtype: torch.dtype) -> torch.Tensor:
-    return _as_ranked_tensor(value, dtype=dtype, allowed_ndims=(2, 3), rank_label="2-D or 3-D")
-
-
-DataLoadFn = Callable[[DataItem, "DataRegistry", int, int], torch.Tensor | np.ndarray]
-
-
 def _op_axis_name(op: OpSpec, *, default: str | None = None, spec: TensorSpec | None = None) -> str:
     axis = op.params.get("axis", default)
     if axis is None:
@@ -597,478 +425,276 @@ def _op_axis_name(op: OpSpec, *, default: str | None = None, spec: TensorSpec | 
     if axis == 0:
         return "date"
     if axis == 1:
-        return "bar"
+        return "code"
     if axis == -1:
         return "code"
-    raise ValueError(f"unsupported positional axis {axis!r} for {op.name}; use date/bar/code")
+    raise ValueError(f"unsupported positional axis {axis!r} for {op.name}; use date/code")
 
 
-def _expected_item_shape(item: DataItem, n_dates: int, n_codes: int) -> tuple[int, ...]:
-    freq = item_freq(item)
-    if freq == "1d":
-        return (int(n_dates), int(n_codes))
-    return (int(n_dates), BAR_COUNT_BY_FREQ[freq], int(n_codes))
+@dataclass(frozen=True)
+class LoadedSource:
+    """Memmap data and its axes; processed values are [date, code, field]."""
 
-
-def _item_axes(item: DataItem) -> tuple[str, ...]:
-    return ("date", "code") if item_freq(item) == "1d" else ("date", "bar", "code")
+    values: torch.Tensor
+    dates: tuple[int, ...]
+    codes: tuple[str, ...]
+    columns: tuple[str, ...]
+    times: tuple[int, ...] = ()
 
 
 class FactorsimReader:
     def __init__(self, path: str):
         self.path = str(path)
-        self.mmap = _require_memmaper2_cls()(path)
-        self.n_levels = int(self.mmap._meta[1])
-        self.time_axis = self._load_time_axis()
+        self.mmap = Memmaper2(path)
 
-    def _load_time_axis(self) -> np.ndarray:
-        if self.n_levels <= 1:
-            return np.array([], dtype=np.int64)
-        axis = np.asarray(self.mmap._index[0, 1:])
-        axis = axis[np.isfinite(axis)]
-        return axis.astype(np.int64, copy=False)
-
-    def _load_day_2d(self, ds: int, dtype: torch.dtype) -> torch.Tensor:
-        data = self.mmap.load(start_ds=int(ds), end_ds=int(ds), df_type=False)[:]
-        return _as_2d_tensor(data, dtype=dtype)
-
-    def _load_day_3d(self, ds: int, dtype: torch.dtype, universe: Universe | None = None) -> torch.Tensor:
-        frame = self.mmap.load(start_ds=int(ds), end_ds=int(ds), df_type=True).dloc[:]
-        if universe is not None:
-            frame.columns = frame.columns.astype(str).str.zfill(6)
-            frame = frame.reindex(columns=universe.codes)
-        if len(frame.index) == 0:
-            width = len(universe.codes) if universe is not None else len(frame.columns)
-            return torch.empty((0, width), dtype=dtype)
-        return torch.as_tensor(frame.to_numpy(dtype=np.float32, copy=True), dtype=dtype)
-
-    def load_2d(self, start_ds: int, end_ds: int, dtype: torch.dtype) -> torch.Tensor:
-        if self.n_levels == 1:
-            data = self.mmap.load(start_ds=int(start_ds), end_ds=int(end_ds), df_type=False)[:]
-            return _as_2d_tensor(data, dtype=dtype)
-        raise ValueError("load_2d is only valid for 2D sources")
-
-    def validate_time_axis(self, freq: str) -> None:
-        expected = np.asarray(CANONICAL_BAR_TIMES[freq], dtype=np.int64)
-        if self.time_axis.shape != expected.shape or not np.array_equal(self.time_axis, expected):
-            raise ValueError(
-                f"factorsim source {self.path!r} time axis does not match canonical {freq}: "
-                f"got len={len(self.time_axis)}, expected len={len(expected)}"
-            )
-
-    def load_intraday(
-        self,
-        start_ds: int,
-        end_ds: int,
-        *,
-        dtype: torch.dtype,
-        freq: str,
-        universe: Universe,
-    ) -> torch.Tensor:
-        self.validate_time_axis(freq)
-        dates = [universe.idx2date(idx) for idx in range(universe.date2idx(start_ds), universe.date2idx(end_ds) + 1)]
-        rows: list[torch.Tensor] = []
-        for ds in dates:
-            day = self._load_day_3d(ds, dtype=torch.float32, universe=universe)
-            if day.numel() == 0:
-                rows.append(torch.full((BAR_COUNT_BY_FREQ[freq], len(universe.codes)), torch.nan, dtype=torch.float32))
-                continue
-            if day.shape[0] != BAR_COUNT_BY_FREQ[freq]:
-                raise ValueError(
-                    f"factorsim source {self.path!r} returned {day.shape[0]} bars for {ds}, "
-                    f"expected {BAR_COUNT_BY_FREQ[freq]}"
-                )
-            rows.append(day)
-        return torch.stack(rows, dim=0).to(dtype)
+    def load(self, item, registry, start_ds, end_ds):
+        frame = self.mmap.load(start_ds=start_ds, end_ds=end_ds, df_type=True).dloc[:]
+        frame.columns = frame.columns.astype(str).str.zfill(6)
+        frame = frame.reindex(columns=registry.universe.codes)
+        dates = tuple(registry.universe.idx2date(i) for i in range(
+            registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1
+        ))
+        times = ()
+        if isinstance(frame.index, pd.MultiIndex):
+            times = tuple(int(t) for t in self.mmap._index[0, 1:] if np.isfinite(t))
+            expected = pd.MultiIndex.from_product([dates, times], names=frame.index.names)
+            assert set(dates) <= set(map(int, self.mmap._index[1:, 0])), f"{item.name}: missing source dates"
+            assert frame.index.is_unique and frame.index.isin(expected).all()
+            frame = frame.reindex(expected)
+            values = frame.to_numpy(copy=True).reshape(len(dates), len(times), len(frame.columns))
+            values = values.transpose(0, 2, 1)[..., None]
+        else:
+            assert tuple(map(int, frame.index)) == dates, f"{item.name}: incomplete date axis"
+            values = frame.to_numpy(copy=True)[..., None]
+        return LoadedSource(torch.as_tensor(values), dates, registry.universe.codes, (item.name,), times)
 
 
 class DataRegistry:
     def __init__(
-        self,
-        items: Sequence[DataItem | dict[str, Any]],
-        *,
-        universe: Universe,
-        data_start_ds: int,
-        ashare_cache_path: str | None,
-        config_path: str | None,
-        presets: Sequence[str] = (),
-        verbose: bool = False,
-        cache_days: int = 64,
+        self, items, *, universe, data_start_ds, ashare_cache_path=None,
+        config_path=None, presets=(), verbose=False, cache_days=64,
+        process_source=None,
     ):
         self.universe = universe
         self.data_start_ds = int(data_start_ds)
-        self.data_start_idx = universe.date2idx(int(data_start_ds))
+        self.data_start_idx = universe.date2idx(self.data_start_ds)
         self.ashare_cache_path = ashare_cache_path
         self.config_path = config_path
-        self.verbose = bool(verbose)
+        self.verbose = verbose
         self.cache_days = int(cache_days)
-        if self.cache_days <= 0:
-            raise ValueError("DataRegistry cache_days must be positive")
-        self.module_cache: dict[str, Any] = {}
-        self.modules: dict[str, DataLoadFn] = self._builtin_modules()
-        self.runtime_context: dict[str, Any] = {"ti": 150000}
-        all_items = list(_coerce_data_item(item) for item in items)
-        all_items.extend(self._preset_items(presets))
-        if ashare_cache_path:
-            for short_name, (full_name, rel_path) in FACTORSIM_BASE_ITEMS.items():
-                all_items.append(
-                    DataItem(
-                        name=full_name,
-                        module="builtin.factorsim",
-                        path=str(Path(ashare_cache_path) / rel_path),
-                        role="base",
-                        params={"_builtin_short_name": short_name},
-                    )
-                )
-        self.items: dict[str, DataItem] = {}
-        for raw_item in all_items:
-            item = _normalize_data_item(raw_item)
-            if item.name in self.items:
-                raise ValueError(f"duplicate data item name: {item.name}")
+        assert self.cache_days > 0
+        self.process_source = process_source
+        self.runtime_context = {"ti": 150000, "date": None}
+        self.module_cache = {}
+        self.modules = self._builtin_modules()
+        self.items = {}
+        for raw in (*items, *self._preset_items(presets)):
+            item = _coerce_data_item(raw)
+            assert item.name not in self.items, f"duplicate data source: {item.name}"
             self.items[item.name] = item
-
-        self.processed_cache: dict[str, OrderedDict[int, torch.Tensor]] = {
-            name: OrderedDict() for name in self.items
-        }
+        self.processed_cache = {name: OrderedDict() for name in self.items}
+        self.columns = {}
         self.aliases = self._build_aliases()
 
-    def _builtin_modules(self) -> dict[str, DataLoadFn]:
-        loaders = {
-            "factorsim": _load_factorsim,
-            "alpha_parquet": _load_alpha_parquet,
-            "snap_label": _load_snap_label,
-        }
-        return {
-            alias: loader
-            for name, loader in loaders.items()
-            for alias in (name, f"builtin.{name}")
-        }
+    def _builtin_modules(self):
+        return {alias: fn for name, fn in (
+            ("factorsim", _load_factorsim), ("alpha_parquet", _load_alpha_parquet),
+            ("snap_label", _load_snap_label),
+        ) for alias in (name, "builtin." + name)}
 
-    def _preset_items(self, presets: Sequence[str]) -> list[DataItem]:
-        items: list[DataItem] = []
+    def _preset_items(self, presets):
+        items = []
         for preset in presets:
-            preset_name = str(preset).strip().lower()
-            if preset_name != "barra":
-                raise ValueError(f"unsupported data preset: {preset}")
-            if not self.ashare_cache_path:
-                raise ValueError("barra preset requires an AshareCache root")
-            for style, filename in BARRA_PRESET_FILES:
-                path = str(Path(self.ashare_cache_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{filename}")
-                items.append(
-                    DataItem(
-                        name=f"barra.{style}",
-                        module="builtin.factorsim",
-                        path=path,
-                        role="aux",
-                    )
-                )
+            assert preset == "barra" and self.ashare_cache_path
+            for name, field in BARRA_PRESET_FILES:
+                items.append(DataItem(
+                    name=f"barra.{name}",
+                    path=str(Path(self.ashare_cache_path) / BARRA_STYLE_DIRNAME / f"{BARRA_STYLE_PREFIX}{field}"),
+                    delay=1,
+                ))
         return items
 
-    def _build_aliases(self) -> dict[str, str]:
-        aliases: dict[str, str] = {}
-        for name in self.items:
-            if name.startswith("barra."):
-                short = name.split(".", 1)[1]
-                if short not in self.items and short not in aliases:
-                    aliases[short] = name
-        return aliases
+    def _build_aliases(self):
+        return {name.split(".", 1)[1]: name for name in self.items if name.startswith("barra.")}
 
-    def set_current_ti(self, ti: int) -> None:
+    def set_current_ti(self, ti):
         self.runtime_context["ti"] = int(ti)
 
-    def _resolve_name(self, name: str) -> str:
-        normalized = str(name).strip()
-        if normalized in self.items:
-            return normalized
-        if normalized in self.aliases:
-            return self.aliases[normalized]
-        raise KeyError(f"unknown data name: {name}")
+    def set_point(self, ds, ti, *, refresh=False):
+        self.runtime_context.update(date=int(ds), ti=int(ti))
+        if refresh:
+            idx = self.universe.date2idx(int(ds))
+            for cache in self.processed_cache.values():
+                for key in list(cache):
+                    if key[0] >= idx:
+                        del cache[key]
+            self.module_cache.clear()
 
-    def get_data(self, name: str, start_ds: int | None = None, end_ds: int | None = None) -> torch.Tensor:
-        """Return processed data for a declared item.
+    def _resolve_name(self, name):
+        resolved = self.aliases.get(name, name)
+        assert resolved in self.items, f"undeclared data source: {name}"
+        return resolved
 
-        Passing a date range loads that range if needed and returns the aligned
-        slice with date as the first dimension. Without dates, only the current
-        contiguous bounded cache is returned.
-        """
-        resolved = self._resolve_name(name)
-        if start_ds is None and end_ds is None:
-            cache = self.processed_cache[resolved]
-            if not cache:
-                raise ValueError("get_data has no cached data; pass start_ds/end_ds")
-            indices = sorted(cache)
-            if indices != list(range(indices[0], indices[-1] + 1)):
-                raise ValueError("cached data is not contiguous; pass start_ds/end_ds")
-            return torch.stack([cache[idx] for idx in indices], dim=0)
-        if start_ds is None:
-            start_ds = end_ds
-        if end_ds is None:
-            end_ds = start_ds
-        assert start_ds is not None and end_ds is not None
-        self._ensure_range((resolved,), int(start_ds), int(end_ds))
-        lo, hi = self._bounds_to_idx(int(start_ds), int(end_ds))
-        if hi < lo:
-            empty_shape = _expected_item_shape(
-                self.items[resolved], 0, len(self.universe.codes)
-            )
-            return torch.empty(empty_shape, dtype=self.universe.dtype)
-        request_days = hi - lo + 1
-        if request_days > self.cache_days:
-            raise ValueError(
-                f"data request spans {request_days} days, exceeding registry cache_days={self.cache_days}; "
-                "split the request into bounded chunks"
-            )
-        cache = self.processed_cache[resolved]
-        rows = []
-        for idx in range(lo, hi + 1):
-            if idx not in cache:
-                raise RuntimeError(f"data item {resolved!r} date index {idx} was evicted during its request")
-            cache.move_to_end(idx)
-            rows.append(cache[idx])
-        return torch.stack(rows, dim=0)
+    def _module_for(self, item):
+        if item.module in self.modules:
+            return self.modules[item.module]
+        module_name, function = item.module.split(":")
+        if self.config_path and self.config_path not in sys.path:
+            sys.path.insert(0, self.config_path)
+        fn = getattr(importlib.import_module(module_name), function)
+        self.modules[item.module] = fn
+        return fn
 
-    def _cache_day(self, name: str, idx: int, value: torch.Tensor) -> None:
+    def get_data(self, name, start_ds=None, end_ds=None):
+        name = self._resolve_name(name)
+        assert start_ds is not None and end_ds is not None, "explicit logical dates are required"
+        lo = self.universe.date2idx(int(start_ds))
+        hi = self.universe.date2idx(int(end_ds))
+        assert self.data_start_idx <= lo <= hi
+        assert hi - lo + 1 <= self.cache_days, "request exceeds registry_cache_days; read in chunks"
+        self._ensure_processed_range(name, start_ds, end_ds)
+        ti = self.runtime_context["ti"]
+        return torch.stack([self.processed_cache[name][(i, ti)] for i in range(lo, hi + 1)])
+
+    def get_field(self, name, field, start_ds, end_ds):
+        name = self._resolve_name(name)
+        values = self.get_data(name, start_ds, end_ds)
+        return values[..., self.columns[name].index(field)]
+
+    def _cache_day(self, name, idx, value):
         cache = self.processed_cache[name]
-        cache[int(idx)] = value.to(self.universe.dtype)
-        cache.move_to_end(int(idx))
+        key = (int(idx), self.runtime_context["ti"])
+        cache[key] = value
+        cache.move_to_end(key)
         while len(cache) > self.cache_days:
             cache.popitem(last=False)
 
-    def _module_for(self, item: DataItem) -> DataLoadFn:
-        module_name = item.module.strip()
-        if module_name in self.modules:
-            return self.modules[module_name]
-        if ":" in module_name:
-            mod_name, func_name = module_name.split(":", 1)
-        else:
-            mod_name, func_name = module_name, "load_data"
-        module = importlib.import_module(mod_name)
-        fn = getattr(module, func_name)
-        if not callable(fn):
-            raise TypeError(f"data module {module_name!r} is not callable")
-        self.modules[module_name] = fn
-        return fn
-
-    def _bounds_to_idx(self, start_ds: int, end_ds: int) -> tuple[int, int]:
-        start_idx = max(self.data_start_idx, self.universe.date2idx(int(start_ds)))
-        end_idx = self.universe.date2idx(int(end_ds))
-        if end_idx < start_idx:
-            return start_idx, start_idx - 1
-        return start_idx, end_idx
-
-    def _ensure_processed_range(self, name: str, start_ds: int, end_ds: int, stack: tuple[str, ...] = (), stats: LoadStats | None = None):
+    def _ensure_processed_range(self, name, start_ds, end_ds, stack=(), stats=None):
         name = self._resolve_name(name)
-        if name in stack:
-            chain = " -> ".join((*stack, name))
-            raise ValueError(f"cyclic data dependency: {chain}")
-        lo, hi = self._bounds_to_idx(start_ds, end_ds)
-        if hi < lo:
-            return
+        assert name not in stack, f"cyclic source dependency: {(*stack, name)}"
+        lo, hi = self.universe.date2idx(int(start_ds)), self.universe.date2idx(int(end_ds))
+        assert self.data_start_idx <= lo <= hi
+        item = self.items[name]
+        ti = self.runtime_context["ti"]
         cache = self.processed_cache[name]
-        missing = _missing_index_ranges(cache, lo, hi)
+        missing = [i for i in range(lo, hi + 1) if (i, ti) not in cache]
         if not missing:
             return
-
-        item = self.items[name]
         requirements = _op_requirements(item.ops)
-        for miss_lo, miss_hi in missing:
-            raw_lo = max(self.data_start_idx, miss_lo - requirements.lookback_days + 1)
-            raw_start_ds = self.universe.idx2date(raw_lo)
-            raw_end_ds = self.universe.idx2date(miss_hi)
-            for dep in requirements.data_deps:
-                self._ensure_processed_range(self._resolve_neut_dep_name(dep), raw_start_ds, raw_end_ds, (*stack, name), stats)
-
-            load_start = time.perf_counter()
-            loaded = self._module_for(item)(item, self, raw_start_ds, raw_end_ds)
-            tensor = _as_data_tensor(loaded, dtype=self.universe.dtype)
-            expected_shape = _expected_item_shape(item, miss_hi - raw_lo + 1, len(self.universe.codes))
-            if tuple(tensor.shape) != expected_shape:
-                raise ValueError(
-                    f"data module {item.module!r} for {name!r} returned shape {tuple(tensor.shape)}, "
-                    f"expected {expected_shape}"
-                )
-            total_time = time.perf_counter() - load_start
-            if stats is not None:
+        for offset in range(0, len(missing), self.cache_days):
+            indices = missing[offset:offset + self.cache_days]
+            first, last = indices[0], indices[-1]
+            raw_lo = max(self.data_start_idx, first - requirements.lookback_days + 1)
+            assert raw_lo - item.delay >= 0, f"{name}: insufficient delay history"
+            logical_start = self.universe.idx2date(raw_lo)
+            logical_end = self.universe.idx2date(last)
+            for dependency in requirements.data_deps:
+                self._ensure_processed_range(dependency, logical_start, logical_end, (*stack, name), stats)
+            start = self.universe.idx2date(raw_lo - item.delay)
+            end = self.universe.idx2date(last - item.delay)
+            began = time.perf_counter()
+            loaded = self._module_for(item)(item, self, start, end)
+            assert isinstance(loaded, LoadedSource), f"{name}: reader must return LoadedSource"
+            expected_dates = tuple(self.universe.idx2date(i - item.delay) for i in range(raw_lo, last + 1))
+            assert loaded.dates == expected_dates and loaded.codes == self.universe.codes
+            processed = self.process_source(item, loaded) if self.process_source else loaded
+            assert isinstance(processed, LoadedSource)
+            assert processed.dates == loaded.dates and processed.codes == loaded.codes
+            values = torch.as_tensor(processed.values)
+            assert values.ndim == 3 and values.shape[:2] == (last - raw_lo + 1, len(self.universe.codes)), (
+                f"{name}: process_source must reduce to [date, code, field], got {tuple(values.shape)}"
+            )
+            assert not processed.times, f"{name}: reduced source must not retain a bar axis"
+            assert len(processed.columns) == values.shape[-1] and len(set(processed.columns)) == len(processed.columns)
+            if name in self.columns:
+                assert self.columns[name] == processed.columns, f"{name}: feature columns changed"
+            self.columns[name] = processed.columns
+            del loaded, processed
+            if stats:
+                stats.raw_time += time.perf_counter() - began
                 stats.raw_chunks += 1
-                stats.raw_points += miss_hi - raw_lo + 1
-                stats.raw_time += total_time
+                stats.raw_points += last - raw_lo + 1
+            began = time.perf_counter()
+            values = self._apply_ops(item, values, raw_lo, last)
+            for idx in indices:
+                self._cache_day(name, idx, values[idx - raw_lo])
+            if stats:
+                stats.ops_time += time.perf_counter() - began
 
-            ops_start = time.perf_counter()
-            processed_window = self._apply_ops(item, tensor.to(torch.float32), raw_lo, miss_hi)
-            ops_time = time.perf_counter() - ops_start
-            if tuple(processed_window.shape) != expected_shape:
-                raise ValueError(
-                    f"item {name!r} pipeline returned shape {tuple(processed_window.shape)}, "
-                    f"expected shape {expected_shape}"
-                )
-            out_lo = miss_lo - raw_lo
-            out_hi = miss_hi - raw_lo + 1
-            for offset, idx in enumerate(range(miss_lo, miss_hi + 1)):
-                self._cache_day(name, idx, processed_window[out_lo + offset])
-            if item.ops and stats is not None:
-                stats.ops_items += 1
-                stats.ops_points += miss_hi - miss_lo + 1
-                stats.ops_time += ops_time
-
-    def _ensure_range(self, names: Sequence[str], start_ds: int, end_ds: int):
-        ensure_start = time.perf_counter()
+    def _ensure_range(self, names, start_ds, end_ds):
         stats = LoadStats()
         for name in names:
             self._ensure_processed_range(name, start_ds, end_ds, stats=stats)
-        lo, hi = self._bounds_to_idx(start_ds, end_ds)
-        stats.request_days = max(0, hi - lo + 1)
-        stats.total_time = time.perf_counter() - ensure_start
         return stats
 
-    def _apply_ops(self, item: DataItem, x: torch.Tensor, lo_idx: int, hi_idx: int) -> torch.Tensor:
-        spec = TensorSpec(axes=_item_axes(item), source_name=item.name)
-        out = x
-        for op in item.ops:
-            raw_name = op.name.strip()
-            name, args = _parse_op_call(raw_name)
-            params = op.params
-            if name not in SUPPORTED_OPS:
-                raise ValueError(f"unsupported data op: {op.name}")
-            if name in {"cs_zscore", "zscore"}:
-                out = cs_zscore(out, axis=spec.require_axis(_op_axis_name(op, default="code", spec=spec)))
-            elif name == "rank":
-                out = rank(
-                    out,
-                    dim=None,
-                    axis=spec.require_axis(_op_axis_name(op, default="code", spec=spec)),
-                    pct=bool(params.get("pct", False)),
-                )
-            elif name == "truncate":
-                out = truncate(out, float(params.get("min", -4.0)), float(params.get("max", 4.0)))
-            elif name in {"nan_to_num", "fillna"}:
-                out = nan_to_num(out, float(params.get("value", 0.0)))
-            elif name == "winsorize_by_quantile":
-                out = winsorize_by_quantile(
-                    out,
-                    float(params.get("low", 0.01)),
-                    float(params.get("high", 0.99)),
-                    axis=spec.require_axis(_op_axis_name(op, default="code", spec=spec)),
-                )
-            elif name == "normalize_by_max_abs":
-                out = normalize_by_max_abs(out, axis=spec.require_axis(_op_axis_name(op, default="code", spec=spec)))
-            elif name == "neut":
-                if item_freq(item) != "1d":
-                    raise ValueError(f"neut only supports freq='1d', got item {item.name!r} freq={item_freq(item)!r}")
-                deps, ratio = _neut_deps_and_ratio(op, args)
-                if not deps:
-                    raise ValueError(f"{op.name} requires at least one data dependency")
-                _ = spec.require_axis("code")
-                dep_names = [self._resolve_neut_dep_name(dep) for dep in deps]
-                for dep_name in dep_names:
-                    if item_freq(self.items[dep_name]) != "1d":
-                        raise ValueError(f"neut dependency {dep_name!r} must have freq='1d'")
-                start_ds = self.universe.idx2date(lo_idx)
-                end_ds = self.universe.idx2date(hi_idx)
-                xs = [
-                    self.get_data(dep_name, start_ds, end_ds).to(torch.float32)
-                    for dep_name in dep_names
-                ]
-                out = neut(out, xs, ratio=ratio)
-            elif name in ROLLING_OPS:
-                axis_name = _op_axis_name(op, default="date", spec=spec)
-                if axis_name != "date":
-                    raise ValueError(f"{op.name} only supports axis='date'")
-                out = ROLLING_OPS[name](
-                    out,
-                    _int_op_arg(op, args, "window", "n"),
-                    axis=spec.require_axis(axis_name),
-                )
-            else:
-                raise ValueError(f"unsupported data op: {op.name}")
-        out[torch.isinf(out)] = torch.nan
-        if tuple(out.shape) != tuple(x.shape):
-            raise ValueError(
-                f"item {item.name!r} op pipeline changed shape from {tuple(x.shape)} to {tuple(out.shape)}"
-            )
-        return out
-
-    def _resolve_neut_dep_name(self, name: str) -> str:
-        normalized = str(name).strip()
-        if normalized in self.items:
-            return normalized
-        if normalized in self.aliases:
-            return self.aliases[normalized]
-        if normalized in FACTORSIM_BASE_ITEMS:
-            return FACTORSIM_BASE_ITEMS[normalized][0]
-        return self._resolve_name(normalized)
+    def _apply_ops(self, item, values, lo_idx, hi_idx):
+        columns = []
+        for column in values.unbind(-1):
+            out = column
+            for op in item.ops:
+                name, args = _parse_op_call(op.name)
+                params = op.params
+                axis = _op_axis_name(op, default="code", spec=TensorSpec(("date", "code"), item.name))
+                dim = 0 if axis == "date" else 1
+                if name in {"cs_zscore", "zscore"}:
+                    out = cs_zscore(out, axis=dim)
+                elif name == "rank":
+                    out = rank(out, dim=None, axis=dim, pct=bool(params.get("pct", False)))
+                elif name == "truncate":
+                    out = truncate(out, float(params.get("min", -4)), float(params.get("max", 4)))
+                elif name in {"fillna", "nan_to_num"}:
+                    out = nan_to_num(out, float(params.get("value", 0)))
+                elif name == "winsorize_by_quantile":
+                    out = winsorize_by_quantile(out, float(params.get("low", .01)), float(params.get("high", .99)), axis=dim)
+                elif name == "normalize_by_max_abs":
+                    out = normalize_by_max_abs(out, axis=dim)
+                elif name in ROLLING_OPS:
+                    assert params.get("axis", "date") == "date"
+                    out = ROLLING_OPS[name](out, _int_op_arg(op, args, "window", "n"), axis=0)
+                elif name == "neut":
+                    deps, ratio = _neut_deps_and_ratio(op, args)
+                    xs = []
+                    for dep in deps:
+                        data = torch.cat([
+                            self.get_data(dep, self.universe.idx2date(first), self.universe.idx2date(min(first + self.cache_days - 1, hi_idx)))
+                            for first in range(lo_idx, hi_idx + 1, self.cache_days)
+                        ])
+                        xs.extend(data.unbind(-1))
+                    out = neut(out, xs, ratio=ratio)
+            columns.append(out)
+        return torch.stack(columns, -1)
 
 
-def _memmap_load_2d(registry: DataRegistry, path: str, start_ds: int, end_ds: int, dtype: torch.dtype) -> torch.Tensor:
-    cache_key = f"memmap:{path}"
-    mmap = registry.module_cache.get(cache_key)
-    if mmap is None:
-        mmap = _require_memmaper2_cls()(path)
-        registry.module_cache[cache_key] = mmap
-    data = mmap.load(start_ds=int(start_ds), end_ds=int(end_ds))[:]
-    return _as_2d_tensor(data, dtype=dtype)
+def _load_factorsim(item, registry, start_ds, end_ds):
+    assert item.path, f"{item.name}: Memmap path is required"
+    path = item.path.format(ti=registry.runtime_context["ti"])
+    key = f"memmap:{path}"
+    if key not in registry.module_cache:
+        registry.module_cache[key] = FactorsimReader(path)
+    return registry.module_cache[key].load(item, registry, start_ds, end_ds)
 
 
-def _load_factorsim(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
-    path = item.path
-    if not path and item.role == "label":
-        if not registry.ashare_cache_path:
-            raise ValueError(f"label data {item.name!r} requires a path or AshareCache root")
-        path = str(
-            Path(registry.ashare_cache_path)
-            / DAILY_LABEL_DIRNAME
-            / f"{DAILY_LABEL_PREFIX}vwap30_label1d"
-        )
-    if not path:
-        raise ValueError(f"factorsim data {item.name!r} requires path")
-    cache_key = f"factorsim_reader:{path}"
-    reader = registry.module_cache.get(cache_key)
-    if reader is None:
-        reader = FactorsimReader(path)
-        registry.module_cache[cache_key] = reader
-    freq = item_freq(item)
-    if freq == "1d":
-        if reader.n_levels != 1:
-            raise ValueError(f"1d factorsim source {item.name!r} must be 2D")
-        return reader.load_2d(start_ds, end_ds, registry.universe.dtype)
-
-    if reader.n_levels <= 1:
-        raise ValueError(f"{freq} factorsim source {item.name!r} must be 3D")
-    return reader.load_intraday(
-        start_ds,
-        end_ds,
-        dtype=registry.universe.dtype,
-        freq=freq,
-        universe=registry.universe,
-    )
-
-
-def _load_snap_label(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
-    if not registry.ashare_cache_path:
-        raise ValueError(f"snapshot label data {item.name!r} requires an AshareCache root")
+def _load_snap_label(item, registry, start_ds, end_ds):
+    assert registry.ashare_cache_path
     labels = load_snap_vwap_labels(
         Path(registry.ashare_cache_path).parent,
-        item.params["snap_ti"],
-        start_ds,
-        end_ds,
-    )
-    values = labels[1].to_numpy(dtype=np.float32, copy=True)
-    return _as_2d_tensor(values, dtype=registry.universe.dtype)
+        registry.runtime_context["ti"], start_ds, end_ds,
+    )[1]
+    labels = labels.reindex(columns=registry.universe.codes)
+    return LoadedSource(torch.as_tensor(labels.to_numpy(copy=True)[..., None]),
+                        tuple(map(int, labels.index)), registry.universe.codes, (item.name,))
 
 
-def _load_alpha_parquet(item: DataItem, registry: DataRegistry, start_ds: int, end_ds: int) -> torch.Tensor:
-    if item.mode != "read_dump":
-        raise NotImplementedError(f"alpha mode {item.mode!r} is not implemented")
-    if not item.path:
-        raise ValueError(f"alpha data {item.name!r} requires path")
-    cache_key = f"alpha_parquet:{item.path}"
-    frame = registry.module_cache.get(cache_key)
-    if frame is None:
-        frame = pd.read_parquet(item.path)
-        frame.index = frame.index.astype(int)
-        frame.columns = frame.columns.astype(str).str.zfill(6)
-        frame = frame.sort_index().reindex(columns=registry.universe.codes)
-        registry.module_cache[cache_key] = frame
-    dates = [registry.universe.idx2date(idx) for idx in range(registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1)]
-    aligned = frame.reindex(index=dates, columns=registry.universe.codes)
-    values = aligned.to_numpy(dtype=np.float32, copy=True)
-    return torch.as_tensor(values, dtype=registry.universe.dtype)
+def _load_alpha_parquet(item, registry, start_ds, end_ds):
+    assert item.path and item.mode == "read_dump"
+    frame = pd.read_parquet(item.path)
+    if isinstance(frame.index, pd.MultiIndex):
+        frame = frame.xs(registry.runtime_context["ti"], level=1)
+    frame.index = frame.index.astype(int)
+    frame.columns = frame.columns.astype(str).str.zfill(6)
+    dates = tuple(registry.universe.idx2date(i) for i in range(
+        registry.universe.date2idx(start_ds), registry.universe.date2idx(end_ds) + 1
+    ))
+    frame = frame.reindex(index=dates, columns=registry.universe.codes)
+    return LoadedSource(torch.as_tensor(frame.to_numpy(copy=True)[..., None]), dates,
+                        registry.universe.codes, (item.name,))

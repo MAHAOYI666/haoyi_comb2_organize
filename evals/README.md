@@ -2,7 +2,7 @@
 
 `comb_eval` 是一个不依赖 PySim 外部服务的本地评估工具包，目标是把 `metric.md` 中的 evaluation 拆成可单独运行的模块。
 
-配置驱动的整体评估只接受 `constants.freq="1d"` 生成的日期索引 alpha。`5m`/`1m` 的 `(dates, times)` alpha 由 `runCombo` 直接生成 `intraday_ic.csv` 和 `ic_by_time.csv`，不进入这里的日频 PNL、分组回测和 label 评估流程。
+配置驱动评估读取 (date,time) alpha，调用研究员 loader 的原始目标和有效性接口计算 IC，并从实际成交日报计算 PnL。
 
 ## 已有模块
 
@@ -35,30 +35,9 @@ python -m comb_eval.cli eval --pnl /path/to/pnl.tsv --ic /path/to/daily_ic --sta
 python -m comb_eval.cli eval --config /path/to/config.xml
 ```
 
-该入口会读取 comb2-organize XML config，检查 `constants.output_root` 下至少存在一个 `alpha.parquet`：
+该入口需要 output_root 下的 alpha.parquet 和 backtest 中配置的每日成交指标文件。目标定义来自 ResearchLoader.gen_raw_target。评估输出包括 daily_ic.csv、ic_summary.csv、pnl_summary.csv、decile_summary.csv、Barra/CAP 暴露汇总、signal_analysis.png 和 report.json。
 
-```text
-<output_root>/alpha.parquet
-```
-
-PNL、IC、分组回测都会基于 `alpha.parquet` 和 config 指向的 label/cache 重新计算，不依赖已有 `daily_ic` 或 `backtest/daily_pnl.csv`，也不会 dump daily pnl / daily IC 中间文件。若 config 的 `runtime.snap_ti` 非空且未显式传入 label，评估会从对应 `IntraVwap.Vwap30.HHMMSS` 动态生成 1d/5d 标签。
-
-默认输出到 `<output_root>/eval_report/`：
-
-```text
-ic_summary.csv
-pnl_summary.csv
-ic_checks.csv
-pnl_checks.csv
-decile_summary.csv
-barra_exposure_summary.csv
-cap_corr_summary.csv
-top10_excess.csv
-signal_analysis.png
-report.json
-```
-
-其中 `signal_analysis.png` 是信号综合长图，包含 IC 统计、PNL 统计、信号 10 分位数时间序列、10 组分组回测、Barra 风格暴露范围、CAP corr 汇总，以及 top10% 回测相对基准的累计超额收益。PNL 与分组回测使用与 `evals/tools/rundailypnl.py` 相同的本地 daily-pnl 逻辑，IC 从 1d/5d label 重新计算。总体评估会输出分层指标 `lIC`：每天将有效 alpha 按等频分成 Q1--Q10，对各层的平均 1d forward return 与层号求相关；汇总中的 `lIC.avg`、`lIC.ir` 分别是跨日均值和日频 IR，`layerSpread.avg` 是 Q10--Q1 平均收益差。为保持 Q10--Q1 的严格含义，若 alpha 并列导致当天无法形成完整 10 层，该日的这三项均不计入汇总。
+IC 按时点统计，不给任意研究目标自动套用日频年化。分层输出为每个时点各层原始目标的平均值；实际收益、手续费和换手来自成交日终记录。总体评估与研究员目标定义保持一致。独立 pnl/ic 等命令继续接受本地表格。
 
 常用可选项：
 
