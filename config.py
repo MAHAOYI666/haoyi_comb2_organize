@@ -45,7 +45,7 @@ DEFAULT_OPTIMIZER_CONFIG = {
     "benchmark": "000905.SH",
     "benchmark_delay": 1,
     "target_size": 1.0e8,
-    "maxtvr": 0.4,
+    "maxtvr": 0.2,
     "max_weight": 0.0075,
     "maxtrd": 0.0,
     "maxpos": 0.0,
@@ -164,7 +164,7 @@ DEFAULT_CONFIG = {
     "backtest": {
         "daily_metrics_file": "daily_pnl.csv",
         "cash": 10000000.0,
-        "fee_rate": 0.0015,
+        "fee_rate": 0.00075,
         "reserve_cash": 0.95,
         "verbose": False,
         "universe": "base",

@@ -159,6 +159,8 @@ starter 的 gen_raw_target 把 D 日样本映射到 label[D-1]。VWAP 100000 表
 
 ## 成交回测与输出
 
+`backtest.fee_rate` 默认 `0.00075`，即买入、卖出分别按成交额固定扣除 7.5bp，不随日期变化。
+
 execution_price 使用 source:column，引用研究员 loader 中普通来源的处理后字段。每次取得当前 (date,time) 的价格。多个日内时点明确使用 opt2；研究员保证价格窗口与策略决策的合理性。
 
 首个时点使用当日 pre_close 为持仓估值；后续时点使用上一执行点已知价格作为默认估值。直接调用 step 可传 mark_prices。优化器与成交价格分开，不能让本次尚不可知的执行价格参与本次优化估值。原始成交价不做前向填充；价格、涨跌停或停牌状态无效时，已有持仓固定在实际金额且不产生订单。策略返回不可执行订单会立即失败，不会静默跳过。
@@ -221,7 +223,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
     type="opt1"
     lambda0="0.5"
     benchmark="000905.SH"
-    maxtvr="0.4"
+    maxtvr="0.2"
     max_weight="0.0075"
     num_mosek_threads="1"
     risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
@@ -240,7 +242,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数代码；对应读取 `1d_IndexWeight/IndexWeight.<benchmark>`。不改变回测收益报告的评价基准。 |
 | `benchmark_delay` | `1` | 目标风险暴露使用的基准指数权重延迟。 |
 | `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元；opt2 的金额约束不使用该换算参数。 |
-| `maxtvr` | `0.4` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
+| `maxtvr` | `0.2` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
 | `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
 | `maxtrd` | `0.0` | 单票交易额相对 delay-1 全日成交额的上限。opt1 先用 `target_size` 换算成权重；opt2 直接约束人民币金额。`0` 表示不添加，hard `0:0` universe 强退可突破卖出上限。 |
 | `maxpos` | `0.0` | 单票持仓额相对 delay-1 全日成交额的上限。opt1 先换算成权重，opt2 直接约束人民币金额；`0` 表示不添加，历史持仓超限不强制一次性卖回。 |

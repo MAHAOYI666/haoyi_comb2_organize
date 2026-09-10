@@ -19,3 +19,5 @@ haoyi_models/
 correlation.py
 runFactorCorr.py
 *.txt
+
+/artifacts/runeval_temporal_20260909/
