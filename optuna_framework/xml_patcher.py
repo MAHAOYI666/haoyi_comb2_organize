@@ -73,7 +73,13 @@ def apply_fixed_override(root: ET.Element, dotted_path: str, value: Any) -> None
 def resolve_relative_paths(root: ET.Element, base_dir: Path) -> None:
     """Convert runtime file paths to absolute paths anchored to the baseline config."""
 
-    for xpath, attr in (("./combo/paths", "model_path"), ("./strategy", "path")):
+    for xpath, attr in (
+        ("./combo/paths", "model_path"), ("./strategy", "path"),
+        ("./combo/paths", "research_loader_path"),
+        ("./combo/paths", "research_dataset_path"),
+        ("./combo/paths", "combo_base_path"),
+        ("./constants", "cache_path"),
+    ):
         element = root.find(xpath)
         if element is None:
             continue

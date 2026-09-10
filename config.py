@@ -35,63 +35,6 @@ def _default_strategy_path() -> str:
     return str(PCM_ROOT / "examples" / "alpha_strategy.py")
 
 
-def _builtin_factor_item(path: str) -> dict[str, Any]:
-    return {
-        "name": f"alpha.{path}",
-        "module": "builtin.factorsim",
-        "path": path,
-        "role": "factor",
-        "mode": "read_dump",
-        "config_path": None,
-        "ops": (),
-        "params": {"display_name": path},
-    }
-
-
-def _builtin_label_item(path: str = "vwap30_label1d") -> dict[str, Any]:
-    return {
-        "name": "label.default",
-        "module": "builtin.factorsim",
-        "path": path,
-        "role": "label",
-        "mode": "read_dump",
-        "config_path": None,
-        "ops": (),
-        "params": {"freq": "1d"},
-    }
-
-
-def _builtin_target_item(freq: str) -> dict[str, Any]:
-    assert freq in {"5m", "1m"}
-    return {
-        "name": "returns.default",
-        "module": "builtin.factorsim",
-        "path": f"{freq}_IntvReturns/IntvReturns.c2c",
-        "role": "target",
-        "mode": "read_dump",
-        "config_path": None,
-        "ops": (),
-        "params": {"freq": freq},
-    }
-
-
-def _default_data_items(freq: str) -> tuple[dict[str, Any], ...]:
-    supervision = _builtin_label_item() if freq == "1d" else _builtin_target_item(freq)
-    return (*(_builtin_factor_item(path) for path in DEFAULT_FACTOR_PATHS), supervision)
-
-
-DEFAULT_FACTOR_PATHS = (
-    "yz_20250219_02",
-    "wjx_20240829_02",
-    "guanxl_05",
-    "alpha1_20251008_01",
-    "alpha2_20251008_02",
-    "alpha3_20251008_03",
-    "alpha4_20251008_04",
-    "alpha5_20251008_05",
-)
-
-
 DEFAULT_OPTIMIZER_CONFIG = {
     "type": "opt1",
     "lambda0": 0.5,
@@ -99,6 +42,7 @@ DEFAULT_OPTIMIZER_CONFIG = {
     "ret_days": 60,
     "ret_delay": 1,
     "ret_method": 2,
+    "benchmark": "000905.SH",
     "benchmark_delay": 1,
     "target_size": 1.0e8,
     "maxtvr": 0.4,
@@ -174,7 +118,6 @@ DEFAULT_CONFIG = {
     "constants": {
         "cache_path": "data/Cache",
         "output_root": str(COMB2_ROOT / "output"),
-        "freq": "1d",
     },
     "strategy": {
         "start_ds": 20160111,
@@ -184,9 +127,9 @@ DEFAULT_CONFIG = {
     },
     "combo": {
         "paths": {
-            "model_path": str(COMB2_ROOT / "lgbm_model.py"),
+            "model_path": str(ORGANIZE_ROOT / "eg-torch" / "model.py"),
             "combo_base_path": None,
-            "research_loader_path": None,
+            "research_loader_path": str(ORGANIZE_ROOT / "eg-torch" / "loader.py"),
             "research_dataset_path": None,
         },
         "output": {
@@ -194,7 +137,7 @@ DEFAULT_CONFIG = {
         },
         "runtime": {
             "snaptime": "mlp_minimal",
-            "snap_ti": None,
+            "sample_times": "100000",
             "seed": None,
             "deterministic": False,
             "livetrading": False,
@@ -210,20 +153,11 @@ DEFAULT_CONFIG = {
             "verbose": False,
         },
         "model": {},
-        "data": {
-            "imports": (),
-            "items": _default_data_items("1d"),
-            "presets": (),
-            "attrs": {},
-        },
         "loader": {
             "dtype": torch.float16,
             "compression": "none",
             "data_start_ds": 20160101,
             "data_offset": 1024,
-            "data_items": (),
-            "data_presets": (),
-            "config_path": None,
             "registry_cache_days": 64,
         },
     },
@@ -234,7 +168,7 @@ DEFAULT_CONFIG = {
         "reserve_cash": 0.95,
         "verbose": False,
         "universe": "base",
-        "execution_price": "vwap30",
+        "execution_price": "execution:execution",
         "drawdown_stop": 0.0,
         "cooldown_days": 0,
     },
@@ -266,35 +200,6 @@ PATH_FIELDS = {
     ("combo", "paths", "research_dataset_path"),
     ("monitor", "output_path"),
 }
-
-DATA_PATH_FIELDS = {"path", "config_path"}
-BUILTIN_DATA_PRESETS = {"barra"}
-DATA_FREQ_ORDER = ("1d", "5m", "1m")
-SUPPORTED_DATA_FREQS = set(DATA_FREQ_ORDER)
-SUPPORTED_DATA_OPS = {
-    "cs_zscore",
-    "zscore",
-    "rank",
-    "truncate",
-    "nan_to_num",
-    "fillna",
-    "winsorize_by_quantile",
-    "normalize_by_max_abs",
-    "rolling_mean",
-    "rolling_std",
-    "neut",
-}
-DATA_ATTR_DEFAULTS = {
-    key: DEFAULT_CONFIG["combo"]["loader"][key]
-    for key in (
-        "dtype",
-        "compression",
-        "data_start_ds",
-        "data_offset",
-        "registry_cache_days",
-    )
-}
-
 
 def _deep_merge(base: dict, override: dict) -> dict:
     merged = deepcopy(base)
@@ -370,102 +275,6 @@ def _parse_section_attributes(element: ET.Element | None, default_section: dict,
     return parsed
 
 
-def _parse_feature_ops(feature_element: ET.Element) -> tuple[dict[str, Any], ...]:
-    ops = []
-    for op_element in feature_element.findall("op"):
-        name = op_element.attrib.get("name")
-        if not name:
-            raise ValueError(f"<op> under <{feature_element.tag}> requires name")
-        op_name = name.split("(", 1)[0].strip().lower()
-        if op_name not in SUPPORTED_DATA_OPS:
-            raise ValueError(f"unsupported data op: {name}")
-        params = {key: _parse_scalar(value) for key, value in op_element.attrib.items() if key != "name"}
-        ops.append({"name": name, "params": params})
-    return tuple(ops)
-
-
-def _parse_data_item(item_element: ET.Element) -> dict[str, Any]:
-    attrs = dict(item_element.attrib)
-    name = attrs.pop("name", None)
-    path = attrs.pop("path", None)
-    config_path = attrs.pop("config_path", None)
-    mode = attrs.pop("mode", "read_dump")
-    role = attrs.pop("role", "data")
-    module = attrs.pop("module", "builtin.factorsim")
-    legacy_keys = {"dump_path", "source", "loader"} & set(attrs)
-    if legacy_keys:
-        extra = ", ".join(sorted(legacy_keys))
-        raise ValueError(f"<item> uses unsupported legacy attribute(s): {extra}; use path/module")
-    if not name:
-        raise ValueError("<item> requires name")
-    if not module:
-        module = "builtin.factorsim"
-    if "nbar" in attrs:
-        raise ValueError(f"<item name='{name}'> uses unsupported attribute nbar")
-    role = str(role).lower()
-    freq = str(attrs.pop("freq", "1d") or "1d").strip().lower()
-    if freq not in SUPPORTED_DATA_FREQS:
-        supported = ", ".join(DATA_FREQ_ORDER)
-        raise ValueError(f"<item name='{name}'> has unsupported freq={freq!r}; expected one of {supported}")
-    if role == "label" and freq != "1d":
-        raise ValueError(f"<item name='{name}'> role='label' requires freq='1d'")
-    params = {key: _parse_scalar(value) for key, value in attrs.items()}
-    params["freq"] = freq
-    return {
-        "name": str(name),
-        "module": str(module),
-        "path": path,
-        "role": role,
-        "mode": mode,
-        "config_path": config_path,
-        "ops": _parse_feature_ops(item_element),
-        "params": params,
-    }
-
-
-def _parse_data_import(import_element: ET.Element) -> dict[str, Any]:
-    attrs = dict(import_element.attrib)
-    path = attrs.pop("path", None)
-    preset = attrs.pop("preset", None)
-    role = attrs.pop("role", None)
-    roles = attrs.pop("roles", None)
-    if bool(path) == bool(preset):
-        raise ValueError("<import> requires exactly one of path=... or preset=...")
-    if role and roles:
-        raise ValueError("<import> supports only one of role=... or roles=...")
-    if attrs:
-        extra = ", ".join(sorted(attrs))
-        raise ValueError(f"unsupported attribute(s) on <import>: {extra}")
-    role_filter = role or roles
-    parsed_roles = None
-    if role_filter:
-        parsed_roles = tuple(part.strip().lower() for part in role_filter.split(",") if part.strip())
-        if not parsed_roles:
-            raise ValueError("<import> role filter cannot be empty")
-    return {"path": path, "preset": preset, "roles": parsed_roles}
-
-
-def _parse_data_section(data_element: ET.Element | None) -> dict[str, Any] | None:
-    if data_element is None:
-        return None
-    attrs = _parse_section_attributes(data_element, DATA_ATTR_DEFAULTS)
-    imports = []
-    items = []
-    for child in list(data_element):
-        if child.tag == "import":
-            imports.append(_parse_data_import(child))
-            continue
-        if child.tag == "item":
-            items.append(_parse_data_item(child))
-            continue
-        raise ValueError(f"unsupported tag <{child.tag}> under <{data_element.tag}>")
-    parsed: dict[str, Any] = {"attrs": attrs}
-    if imports or items:
-        parsed["imports"] = tuple(imports)
-        parsed["items"] = tuple(items)
-    return parsed
-
-
 def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     if value is None:
         return None
@@ -473,102 +282,6 @@ def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     if not path.is_absolute():
         path = base_dir / path
     return str(path.resolve())
-
-
-def _resolve_data_item_path(
-    value: str | None,
-    *,
-    module: str,
-    role: str,
-    field: str,
-    cache_path: str,
-    base_dir: Path,
-) -> str | None:
-    if value is None:
-        return None
-    path = Path(value).expanduser()
-    normalized_module = module.strip().lower()
-    if normalized_module.startswith("builtin."):
-        normalized_module = normalized_module.removeprefix("builtin.")
-    if path.is_absolute():
-        return str(path.resolve())
-    if field == "path" and normalized_module == "barra_style":
-        return value
-    if field == "path" and str(role).strip().lower() == "label":
-        return str(daily_label_path(cache_path, str(value)).resolve())
-    if field == "path" and str(role).strip().lower() == "target":
-        cache_root = Path(cache_path)
-        if path.parts and path.parts[0] == "AshareCache":
-            path = Path(*path.parts[1:])
-        return str((cache_root / "AshareCache" / path).resolve())
-    return str((base_dir / path).resolve())
-
-
-def _load_data_pack(path: Path) -> dict[str, Any]:
-    root = ET.parse(path).getroot()
-    if root.tag not in {"data-pack", "data"}:
-        raise ValueError(f"data import root tag must be <data-pack> or <data>: {path}")
-    parsed = _parse_data_section(root)
-    return parsed or {"imports": (), "items": ()}
-
-
-def _resolve_data_pack(
-    parsed: dict[str, Any],
-    *,
-    base_dir: Path,
-    cache_path: str,
-    seen_paths: set[tuple[str, tuple[str, ...] | None]],
-    presets: list[str],
-) -> list[dict[str, Any]]:
-    resolved_items: list[dict[str, Any]] = []
-    for import_spec in parsed.get("imports", ()):
-        role_filter = import_spec.get("roles")
-        preset = import_spec.get("preset")
-        if preset is not None:
-            if role_filter is not None and "aux" not in role_filter:
-                continue
-            preset_name = str(preset).strip().lower()
-            if preset_name not in BUILTIN_DATA_PRESETS:
-                raise ValueError(f"unsupported built-in data preset: {preset}")
-            if preset_name not in presets:
-                presets.append(preset_name)
-            continue
-        import_path = _resolve_path(import_spec.get("path"), base_dir)
-        assert import_path is not None
-        seen_key = (import_path, role_filter)
-        if seen_key in seen_paths:
-            continue
-        seen_paths.add(seen_key)
-        nested_path = Path(import_path)
-        nested = _load_data_pack(nested_path)
-        nested_presets: list[str] = []
-        nested_items = _resolve_data_pack(
-            nested,
-            base_dir=nested_path.parent,
-            cache_path=cache_path,
-            seen_paths=seen_paths,
-            presets=nested_presets,
-        )
-        if role_filter is not None:
-            nested_items = [item for item in nested_items if str(item.get("role", "aux")).lower() in role_filter]
-        resolved_items.extend(nested_items)
-        for nested_preset in nested_presets:
-            if nested_preset not in presets:
-                presets.append(nested_preset)
-    for item in parsed.get("items", ()):
-        resolved_item = dict(item)
-        module = str(resolved_item["module"])
-        for field in DATA_PATH_FIELDS:
-            resolved_item[field] = _resolve_data_item_path(
-                resolved_item.get(field),
-                module=module,
-                role=str(resolved_item.get("role", "aux")),
-                field=field,
-                cache_path=cache_path,
-                base_dir=base_dir,
-            )
-        resolved_items.append(resolved_item)
-    return resolved_items
 
 
 def _apply_constant_paths(config: dict) -> dict:
@@ -585,77 +298,27 @@ def _apply_constant_paths(config: dict) -> dict:
     return updated
 
 
-def _replace_default_vwap_label(
-    data_items: list[dict[str, Any]], cache_path: str, snap_ti: Any
-) -> list[dict[str, Any]]:
-    if snap_ti is None:
-        return data_items
-    default_path = str(daily_label_path(cache_path, "vwap30_label1d").resolve())
-    resolved_items = []
-    for item in data_items:
-        if (
-            item.get("role") == "label"
-            and item.get("module") in {"factorsim", "builtin.factorsim"}
-            and item.get("path") == default_path
-        ):
-            item = dict(item)
-            item["module"] = "builtin.snap_label"
-            item["path"] = None
-            params = dict(item.get("params", {}))
-            params["snap_ti"] = int(snap_ti)
-            item["params"] = params
-        resolved_items.append(item)
-    return resolved_items
-
-
 def _resolve_loaded_paths(config: dict, base_dir: Path) -> dict:
-    normalized_config = deepcopy(config)
-    data_attrs = normalized_config["combo"].get("data", {}).get("attrs", {})
-    if data_attrs:
-        normalized_config["combo"]["loader"].update(data_attrs)
-
-    resolved = deepcopy(normalized_config)
+    resolved = deepcopy(config)
     for path_key in PATH_FIELDS:
         section = resolved
         for key in path_key[:-1]:
             section = section[key]
-        leaf_key = path_key[-1]
-        if leaf_key in section:
-            section[leaf_key] = _resolve_path(section[leaf_key], base_dir)
+        leaf = path_key[-1]
+        if leaf in section:
+            section[leaf] = _resolve_path(section[leaf], base_dir)
     resolved = _apply_constant_paths(resolved)
-
-    presets: list[str] = list(resolved["combo"].get("data", {}).get("presets", ()))
-    data_items = _resolve_data_pack(
-        resolved["combo"].get("data", {"imports": (), "items": ()}),
-        base_dir=base_dir,
-        cache_path=resolved["constants"]["cache_path"],
-        seen_paths=set(),
-        presets=presets,
-    )
-    if resolved["constants"]["freq"] == "1d":
-        data_items = _replace_default_vwap_label(
-            data_items,
-            resolved["constants"]["cache_path"],
-            resolved["combo"]["runtime"].get("snap_ti"),
-        )
-    resolved["combo"]["data"] = {
-        "attrs": dict(resolved["combo"].get("data", {}).get("attrs", {})),
-        "items": tuple(data_items),
-        "presets": tuple(presets),
-    }
-    resolved["combo"]["loader"]["data_items"] = tuple(data_items)
-    resolved["combo"]["loader"]["data_presets"] = tuple(presets)
-    resolved["combo"]["loader"]["config_path"] = str(base_dir.resolve())
+    raw_times = resolved["combo"]["runtime"]["sample_times"]
+    times = tuple(int(part.strip()) for part in raw_times.split(","))
+    assert times and tuple(sorted(set(times))) == times, "sample_times must be unique and increasing"
+    for ti in times:
+        assert 0 <= ti // 10000 < 24 and 0 <= ti // 100 % 100 < 60 and 0 <= ti % 100 < 60
+    resolved["combo"]["runtime"]["sample_times"] = times
     _validate_config(resolved)
     return resolved
 
 
 def _validate_config(config: dict) -> None:
-    freq = str(config["constants"]["freq"])
-    if freq not in SUPPORTED_DATA_FREQS:
-        supported = ", ".join(DATA_FREQ_ORDER)
-        raise ValueError(f"constants.freq must be one of {supported}")
-
     runtime = config["combo"]["runtime"]
     nonnegative = ("trainDelay",)
     positive = ("retDays", "tsDays", "max_train_days", "torch_threads", "torch_interop_threads")
@@ -678,28 +341,14 @@ def _validate_config(config: dict) -> None:
         raise ValueError("combo.data.data_offset must be nonnegative")
     if int(loader["registry_cache_days"]) <= 0:
         raise ValueError("combo.data.registry_cache_days must be positive")
-    items = tuple(loader["data_items"])
-    labels = tuple(item for item in items if item["role"] == "label")
-    targets = tuple(item for item in items if item["role"] == "target")
-    if freq == "1d":
-        if targets:
-            raise ValueError("constants.freq='1d' requires role='label', not role='target'")
-        if len(labels) > 1:
-            raise ValueError("constants.freq='1d' supports at most one role='label' item")
-    else:
-        if labels:
-            raise ValueError(f"constants.freq='{freq}' requires role='target', not role='label'")
-        if len(targets) != 1:
-            raise ValueError(f"constants.freq='{freq}' requires exactly one role='target' item")
-        target_freq = str(targets[0]["params"]["freq"])
-        if target_freq != freq:
-            raise ValueError(
-                f"constants.freq='{freq}' does not match target freq='{target_freq}'"
-            )
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")
     optimizer = strategy["optimizer"]
+    if len(runtime["sample_times"]) > 1:
+        assert optimizer["type"] == "opt2", "multiple sample times require opt2"
+    price = config["backtest"]["execution_price"].split(":")
+    assert len(price) == 2 and all(price), "execution_price must be source:column"
     if optimizer["type"] not in {"opt1", "opt2"}:
         raise ValueError("strategy.optimizer.type must be opt1 or opt2")
     for name in ("ret_days", "min_valid_instruments", "min_return_obs", "num_mosek_threads"):
@@ -738,6 +387,8 @@ def _validate_config(config: dict) -> None:
         raise ValueError("strategy.optimizer.min_return_obs must not exceed ret_days")
     if int(optimizer["ret_method"]) not in {1, 2}:
         raise ValueError("strategy.optimizer.ret_method must be 1 or 2")
+    if not isinstance(optimizer["benchmark"], str) or not optimizer["benchmark"]:
+        raise ValueError("strategy.optimizer.benchmark must be a non-empty string")
     for name in (
         "univ_list",
         "soft_univ_list",
@@ -787,19 +438,17 @@ def _load_xml_config(path: str) -> dict:
     combo_element = root.find("combo")
     combo = {}
     if combo_element is not None:
-        if combo_element.find("loader") is not None:
-            raise ValueError("<combo><loader> is no longer supported; put loader/data attributes on <combo><data>")
+        if combo_element.find("data") is not None:
+            raise ValueError("declare sources in ResearchLoader.data_requirements(); use <loader> for reading parameters")
         combo = {
             "paths": _parse_section_attributes(combo_element.find("paths"), DEFAULT_CONFIG["combo"]["paths"]),
+            "loader": _parse_section_attributes(combo_element.find("loader"), DEFAULT_CONFIG["combo"]["loader"]),
             "output": _parse_section_attributes(combo_element.find("output"), DEFAULT_CONFIG["combo"]["output"]),
             "runtime": _parse_section_attributes(combo_element.find("runtime"), DEFAULT_CONFIG["combo"]["runtime"]),
             "model": _parse_section_attributes(combo_element.find("model"), DEFAULT_CONFIG["combo"]["model"], allow_extra=True),
         }
         if combo_element.find("defaults") is not None:
             raise ValueError("<combo><defaults> is no longer supported")
-        data_element = combo_element.find("data")
-        if data_element is not None:
-            combo["data"] = _parse_data_section(data_element) or {"attrs": {}, "imports": (), "items": ()}
 
     backtest = _parse_section_attributes(root.find("backtest"), DEFAULT_CONFIG["backtest"])
     monitor = _parse_section_attributes(root.find("monitor"), DEFAULT_CONFIG["monitor"])
@@ -821,13 +470,4 @@ def load_config(path: str | None = None) -> dict:
         raise ValueError("config file must be an XML file")
     loaded = _load_xml_config(str(config_path))
     merged = _deep_merge(DEFAULT_CONFIG, loaded)
-    loaded_data = loaded.get("combo", {}).get("data")
-    if loaded_data is None or (
-        "items" not in loaded_data and "imports" not in loaded_data
-    ):
-        freq = str(merged["constants"]["freq"])
-        if freq not in SUPPORTED_DATA_FREQS:
-            supported = ", ".join(DATA_FREQ_ORDER)
-            raise ValueError(f"constants.freq must be one of {supported}")
-        merged["combo"]["data"]["items"] = _default_data_items(freq)
     return _resolve_loaded_paths(merged, config_path.parent)

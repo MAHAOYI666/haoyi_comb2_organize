@@ -29,7 +29,7 @@ Install the wheel in a Python 3.13 environment:
 python -m pip install dist_protected/combo2-<version>-cp313-cp313-linux_x86_64.whl
 ```
 
-Exact release version and current install target are tracked in `../RELEASE.md`.
+The source version, wheel build target, and publication status are tracked in `../RELEASE.md`.
 
 The only published distribution name is `combo2`. The build script does not accept
 name or version overrides; its version is read exclusively from `../VERSION`.

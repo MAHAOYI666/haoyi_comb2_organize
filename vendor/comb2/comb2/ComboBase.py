@@ -18,7 +18,7 @@ from typing import Any
 import torch
 import numpy as np
 
-from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset, LoaderConfig
+from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset
 
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
@@ -34,12 +34,11 @@ class ComboBase:
         self.research_dataset_path = getattr(node, "research_dataset_path", None)
         self.snaptime = node.snaptime
         self.livetrading = node.livetrading
-        self.execution_freq = str(getattr(node, "freq", "1d"))
+        self.sample_times = tuple(node.sample_times)
         self.trainDelay = int(node.trainDelay)
         self.retDays = int(node.retDays)
         self.tsDays = int(node.tsDays)
         self.load_chunk_days = node.load_chunk_days
-        self.snap_ti = getattr(node, "snap_ti", None)
         self.seed = getattr(node, "seed", None)
         self.deterministic = bool(getattr(node, "deterministic", False))
         self.model_smooth_rate = node.model_smooth_rate
@@ -65,25 +64,15 @@ class ComboBase:
         )
 
         self.loader = self.research_loader_cls(node.loader_config)
-        assert getattr(self.loader, "execution_freq", "1d") == self.execution_freq
-        if self.execution_freq == "1d" and self.snap_ti is not None:
-            self.loader.set_current_ti(int(self.snap_ti))
         self.loader.monitor = getattr(node, "monitor", None)
-        self.buffer = ComboBuffer(
-            group_shapes=self.loader.feature_group_shapes(len(self.loader.mask.code)),
-            keepdays=self.tsDays,
-            dtype=self.loader.dtype,
-            codec=self.loader.codec,
-            freqs=self.loader.freqs,
-        )
+        self.loader.set_point(int(node.start_ds), self.sample_times[0])
+        self.buffer = {}
+        self.buffer_end_didx = {}
+        self._predict_feature_window = {}
+        self._predict_model_windows = {}
         self.model = None
         self.oldModel = None
         self.model_dt = -1
-        self.reset_buffer = True
-        self.buffer_end_didx = -1
-        self._predict_window_didxs: tuple[int, ...] | None = None
-        self._predict_feature_window = None
-        self._predict_model_windows: dict[int, tuple[Any, Any]] = {}
         self._last_train_check_ds: int | None = None
         self.alpha_history = node.alpha_history
         self.research_model_cls = self._load_research_model_class(self.model_path)
@@ -116,21 +105,13 @@ class ComboBase:
         model_config = dict(getattr(self.node, "model_config", {}))
         model_config.update(
             {
-                "freq": self.execution_freq,
                 "dtype": self.loader.dtype,
                 "tsDays": self.tsDays,
                 "num_features": self.loader.num_features,
-                "freqs": self.loader.freqs,
-                "num_features_by_freq": dict(self.loader.num_features_by_freq),
+                "feature_names": self.loader.feature_names,
+                "sample_times": self.sample_times,
             }
         )
-        if self.execution_freq != "1d":
-            model_config.update(
-                {
-                    "target_freq": self.loader.target_freq,
-                    "target_times": self.loader.target_times,
-                }
-            )
         if "hiddenSize" in model_config:
             model_config.setdefault("hidden_size", model_config["hiddenSize"])
         if "fcSize" in model_config:
@@ -169,22 +150,14 @@ class ComboBase:
             raise TypeError(f"{class_name} in {path} must inherit from {base_cls.__name__}")
         return cls
 
-    def Combine(self, di, ti=None):
-        if self.execution_freq == "1d":
-            if ti is not None:
-                self.loader.set_current_ti(int(ti))
-                self.reset_buffer = True
-            if self.livetrading:
-                return self.CombineLive(di, ti)
-            return self.CombineHist(di, ti)
-        if ti is None:
-            raise ValueError("Combine requires both di and ti")
+    def Combine(self, di, ti):
+        ds = self._resolve_date(di)
         ti = int(ti)
-        if ti not in self.loader.target_times:
-            raise ValueError(f"time {ti} is not a trainable {self.loader.target_freq} target bar")
+        assert ti in self.sample_times
+        self.loader.set_point(ds, ti, refresh=self.livetrading)
         if self.livetrading:
-            return self.CombineLive(di, ti)
-        return self.CombineHist(di, ti)
+            return self.CombineLive(ds, ti)
+        return self.CombineHist(ds, ti)
 
     def _clear_alpha(self):
         if isinstance(self.node.alpha, torch.Tensor):
@@ -199,7 +172,7 @@ class ComboBase:
             self.node.alpha[~valid_mask.cpu().numpy()] = float("nan")
 
     def _record_alpha(self, ds: int, ti: int | None = None):
-        key = int(ds) if self.execution_freq == "1d" else (int(ds), int(ti))
+        key = (int(ds), int(ti))
         if isinstance(self.node.alpha, torch.Tensor):
             self.alpha_history[key] = self.node.alpha.detach().cpu().clone()
         else:
@@ -228,42 +201,23 @@ class ComboBase:
         ti_text = "" if ti is None else f" ti={ti}"
         print(f"[ALPHA] ds={ds}{ti_text} stage={tag} {self._summarize_alpha()}")
 
-    def _buffer_ready(self, ds: int) -> bool:
-        end_didx = self.loader.date2didx(ds)
-        if self.execution_freq == "1d":
-            return end_didx - self.tsDays + 1 >= self.loader.data_start_didx
-        return end_didx - self.tsDays + 1 > self.loader.data_start_didx
+    def _buffer_ready(self, ds):
+        return self.loader.date2didx(ds) - self.tsDays + 1 >= self.loader.data_start_didx
 
-    def CombineLive(self, di, ti=None):
-        ds = self._resolve_date(di)
-        if self.execution_freq == "1d":
-            pred_ds = self._prev_date(ds)
-            if self.modelDir:
-                self.LoadCheckpointModel(self.modelDir, pred_ds)
-            return self.GenComboPos(pred_ds)
+    def CombineLive(self, ds, ti):
         if self.modelDir:
             self.LoadCheckpointModel(self.modelDir, self._train_target_ds(ds))
-        return self.GenComboPos(ds, int(ti))
+        return self.GenComboPos(ds, ti)
 
-    def CombineHist(self, di, ti=None):
-        ds = self._resolve_date(di)
-        if self.execution_freq == "1d":
-            pred_ds = self._prev_date(ds)
-            if self.model is None and self.modelDir:
-                self.LoadCheckpointModel(self.modelDir, pred_ds)
-            alpha = self.GenComboPos(pred_ds)
-            if self.needTrain(ds):
-                self.Train(ds)
-                if self.modelDir:
-                    self.SaveCheckpointModel(self.modelDir, self._train_target_ds(ds))
-            return alpha
+    def CombineHist(self, ds, ti):
         if self.model is None and self.modelDir:
             self.LoadCheckpointModel(self.modelDir, self._train_target_ds(ds))
+        alpha = self.GenComboPos(ds, ti)
         if self.needTrain(ds):
             self.Train(ds)
             if self.modelDir:
                 self.SaveCheckpointModel(self.modelDir, self._train_target_ds(ds))
-        return self.GenComboPos(ds, int(ti))
+        return alpha
 
     def _resolve_date(self, di) -> int:
         if isinstance(di, int) and di in self.loader.mask.date:
@@ -276,32 +230,8 @@ class ComboBase:
         didx = self.loader.date2didx(ds)
         return self.loader.didx2date(max(0, didx - offset))
 
-    def _train_target_ds(self, ds: int) -> int:
-        if getattr(self, "execution_freq", "1d") == "1d":
-            return self._prev_date(ds, self.trainDelay)
-        return self._prev_date(ds, self.trainDelay + 1)
-
-    def buffer_load(self, ds: int):
-        end_didx = self.loader.date2didx(ds)
-        if self.reset_buffer:
-            self.buffer.clear()
-            start_didx = end_didx - self.tsDays + 1
-            didx_values = range(start_didx, end_didx + 1)
-            self.reset_buffer = False
-        elif end_didx > self.buffer_end_didx:
-            didx_values = range(self.buffer_end_didx + 1, end_didx + 1)
-        else:
-            didx_values = ()
-        loaded_new_data = False
-        for didx in didx_values:
-            feature = self.loader.gen_feature(self.loader.didx2date(didx))
-            self.buffer.append(feature, didx)
-            loaded_new_data = True
-        if loaded_new_data:
-            self._predict_window_didxs = None
-            self._predict_feature_window = None
-            self._predict_model_windows.clear()
-        self.buffer_end_didx = end_didx
+    def _train_target_ds(self, ds):
+        return self.loader.previous_date(ds, self.trainDelay)
 
     def _model_trainii(self, model) -> torch.Tensor | None:
         trainii = getattr(model, "trainii", None)
@@ -309,94 +239,82 @@ class ComboBase:
             return None
         return torch.as_tensor(trainii, dtype=torch.long)
 
-    def _predict_with_refill(
-        self, model, feature_window, *, di: int, ti: int | None = None
-    ) -> torch.Tensor:
-        trainii = self._model_trainii(model)
-        if trainii is None:
-            model_feature_window = feature_window
-        else:
-            cache_key = id(model)
-            cached = self._predict_model_windows.get(cache_key)
-            if cached is None or cached[0] is not model:
-                model_feature_window = feature_window.select_stocks(trainii)
-                self._predict_model_windows[cache_key] = (model, model_feature_window)
-            else:
-                model_feature_window = cached[1]
-        if self.execution_freq == "1d":
-            model_feature_window = self.loader.transform_feature_window(
-                model_feature_window, stage="predict"
+    def buffer_load(self, ds, ti):
+        end = self.loader.date2didx(ds)
+        start = end - self.tsDays + 1
+        previous = self.buffer_end_didx.get(ti)
+        if previous is None or end < previous or end - previous >= self.tsDays:
+            self.buffer[ti] = ComboBuffer(
+                (len(self.loader.mask.code), self.loader.num_features),
+                self.tsDays, self.loader.dtype, self.loader.codec,
             )
+            first = start
         else:
-            model_feature_window = self.loader.transform_feature_window(
-                model_feature_window, target_ti=ti, stage="predict"
-            )
-        if trainii is None:
-            pred = self.predict(model, model_feature_window, di=di, ti=ti)
-            if pred.numel() == len(self.loader.mask.code):
-                return pred.to(dtype=self.loader.dtype)
-            full_pred = torch.full((len(self.loader.mask.code),), torch.nan, dtype=self.loader.dtype)
-            full_pred[:pred.numel()] = pred.to(dtype=self.loader.dtype)
-            return full_pred
-        pred = self.predict(model, model_feature_window, di=di, ti=ti)
-        full_pred = torch.full((len(self.loader.mask.code),), torch.nan, dtype=self.loader.dtype)
-        full_pred[trainii] = pred.to(dtype=self.loader.dtype)
-        return full_pred
+            first = previous + 1
+            if self.livetrading:
+                first = min(first, end)
+        days = [self.loader.didx2date(i) for i in range(first, end + 1)]
+        self.loader.set_current_ti(ti)
+        width = self.loader.registry.cache_days
+        for offset in range(0, len(days), width):
+            chunk = days[offset:offset + width]
+            self.loader.prefetch_features(chunk)
+            for idx, day in enumerate(chunk, first + offset):
+                self.buffer[ti].append(self.loader.gen_feature(day, ti), idx)
+        if days:
+            self._predict_feature_window[ti] = self.buffer[ti].get(range(start, end + 1))
+            self._predict_model_windows = {
+                key: value for key, value in self._predict_model_windows.items() if key[0] != ti
+            }
+        self.buffer_end_didx[ti] = end
 
-    def GenComboPos(self, ds: int, ti: int | None = None):
-        if self.model is None:
+    def _predict_with_refill(self, model, feature_window, *, di, ti):
+        trainii = self._model_trainii(model)
+        key = (ti, id(model))
+        cached = self._predict_model_windows.get(key)
+        if cached is None or cached[0] is not model:
+            window = feature_window if trainii is None else feature_window.index_select(1, trainii)
+            self._predict_model_windows[key] = (model, window)
+        else:
+            window = cached[1]
+        window = self.loader.transform_feature_window(window, target_ti=ti, stage="predict")
+        pred = torch.as_tensor(model.predict(window, di=di, ti=ti), dtype=self.loader.dtype)
+        if trainii is None:
+            assert pred.shape == (len(self.loader.mask.code),)
+            return pred
+        assert pred.shape == (len(trainii),)
+        full = torch.full((len(self.loader.mask.code),), torch.nan, dtype=self.loader.dtype)
+        full[trainii] = pred.cpu()
+        return full
+
+    def GenComboPos(self, ds, ti):
+        if self.model is None or not self._buffer_ready(ds):
             self._clear_alpha()
             self._record_alpha(ds, ti)
-            self._log_alpha(ds, ti, "no_model")
             return None
-        if not self._buffer_ready(ds):
-            self._clear_alpha()
-            self._record_alpha(ds, ti)
-            self._log_alpha(ds, ti, "buffer_warmup")
-            return None
-        self.buffer_load(ds)
-        end_didx = self.loader.date2didx(ds)
-        didx_list = tuple(end_didx - (self.tsDays - 1) + i for i in range(self.tsDays))
-        if didx_list != self._predict_window_didxs:
-            self._predict_feature_window = self.buffer.get(didx_list)
-            self._predict_window_didxs = didx_list
-            self._predict_model_windows.clear()
-        assert self._predict_feature_window is not None
-        feature_window = self._predict_feature_window
-        cur_pred = self._predict_with_refill(self.model, feature_window, di=ds, ti=ti)
-        if self.oldModel is not None and self.model_smooth_rate < 1.0:
-            old_pred = self._predict_with_refill(self.oldModel, feature_window, di=ds, ti=ti)
-            cur_pred = cur_pred * self.model_smooth_rate + old_pred * (1 - self.model_smooth_rate)
-        self.node.alpha[:] = cur_pred
-        if self.execution_freq == "1d":
-            self._set_invalid_alpha(self.loader.gen_valid_mask(ds))
+        self.buffer_load(ds, ti)
+        window = self._predict_feature_window[ti]
+        pred = self._predict_with_refill(self.model, window, di=ds, ti=ti)
+        if self.oldModel is not None and self.model_smooth_rate < 1:
+            old = self._predict_with_refill(self.oldModel, window, di=ds, ti=ti)
+            pred = pred * self.model_smooth_rate + old * (1 - self.model_smooth_rate)
+        self.node.alpha[:] = pred
+        self._set_invalid_alpha(self.loader.gen_valid_mask(ds, ti))
         self._record_alpha(ds, ti)
         self._log_alpha(ds, ti, "predict")
         return self.node.alpha
 
-    def predict(self, model, feature_window, *, di: int, ti: int | None = None) -> torch.Tensor:
-        if self.execution_freq == "1d":
-            pred = model.predict(feature_window)
-        else:
-            assert ti is not None
-            pred = model.predict(feature_window, di=di, ti=ti)
-        if not isinstance(pred, torch.Tensor):
-            pred = torch.as_tensor(pred, dtype=self.loader.dtype)
-        return pred.to(dtype=self.loader.dtype)
-
     def Train(self, ds: int):
+        self.buffer.clear()
+        self.buffer_end_didx.clear()
+        self._predict_feature_window.clear()
         self._predict_model_windows.clear()
         target_ds = self._train_target_ds(ds)
         target_didx = self.loader.date2didx(target_ds)
-        if self.execution_freq == "1d":
-            loading_days = target_didx - self.loader.data_start_didx + 1
-            raw_ndays = loading_days - self.retDays + 1
-            ndays = min(raw_ndays, self.max_train_days)
-        else:
-            loading_days = target_didx - self.loader.data_start_didx
-            raw_ndays = loading_days
-            ndays = min(loading_days, self.max_train_days)
-        if ndays < self.tsDays:
+        loading_days = target_didx - self.loader.data_start_didx + 1
+        raw_ndays = loading_days
+        ndays = min(loading_days, self.max_train_days)
+        if ndays < self.tsDays + self.retDays - 1:
             raise ValueError(f"not enough training window for ds={ds}")
 
         if self.model is not None:
@@ -409,7 +327,6 @@ class ComboBase:
             self.oldModel.load(model_data_in_memory)
             self._release_torch_cache("after_old_model_replace")
 
-        self.reset_buffer = True
         print(
             f"[TRAIN] ds={ds} target_ds={target_ds} "
             f"loading_days={loading_days} raw_ndays={raw_ndays} "
@@ -421,7 +338,7 @@ class ComboBase:
             self.loader,
             end_ds=target_ds,
             ndays=ndays,
-            x_delay=self.retDays if self.execution_freq == "1d" else None,
+            x_delay=self.retDays,
             ts_days=self.tsDays,
             load_chunk_days=self.load_chunk_days,
             codec=self.loader.codec,
@@ -503,9 +420,9 @@ class ComboBase:
         model_path = os.path.join(model_dir, "model")
         if not os.path.exists(model_path):
             return False
-        self._predict_model_windows.clear()
         self.model = None
         self.oldModel = None
+        self._predict_model_windows.clear()
         self._release_torch_cache("before_checkpoint_load")
         self.model = self.research_model_cls(self._model_config())
         self.model.load(model_path)

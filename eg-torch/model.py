@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from comb2 import FeatureGroups
 
 
 class Model(nn.Module):
@@ -90,7 +89,7 @@ class ResearchModel:
         self.config = config
         self.dtype = config.get("dtype", torch.float16)
         self.ts_days = int(config.get("tsDays", 8))
-        self.num_features = int(config.get("num_features_by_freq", {}).get("1d", config.get("num_features", 1)))
+        self.num_features = int(config["num_features"])
         self.device = torch.device(config.get("device", "cpu"))
         self.hidden_size = int(config.get("hidden_size", 64))
         self.fc_size = int(config.get("fc_size", self.hidden_size))
@@ -137,7 +136,7 @@ class ResearchModel:
     def _next_batch(self, iterator):
         return next(iterator)
 
-    def _batch_to_device(self, x: FeatureGroups, y: torch.Tensor, w: torch.Tensor):
+    def _batch_to_device(self, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor):
         return (
             x.to(self.device, dtype=torch.float32, non_blocking=True),
             y.to(self.device, dtype=torch.float32, non_blocking=True),
@@ -147,8 +146,8 @@ class ResearchModel:
     def _zero_grad(self, optimizer):
         optimizer.zero_grad(set_to_none=True)
 
-    def _forward_batch(self, x: FeatureGroups) -> torch.Tensor:
-        return self.model(x["1d"])
+    def _forward_batch(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
 
     def _compute_loss(self, pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         return self.loss_fn(pred, y, w)
@@ -193,7 +192,7 @@ class ResearchModel:
             iterator = iter(dataloader)
             while True:
                 try:
-                    _, x, y, w = self._next_batch(iterator)
+                    _, ds, ti, x, y, w = self._next_batch(iterator)
                 except StopIteration:
                     break
                 x, y, w = self._batch_to_device(x, y, w)
@@ -225,10 +224,10 @@ class ResearchModel:
         return self
 
     @torch.no_grad()
-    def predict(self, x_window: FeatureGroups) -> torch.Tensor:
+    def predict(self, x_window: torch.Tensor, *, di: int, ti: int) -> torch.Tensor:
         if self.model is None:
             raise ValueError("model is not fitted")
-        x_1d = x_window["1d"]
+        x_1d = x_window
         if x_1d.dim() != 3:
             raise ValueError(f"expected 3D 1d feature tensor, got shape={tuple(x_1d.shape)}")
         self.model.eval()

@@ -344,7 +344,7 @@ class Memmaper2:
             index_frame = pd.DataFrame(idx_arr[start_ds_idx : end_ds_idx + 1].copy(), index=date_idx[start_ds_idx : end_ds_idx + 1], columns=time_idx)
             index_frame.iloc[0, :start_time_idx] = float("nan")
             index_frame.iloc[-1, end_time_idx:] = float("nan")
-            return MemmapDataFrame(values, index=index_frame.stack().index, columns=self._columns, n_levels=2)
+            return MemmapDataFrame(values, index=index_frame.stack().dropna().index, columns=self._columns, n_levels=2)
         return values
 
     def load(self, start_ds=None, end_ds=None, df_type=False, **kwargs):

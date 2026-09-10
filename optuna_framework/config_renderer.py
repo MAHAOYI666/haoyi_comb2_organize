@@ -22,6 +22,10 @@ PATH_PATCH_KEYS = {
     "config.strategy.@path",
     "config.constants.@output_root",
     "config.combo.paths.@model_path",
+    "config.combo.paths.@research_loader_path",
+    "config.combo.paths.@research_dataset_path",
+    "config.combo.paths.@combo_base_path",
+    "config.constants.@cache_path",
     "config.combo.runtime.@snaptime",
 }
 

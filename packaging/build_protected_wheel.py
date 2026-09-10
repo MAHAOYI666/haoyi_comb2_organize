@@ -365,6 +365,8 @@ def extension_specs(stage_root: Path) -> list[tuple[str, str]]:
 def package_names(stage_root: Path) -> list[str]:
     packages = []
     for init_file in sorted(stage_root.rglob("__init__.py")):
+        if init_file.relative_to(stage_root).parts[0] not in {*PACKAGE_SOURCES, "vendor"}:
+            continue
         packages.append(".".join(init_file.parent.relative_to(stage_root).parts))
     return packages
 

@@ -234,7 +234,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "class ResearchModel" in model_text
     assert "class AlphaStrategy" not in model_text
     assert "adaptive_hidden_size" in model_text
-    assert "FeatureGroups" in model_text
+    assert "class ResearchLoader" in model_text
 
     import importlib.util
 
@@ -252,21 +252,19 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     config_text = (tmp_path / "config.xml").read_text(encoding="utf-8")
     assert 'model_path="Model.py"' in config_text
     assert 'combo_base_path=""' in config_text
-    assert 'trainDelay="0"' in config_text
+    assert 'trainDelay="2"' in config_text
     assert 'retDays="1"' in config_text
     assert 'hidden_size=' not in config_text
     assert 'fc_size=' not in config_text
-    assert 'path="example_factor"' in config_text
-    assert 'path="vwap30_label1d"' in config_text
-    assert 'role="label"' in config_text
+    assert "data_requirements" in model_text
+    assert "role=" not in config_text
     root = ET.fromstring(config_text)
     assert root.find("./strategy").get("path") is None
-    assert set(root.find("./constants").attrib) == {"cache_path", "output_root", "freq"}
-    assert root.find("./constants").get("freq") == "1d"
+    assert set(root.find("./constants").attrib) == {"cache_path", "output_root"}
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
-    assert set(root.find("./combo/data").attrib) == {"dtype", "compression", "data_start_ds"}
+    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds"}
     assert "output_path" not in root.find("./backtest").attrib
     assert root.find("./combo/defaults") is None
 
@@ -278,24 +276,20 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert Path(parsed["strategy"]["path"]).is_file()
     assert parsed["strategy"]["path"].endswith("comb2_pcmaster/default_strategy.py")
     assert parsed["combo"]["paths"]["combo_base_path"] is None
-    assert parsed["combo"]["runtime"]["trainDelay"] == 0
+    assert parsed["combo"]["runtime"]["trainDelay"] == 2
     assert parsed["combo"]["runtime"]["retDays"] == 1
     assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
     assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
     assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
     assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
-    assert parsed["constants"]["freq"] == "1d"
     assert set(parsed["combo"]["loader"]) == {
         "dtype",
         "compression",
         "data_start_ds",
         "data_offset",
-        "data_items",
-        "data_presets",
-        "config_path",
         "registry_cache_days",
     }
-    assert len(parsed["combo"]["loader"]["data_items"]) == 2
+    assert parsed["combo"]["runtime"]["sample_times"] == (100000,)
 
 
 def test_config_validates_runtime_values_and_constants_schema(tmp_path):
@@ -311,85 +305,13 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
         load_config(str(unknown_constant))
 
-    invalid_freq = tmp_path / "invalid-freq.xml"
-    invalid_freq.write_text('<config><constants freq="tick" /></config>', encoding="utf-8")
-    with pytest.raises(ValueError, match="constants.freq must be one of"):
-        load_config(str(invalid_freq))
-
-    intraday_default = tmp_path / "intraday-default.xml"
-    intraday_default.write_text('<config><constants freq="1m" /></config>', encoding="utf-8")
-    parsed = load_config(str(intraday_default))
-    target = [item for item in parsed["combo"]["loader"]["data_items"] if item["role"] == "target"]
-    assert len(target) == 1
-    assert target[0]["params"]["freq"] == "1m"
-    assert target[0]["path"].endswith("AshareCache/1m_IntvReturns/IntvReturns.c2c")
-
-    mismatch = tmp_path / "mismatch.xml"
-    mismatch.write_text(
-        '<config><constants freq="5m" /><combo><data>'
-        '<item name="factor.x" path="x" />'
-        '<item name="returns" path="returns" role="target" freq="1m" />'
-        '</data></combo></config>',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="does not match target freq"):
-        load_config(str(mismatch))
-
-
-def test_starter_model_runs_daily_and_intraday_sample_contracts():
-    from torch.utils.data import Dataset
-
-    from comb2 import FeatureGroups
-    from comboHelloWorld import MODEL_TEMPLATE
-
-    namespace = {}
-    exec(MODEL_TEMPLATE, namespace)
-    research_model = namespace["ResearchModel"]
-
-    class DailyDataset(Dataset):
-        validinsts = torch.arange(3)
-
-        def __len__(self):
-            return 2
-
-        def __getitem__(self, idx):
-            x = FeatureGroups(
-                {
-                    "1d": torch.tensor(
-                        [[[1.0], [2.0], [3.0]], [[2.0], [3.0], [4.0]]]
-                    )
-                    + idx
-                },
-                ("1d",),
-            )
-            return idx, x, torch.tensor([-1.0, 0.0, 1.0]), torch.ones(3)
-
-    common = {
-        "dtype": torch.float32,
-        "tsDays": 2,
-        "num_features_by_freq": {"1d": 1},
-        "epochs": 1,
-        "batch_size": 1,
-        "hidden_size": 8,
-        "fc_size": 8,
-        "dropout": 0.0,
-    }
-    daily = research_model({**common, "freq": "1d"}).fit(DailyDataset())
-    assert daily.predict(DailyDataset()[0][1]).shape == (3,)
-
-    class MinuteDataset(DailyDataset):
-        times = (93100, 93200)
-
-        def __getitem__(self, idx):
-            _, x, y, w = super().__getitem__(idx)
-            return idx, 20200102, self.times[idx], x, y, w.to(torch.bool)
-
-    minute = research_model(
-        {**common, "freq": "1m", "target_times": MinuteDataset.times}
-    ).fit(MinuteDataset())
-    assert minute.predict(
-        MinuteDataset()[0][3], di=20200102, ti=93100
-    ).shape == (3,)
+    invalid_times = tmp_path / "times.xml"
+    invalid_times.write_text('<config><combo><runtime sample_times="110000,100000" /></combo></config>')
+    with pytest.raises(AssertionError, match="increasing"):
+        load_config(str(invalid_times))
+    declared = tmp_path / "declared.xml"
+    declared.write_text('<config><strategy><optimizer type="opt2" /></strategy><combo><runtime sample_times="100000,110000" /></combo></config>')
+    assert load_config(str(declared))["combo"]["runtime"]["sample_times"] == (100000,110000)
 
 
 def test_config_loads_researcher_optimizer_parameters(tmp_path):
@@ -403,6 +325,7 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
     <optimizer
       type="opt2"
       lambda0="0.75"
+      benchmark="399300.SZ"
       maxtvr="0.25"
       max_weight="0.006"
       target_size="200000000"
@@ -426,6 +349,7 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
 
     assert optimizer["type"] == "opt2"
     assert optimizer["lambda0"] == 0.75
+    assert optimizer["benchmark"] == "399300.SZ"
     assert optimizer["maxtvr"] == 0.25
     assert optimizer["max_weight"] == 0.006
     assert optimizer["target_size"] == 200000000.0
@@ -452,6 +376,7 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
     ):
         assert all(entry.split(",")[1] == "1" for entry in optimizer[name].split("|"))
     assert DEFAULT_OPTIMIZER_CONFIG["ret_delay"] == 1
+    assert DEFAULT_OPTIMIZER_CONFIG["benchmark"] == "000905.SH"
     assert DEFAULT_OPTIMIZER_CONFIG["type"] == "opt1"
     assert DEFAULT_OPTIMIZER_CONFIG["maxtrd"] == 0.0
     assert DEFAULT_OPTIMIZER_CONFIG["maxpos"] == 0.0
@@ -514,6 +439,16 @@ def test_config_rejects_invalid_optimizer_parameters(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="strategy.optimizer.type must be opt1 or opt2"):
+        load_config(str(config_path))
+
+    config_path.write_text(
+        '<config><strategy><optimizer benchmark="" /></strategy></config>',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="strategy.optimizer.benchmark must be a non-empty string",
+    ):
         load_config(str(config_path))
 
 
@@ -598,3 +533,17 @@ class ComboBase(BaseComboBase):
     overwrite = run_cli_in(tmp_path, str(REPO_ROOT / "comboHelloWorld.py"), "-y")
     assert overwrite.returncode == 2
     assert "refusing to overwrite" in overwrite.stderr
+
+
+def test_build_package_discovery_ignores_generated_build_tree(tmp_path):
+    import importlib.util
+    path = REPO_ROOT / "packaging" / "build_protected_wheel.py"
+    spec = importlib.util.spec_from_file_location("build_package_discovery_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for relative in ("comb2/__init__.py", "comb2/codec/__init__.py", "vendor/__init__.py",
+                     "build/lib.linux-x86_64-cpython-313/comb2/__init__.py"):
+        source = tmp_path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("")
+    assert module.package_names(tmp_path) == ["comb2", "comb2.codec", "vendor"]

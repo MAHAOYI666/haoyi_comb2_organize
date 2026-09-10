@@ -1,42 +1,39 @@
 from __future__ import annotations
 
-import torch
-
-from comb2 import ComboDataLoader, FeatureGroups
-from comb2.op_utils import cs_zscore, nan_to_num, truncate
+from pathlib import Path
+from comb2 import ComboDataLoader, DataItem
+from comb2_simbase.cache_layout import ashare_cache_path
 
 
 class ResearchLoader(ComboDataLoader):
-    """eg-torch data loader scaffold.
+    """Same-time daily factors and the researcher-indexed snapshot label."""
 
-    Default flow:
-    gen_feature(ds) -> build_raw_feature(ds) -> preprocess_features(groups, ds)
-    gen_label(ds, ret_days) -> preprocess_label(label_values, valid_mask, ds, ret_days)
-    load_feature_window(end_ds, ts_days) -> process_feature_window(feature_window)
-    """
+    def data_requirements(self):
+        root = ashare_cache_path(self.config.cache_path)
+        return (
+            DataItem("alpha.yz_20250219_02", path="factors/yz_20250219_02", delay=1),
+            DataItem("alpha.wjx_20240829_02", path="factors/wjx_20240829_02", delay=1),
+            DataItem("alpha.guanxl_05", path="factors/guanxl_05", delay=1),
+            DataItem("alpha.alpha1_20251008_01", path="factors/alpha1_20251008_01", delay=1),
+            DataItem("alpha.alpha2_20251008_02", path="factors/alpha2_20251008_02", delay=1),
+            DataItem("alpha.alpha3_20251008_03", path="factors/alpha3_20251008_03", delay=1),
+            DataItem("alpha.alpha4_20251008_04", path="factors/alpha4_20251008_04", delay=1),
+            DataItem("alpha.alpha5_20251008_05", path="factors/alpha5_20251008_05", delay=1),
+            DataItem("label", module="builtin.snap_label", delay=1),
+            DataItem("execution", path=str(root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}")),
+        )
 
-    def gen_feature(self, ds: int) -> FeatureGroups:
-        return super().gen_feature(ds)
+    def model_input_sources(self):
+        return (
+            "alpha.yz_20250219_02",
+            "alpha.wjx_20240829_02",
+            "alpha.guanxl_05",
+            "alpha.alpha1_20251008_01",
+            "alpha.alpha2_20251008_02",
+            "alpha.alpha3_20251008_03",
+            "alpha.alpha4_20251008_04",
+            "alpha.alpha5_20251008_05",
+        )
 
-    def preprocess_daily_features(self, feature: torch.Tensor, ds: int) -> torch.Tensor:
-        feature = cs_zscore(feature.transpose(0, 1)).transpose(0, 1)
-        feature = truncate(feature, -4.0, 4.0)
-        return nan_to_num(feature, 0.0).to(self.dtype)
-
-    def gen_label(self, ds: int, ret_days: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
-        return super().gen_label(ds, ret_days=ret_days)
-
-    def preprocess_label(
-        self,
-        label_values: torch.Tensor,
-        valid_mask: torch.Tensor,
-        ds: int,
-        ret_days: int = 1,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return super().preprocess_label(label_values, valid_mask, ds, ret_days=ret_days)
-
-    def _feature_available_mask(self, feature_window: FeatureGroups) -> torch.Tensor:
-        return super()._feature_available_mask(feature_window)
-
-    def process_feature_window(self, feature_window: FeatureGroups) -> tuple[FeatureGroups, torch.Tensor]:
-        return super().process_feature_window(feature_window)
+    def model_target(self):
+        return "label", "label"

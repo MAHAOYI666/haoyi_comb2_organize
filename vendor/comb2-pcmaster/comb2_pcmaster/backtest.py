@@ -96,20 +96,25 @@ class DailyBacktest:
 
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
-        if self.node.execution_price == "vwap30":
+        if self.node.execution_price == "provided":
+            self.vwap_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds)
+        elif self.node.execution_price == "vwap30":
             self.vwap_data = self.dataloader.get_vwap(
                 self.node.start_ds,
                 self.node.end_ds,
                 snap_ti=self.node.snap_ti,
-            ).ffill()
+            )
         elif self.node.execution_price == "open":
-            self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds).ffill()
+            self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds)
         else:
             raise ValueError(f"Unknown execution_price: {self.node.execution_price}")
         self.close_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds).ffill()
         self.market_cap = self.dataloader.get_market_cap(self.node.start_ds, self.node.end_ds).ffill()
         self.suspend = self.dataloader.get_suspend(self.node.start_ds, self.node.end_ds)
         self.limit = self.dataloader.get_limit(self.node.start_ds, self.node.end_ds)
+        self.listed_days = self.dataloader.get_stock_mask(
+            "StockListedDays", self.node.start_ds, self.node.end_ds
+        )
 
     def initialize(self):
         self.node.holdings = pd.Series(0.0, index=self.vwap_data.columns)
@@ -127,9 +132,25 @@ class DailyBacktest:
         self.equity_peak = float(self.node.cash)
         self.cooldown_left = 0
         self.cash = float(self.node.cash)
+        self.last_point = None
+        self.last_prices = None
+        self.day_settled = True
+        self.day_trade_cost = 0.0
+        self.day_delist_writeoff = 0.0
+        self.day_delist_count = 0
+        self.node.prev_total_asset = self.cash
         self.daily_metrics_path = os.path.join(self.node.output_path, self.node.daily_metrics_file)
+        self.execution_path = os.path.join(self.node.output_path, "executions.csv")
+        self.executions_written = False
+        self.settlement_path = os.path.join(self.node.output_path, "settlements.csv")
+        self.settlements_written = False
         self.pnl_summary_path = os.path.join(self.node.output_path, "pnl_summary.csv")
-        for path in (self.daily_metrics_path, self.pnl_summary_path):
+        for path in (
+            self.daily_metrics_path,
+            self.execution_path,
+            self.settlement_path,
+            self.pnl_summary_path,
+        ):
             if os.path.exists(path):
                 os.remove(path)
 
@@ -164,6 +185,67 @@ class DailyBacktest:
         stock_value = (self.node.holdings * prices_per_share).sum()
         return float(stock_value + self.cash)
 
+    @staticmethod
+    def _positive_finite(values: pd.Series) -> pd.Series:
+        return values.notna() & np.isfinite(values) & (values > 0)
+
+    def _settle_delisted(self, date: int) -> tuple[float, int]:
+        if self.node.yesterday is None:
+            return 0.0, 0
+        assert self.node.holdings is not None and self.node.locked_holdings is not None
+        previous = self.listed_days.loc[self.node.yesterday].reindex(self.universe.columns)
+        current = self.listed_days.loc[date].reindex(self.universe.columns)
+        was_listed = self._positive_finite(previous)
+        is_listed = self._positive_finite(current)
+        delisted = (self.node.holdings > 0) & was_listed & ~is_listed
+        if not delisted.any():
+            return 0.0, 0
+
+        assert self.last_prices is not None
+        marks = self.last_prices.reindex(self.universe.columns)
+        assert self._positive_finite(marks[delisted]).all(), (
+            f"{date}: delisted holdings require a last observable mark"
+        )
+        shares = self.node.holdings[delisted].copy()
+        writeoff = shares * marks[delisted]
+        records = pd.DataFrame(
+            {
+                "date": int(date),
+                "code": shares.index,
+                "shares": shares.to_numpy(dtype=float),
+                "last_mark_price": marks[delisted].to_numpy(dtype=float),
+                "settlement_price": 0.0,
+                "settlement_value": 0.0,
+                "writeoff_amount": writeoff.to_numpy(dtype=float),
+                "policy": "factorsim_stock_listed_days_zero_writeoff",
+            }
+        )
+        records.to_csv(
+            self.settlement_path,
+            mode="a" if self.settlements_written else "w",
+            header=not self.settlements_written,
+            index=False,
+        )
+        self.settlements_written = True
+        self.node.holdings.loc[delisted] = 0.0
+        self.node.locked_holdings.loc[delisted] = 0.0
+        return float(writeoff.sum()), int(delisted.sum())
+
+    def _trading_masks(
+        self, date: int, execution_prices: pd.Series
+    ) -> tuple[pd.Series, pd.Series]:
+        prices = execution_prices.reindex(self.universe.columns)
+        limit = self.limit.loc[date].reindex(self.universe.columns)
+        suspend = self.suspend.loc[date].reindex(self.universe.columns)
+        base = self.universe.loc[date].reindex(self.universe.columns)
+        market_sellable = (
+            self._positive_finite(prices)
+            & self._positive_finite(limit)
+            & self._positive_finite(suspend)
+        )
+        buyable = market_sellable & self._positive_finite(base)
+        return buyable.astype(bool), market_sellable.astype(bool)
+
     def _append_daily_metrics(self, metrics: dict):
         pd.DataFrame([metrics]).to_csv(
             self.daily_metrics_path,
@@ -185,22 +267,45 @@ class DailyBacktest:
             ts_code="000905.SH",
         )
 
-    def step(self, date: int, alpha: pd.Series | np.ndarray) -> dict:
+    def step(self, date, alpha, *, ti=150000, prices=None, mark_prices=None, last=True):
         date = self._align_date(date)
-        if self.node.yesterday is not None and date <= self.node.yesterday:
-            raise ValueError(f"date {date} must be later than previous date {self.node.yesterday}")
-
-        self._advance_from_previous_close(date)
-        assert self.node.holdings is not None
-        assert self.node.locked_holdings is not None
-        self.node.executed_turnover_today = 0.0
-        vwap_today = self.vwap_data.loc[date]
-        pre_trade_total = self._total_asset(vwap_today)
-        self.node.target_stock_amount = float(pre_trade_total * self.node.reserve_cash)
+        point = (date, int(ti))
+        assert self.last_point is None or point > self.last_point, "execution points must increase"
+        new_day = self.last_point is None or date != self.last_point[0]
+        if not new_day:
+            assert not self.day_settled, "day has already been settled"
+            assert self.node.strategy_config["optimizer"]["type"] == "opt2", "intraday execution requires opt2"
+        else:
+            assert self.day_settled, "settle previous trading day before advancing"
+            self.day_delist_writeoff, self.day_delist_count = self._settle_delisted(date)
+            self._advance_from_previous_close(date)
+            self.node.executed_turnover_today = 0.0
+            self.day_trade_cost = 0.0
+            self.day_settled = False
+        day_delist_writeoff = self.day_delist_writeoff
+        day_delist_count = self.day_delist_count
+        assert self.node.holdings is not None and self.node.locked_holdings is not None
+        vwap_today = self.vwap_data.loc[date] if prices is None else prices.reindex(self.universe.columns)
+        if mark_prices is None:
+            if new_day:
+                mark_prices = self.preclose_data.loc[date].reindex(self.universe.columns)
+                if self.last_prices is not None:
+                    mark_prices = mark_prices.where(
+                        self._positive_finite(mark_prices), self.last_prices
+                    )
+            else:
+                mark_prices = self.last_prices
+        mark_prices = mark_prices.reindex(self.universe.columns)
+        held = self.node.holdings > 0
+        assert self._positive_finite(mark_prices[held]).all(), "held stocks require observable marks"
+        pre_trade_total = self._total_asset(mark_prices)
+        if new_day:
+            self.node.target_stock_amount = float(pre_trade_total * self.node.reserve_cash)
         assert np.isfinite(self.node.target_stock_amount) and self.node.target_stock_amount > 0
-        current_value = (self.node.holdings * vwap_today).fillna(0.0)
-        locked_value = (self.node.locked_holdings * vwap_today).fillna(0.0)
+        current_value = (self.node.holdings * mark_prices).fillna(0.0)
+        locked_value = (self.node.locked_holdings * mark_prices).fillna(0.0)
         sellable_value = (current_value - locked_value).clip(lower=0.0)
+        buyable_mask, market_sellable_mask = self._trading_masks(date, vwap_today)
         stop_triggered = False
         if self.node.drawdown_stop > 0 and pre_trade_total / self.equity_peak - 1.0 <= -self.node.drawdown_stop:
             stop_triggered = True
@@ -212,9 +317,9 @@ class DailyBacktest:
             orders = pd.DataFrame(
                 {
                     "buy_amount": np.zeros(len(self.universe.columns), dtype=float),
-                    "sell_amount": sellable_value.reindex(self.universe.columns).to_numpy(
-                        dtype=float
-                    ),
+                    "sell_amount": sellable_value.where(
+                        market_sellable_mask, 0.0
+                    ).to_numpy(dtype=float),
                 },
                 index=self.universe.columns,
             )
@@ -223,7 +328,7 @@ class DailyBacktest:
             ).get("type", "custom")
             orders.attrs["solver_status"] = "drawdown_stop"
             orders.attrs["solver_fallback"] = False
-            if not stop_triggered:
+            if new_day and not stop_triggered:
                 self.cooldown_left -= 1
         else:
             signal_masked = signals * self.universe.loc[date].fillna(0.0)
@@ -232,6 +337,8 @@ class DailyBacktest:
                 signal_masked,
                 sellable_value,
                 locked_value,
+                buyable_mask,
+                market_sellable_mask,
                 self.node.target_stock_amount,
                 self.node.executed_turnover_today,
             )
@@ -243,6 +350,16 @@ class DailyBacktest:
             (orders["buy_amount"].to_numpy(dtype=float) > 0)
             & (orders["sell_amount"].to_numpy(dtype=float) > 0)
         ).any()
+        invalid_buy = (orders["buy_amount"] > 0) & ~buyable_mask
+        invalid_sell = (orders["sell_amount"] > 0) & ~market_sellable_mask
+        assert not invalid_buy.any(), (
+            f"{point}: buy orders outside buyable pool: "
+            f"{orders.index[invalid_buy].tolist()[:10]}"
+        )
+        assert not invalid_sell.any(), (
+            f"{point}: sell orders outside market-sellable pool: "
+            f"{orders.index[invalid_sell].tolist()[:10]}"
+        )
 
         target_weight = orders.attrs.get("target_weight")
         if target_weight is None:
@@ -250,23 +367,22 @@ class DailyBacktest:
             target_weight = target_amount.clip(lower=0.0) / self.node.target_stock_amount
         else:
             target_weight = target_weight.copy()
-        target_weight.name = date
+        target_weight.name = point
         target_weight.attrs.update(
             {key: value for key, value in orders.attrs.items() if key != "target_weight"}
         )
         self.node.position_history.append(
-            pd.DataFrame([target_weight], index=[date], columns=self.universe.columns)
+            pd.DataFrame([target_weight], index=pd.MultiIndex.from_tuples([point], names=["date", "time"]), columns=self.universe.columns)
         )
         execution_index = orders.index[
             (orders["buy_amount"] > 0) | (orders["sell_amount"] > 0)
         ]
         tvr_cost = 0.0
         trade_cost = 0.0
+        buy_shares = pd.Series(0.0, index=orders.index)
+        sell_shares = pd.Series(0.0, index=orders.index)
 
         for stock in execution_index:
-            if (stock not in vwap_today) or pd.isna(vwap_today[stock]) or pd.isna(self.suspend.loc[date, stock]) or pd.isna(self.limit.loc[date, stock]):
-                continue
-
             price_per_share = vwap_today[stock]
             price_per_100_shares = price_per_share * 100
             buy_amount = orders.at[stock, "buy_amount"]
@@ -286,6 +402,7 @@ class DailyBacktest:
                         self.node.locked_holdings.loc[stock] + buy_lots * 100
                     )
                     tvr_cost += b_value
+                    buy_shares.loc[stock] = buy_lots * 100
             elif sell_amount > 0:
                 sellable_shares = max(
                     self.node.holdings.loc[stock]
@@ -302,41 +419,65 @@ class DailyBacktest:
                 self.cash += proceeds
                 self.node.holdings.loc[stock] = self.node.holdings.loc[stock] - shares_to_sell
                 tvr_cost += s_value
+                sell_shares.loc[stock] = shares_to_sell
 
         self.node.executed_turnover_today += float(tvr_cost)
+        executed = orders.loc[execution_index].copy()
+        executed["buy_shares"] = buy_shares.loc[execution_index]
+        executed["sell_shares"] = sell_shares.loc[execution_index]
+        executed["execution_price"] = vwap_today.loc[execution_index]
+        executed["date"] = date
+        executed["time"] = int(ti)
+        executed.index.name = "code"
+        executed.to_csv(self.execution_path, mode="a" if self.executions_written else "w",
+                        header=not self.executions_written)
+        self.executions_written = True
 
-        close_today = self.close_data.loc[date]
-        total = self._total_asset(close_today)
-        self.equity_peak = max(self.equity_peak, float(total))
-        pnl = 0.0 if self.node.prev_total_asset is None else float(total - self.node.prev_total_asset)
-        self.node.prev_total_asset = float(total)
-        tvr = float(tvr_cost / self.node.target_stock_amount)
-        long_num = int((self.node.holdings > 0).sum())
-
+        self.day_trade_cost += float(trade_cost)
+        self.last_prices = vwap_today.where(np.isfinite(vwap_today) & (vwap_today > 0), mark_prices)
+        self.last_point = point
+        total = self._total_asset(self.last_prices)
         metrics = {
-            "date": int(date),
-            "total_asset": float(total),
-            "pnl": pnl,
-            "trade_cost": float(trade_cost),
+            "date": date, "time": int(ti), "total_asset": total,
+            "pnl": total - self.node.prev_total_asset, "trade_cost": float(trade_cost),
             "reserve_cash": float(self.cash),
-            "tvr": tvr,
-            "long_num": long_num,
+            "tvr": float(tvr_cost / self.node.target_stock_amount),
+            "long_num": int((self.node.holdings > 0).sum()),
+            "delist_writeoff": day_delist_writeoff,
+            "delist_count": day_delist_count,
         }
-        self.node.daily_metrics_history.append(metrics)
-        self.node.asset_history.append([date, total, trade_cost, self.cash, tvr, long_num])
-        self.node.hold_history.append(self.node.holdings.rename(date))
-        self._append_daily_metrics(metrics)
-        self.node.yesterday = date
-        self._log(
-            f"date: {date}, total: {total:.2f}, trade_cost: {trade_cost:.2f}, "
-            f"cash: {self.cash:.2f}, tvr: {tvr:.3f}, long_num: {long_num}"
-        )
+        if last:
+            close_marks = self.close_data.loc[date].reindex(self.universe.columns)
+            held = self.node.holdings > 0
+            assert self._positive_finite(close_marks[held]).all(), (
+                "held stocks require observable end-of-day marks"
+            )
+            total = self._total_asset(close_marks)
+            self.last_prices = close_marks
+            self.equity_peak = max(self.equity_peak, total)
+            daily = {
+                "date": date, "total_asset": total,
+                "pnl": total - self.node.prev_total_asset,
+                "trade_cost": self.day_trade_cost, "reserve_cash": float(self.cash),
+                "tvr": self.node.executed_turnover_today / self.node.target_stock_amount,
+                "long_num": metrics["long_num"],
+                "delist_writeoff": day_delist_writeoff,
+                "delist_count": day_delist_count,
+            }
+            self.node.prev_total_asset = total
+            self.node.daily_metrics_history.append(daily)
+            self.node.asset_history.append([
+                date, total, self.day_trade_cost, self.cash, daily["tvr"],
+                daily["long_num"], day_delist_writeoff, day_delist_count,
+            ])
+            self.node.hold_history.append(self.node.holdings.rename(date))
+            self._append_daily_metrics(daily)
+            self.node.yesterday = date
+            self.day_settled = True
+            metrics.update(daily)
         return {
-            **metrics,
-            "target_weight": target_weight.copy(),
-            "orders": orders.copy(),
-            "holdings": self.node.holdings.copy(),
-            "locked_holdings": self.node.locked_holdings.copy(),
+            **metrics, "target_weight": target_weight.copy(), "orders": orders.copy(),
+            "holdings": self.node.holdings.copy(), "locked_holdings": self.node.locked_holdings.copy(),
         }
 
     def finalize(self):
@@ -350,7 +491,10 @@ class DailyBacktest:
             self.hold_history = pd.DataFrame(columns=self.universe.columns)
         self.asset_history = pd.DataFrame(
             self.node.asset_history,
-            columns=["date", "total_asset", "trade_cost", "reserve_cash", "tvr", "long_num"],
+            columns=[
+                "date", "total_asset", "trade_cost", "reserve_cash", "tvr",
+                "long_num", "delist_writeoff", "delist_count",
+            ],
         ).set_index("date")
         summary = self._pnl_summary()
         self.draw()
@@ -391,7 +535,7 @@ class DailyBacktest:
         bench_data = bench_data.reindex(self.vwap_data.index.astype(str)).ffill()
 
         self.setup_plot("Backtest Result", "date", "cash")
-        y0 = self.asset_history.iloc[:, 0] / self.asset_history.iloc[0, 0]
+        y0 = self.asset_history.iloc[:, 0] / self.node.cash
         self.node.ax.plot(x, y0, label="backtest", color="blue")
         y1 = bench_data.loc[:, "close"].astype(float) / float(bench_data.loc[bench_data.index[0], "close"])
         self.node.ax.plot(x, y1, label="ZZ500", color="red")
@@ -450,7 +594,8 @@ class DailyBacktest:
         bench_close = bench_data.reindex(df.index)["close"].astype(float).ffill()
         bench_ret = bench_close.pct_change().fillna(0.0)
 
-        pnl = df["total_asset"].diff().fillna(0.0)
+        pnl = df["total_asset"].diff()
+        pnl.iloc[0] = df["total_asset"].iloc[0] - self.node.cash
         ret = pnl / booksize
         df = df.assign(pnl=pnl, ret=ret, li_ret=ret - bench_ret)
 

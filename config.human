@@ -1,289 +1,191 @@
-# comb2 稳定包使用手册
+# combo2 研究员接口
 
-本文面向 coding agent 和人类使用者，目标是在不阅读源码的情况下，知道如何用稳定包创建 research 项目、接入模型、训练生成 alpha、回测、评估、做常见扩展和排错。
+combo2 使用 Python 声明数据，Memmap 分块读取，源级处理后把普通张量送入模型。每个样本由 (交易日, 采样时点) 标识。所有日期移动使用交易日历。
 
-本文只覆盖稳定使用接口，不覆盖包内部实现和 vendor 目录可改点。
-
-## 1. 这个包做什么
-
-`comb2` 稳定包把 research 模型接到统一的数据、训练、alpha 生成、回测和本地评估流程上。
-
-典型工作流：
-
-```text
-创建项目目录
-  -> 编辑 config.xml
-  -> 实现 ResearchModel
-  -> runCombo config.xml
-  -> runEval config.xml
-  -> 按评估结果调整模型、数据或回测配置
-```
-
-稳定命令入口：
-
-| 命令 | 用途 |
-|---|---|
-| `combo-hello-world` | 在当前目录创建可编辑的 `Model.py`、`config.xml`、`config.human` starter。 |
-| `runCombo config.xml` | 训练 research 模型，生成 alpha，并执行回测。 |
-| `runEval config.xml` | 对一个 config 的输出做总体评估。 |
-| `runEval --sim ...` | 对 signal 或 daily IC 做 IC 类评估。 |
-| `runEval --pnl ...` | 对 signal 或 daily pnl 做 PnL 类评估。 |
-| `runEval --corr ...` | 对两个 parquet/csv 矩阵做日频截面相关性评估。 |
-| `runEval --exposure ...` | 对 signal 做 Barra 风格暴露评估。 |
-| `runEval --va ...` | 对 base/new PnL 或 signal 做 value-add 评估。 |
-| `comb-pos-corr pos_a.parquet pos_b.parquet` | 可选：两个 position parquet 的平均日频持仓相关。 |
-
-Optuna 调参流程暂不作为稳定包主流程依赖；如果项目需要调参，建议在 research 目录自行维护脚本。
-
-## 2. 推荐目录结构
-
-一个 research 项目目录建议长这样：
-
-```text
-my-research/
-  config.xml
-  Model.py
-  output/
-```
-
-可选扩展文件：
-
-```text
-my-research/
-  loader.py
-  dataset.py
-  strategy.py
-  data_packs/
-    factors.xml
-```
-
-各文件职责：
-
-| 文件 | 是否必须 | 稳定约定 |
-|---|---|---|
-| `config.xml` | 必须 | 声明数据、日期、模型路径、训练参数、回测参数、输出路径。 |
-| `Model.py` | 必须 | 定义 `ResearchModel` 类。 |
-| `loader.py` | 可选 | 定义 `ResearchLoader`，自定义输入、label/target 分配、预处理或生成方式。 |
-| `dataset.py` | 可选 | 定义 `ResearchDataset`，自定义训练样本和股票池。 |
-| `strategy.py` | 可选 | 定义 `AlphaStrategy`，自定义 alpha 到持仓的回测逻辑。 |
-| `data_packs/*.xml` | 可选 | 复用一组 `<data><item>` 数据声明。 |
-
-`config.xml` 中的相对路径都相对 `config.xml` 所在目录解析，因此命令可以从任意工作目录执行。
-
-## 3. 从零开始
-
-创建 starter：
+## 创建与运行
 
 ```bash
-mkdir my-research
-cd my-research
-combo-hello-world
-```
-
-如果确认覆盖当前目录已有 starter 文件：
-
-```bash
-combo-hello-world --force
-```
-
-然后按顺序修改：
-
-1. `config.xml` 的 `<constants>`：填真实数据根目录、唯一输出目录和执行频率。
-2. `config.xml` 的 `<combo><data>`：日频声明 factor 和 label；日内声明输入和唯一 returns target。
-3. `config.xml` 的 `<strategy>`：填回测日期范围，必要时接入自定义 strategy。
-4. `Model.py`：实现自己的 `ResearchModel`。
-5. 跑训练和回测：
-
-```bash
+combo-hello-world -y
 runCombo config.xml
-```
-
-6. 跑总体评估：
-
-```bash
 runEval config.xml
 ```
 
-## 4. 完整 config.xml 模板
-
-这个模板包含稳定可设置参数的默认形态。实际项目通常只需要改路径、日期、数据列表、模型参数和少数运行参数。
+starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 ResearchLoader 和 ResearchModel。先修改 data_requirements 中的因子路径再运行。XML 中的相对路径相对 XML 所在目录；Python 声明的相对数据路径相对 ResearchLoader 所在文件目录。
 
 ```xml
 <config>
-  <constants
-    cache_path="data/Cache"
-    output_root="output"
-    freq="1d"
-  />
-
-  <strategy
-    start_ds="20160111"
-    end_ds="20200101"
-  >
-    <optimizer
-      type="opt1"
-      lambda0="0.5"
-      shrinkage="0.5"
-      ret_days="60"
-      ret_delay="1"
-      ret_method="2"
-      benchmark_delay="1"
-      target_size="100000000.0"
-      maxtvr="0.4"
-      max_weight="0.0075"
-      maxtrd="0.0"
-      maxpos="0.0"
-      liquidity_delay="1"
-      lambda_slp="0.0"
-      slippage_delay="1"
-      min_participation_ratio="0.07"
-      parti_penalty="0.0"
-      trim_threshold="0.00001"
-      min_valid_instruments="200"
-      min_return_obs="20"
-      soft_univ_penalty="0.00025"
-      soft_risk_penalty="0.00004"
-      soft_group_penalty="0.0002"
-      num_mosek_threads="1"
-      max_time="30.0"
-      post_trim_renorm="false"
-      univ_list="ZZ500:0.18:0.70,1|AshareST:0.00:0.00,1|AshareSH:0.00:0.60,1|AshareSZ:0.00:0.60,1|NONETOP3000:0.00:0.17,1|AshareCYB:0.10:0.30,1"
-      soft_univ_list="ZZ1800:0.74:0.85:0.70,1|ZZ1800:0.79:0.85:0.45,1|ZZ1800:0.83:0.89:0.25,1|ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1|AshareSH:0.00:0.55:0.50,1|AshareCYB:0.10:0.25:1.00,1|AshareSZ:0.00:0.55:0.50,1|HS300:0.10:0.30:1.00,1|NONETOP3000:0.00:0.15:1.00,1"
-      risk_list="cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
-      soft_risk_list="cap:-0.02:0.07:2.0,1,4|returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
-      group_list="WindIndustry.sw1:-0.065:0.065,1"
-      soft_group_list="WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
-    />
+  <constants cache_path="/data/Cache" output_root="output" />
+  <strategy start_ds="20241028" end_ds="20241029">
+    <optimizer type="opt2" />
   </strategy>
-
   <combo>
-    <paths
-      model_path="Model.py"
-      combo_base_path=""
-      research_loader_path=""
-      research_dataset_path=""
-    />
-
-    <output
-      enable_alpha_analysis="true"
-    />
-
-    <runtime
-      snaptime="mlp_minimal"
-      snap_ti=""
-      seed="42"
-      livetrading="false"
-      trainDelay="0"
-      retDays="1"
-      tsDays="8"
-      load_chunk_days=""
-      torch_threads="64"
-      torch_interop_threads="1"
-      model_smooth_rate="0.7"
-      model_keep_num="2"
-      max_train_days="2000"
-      verbose="false"
-    />
-
-    <model
-      device="cpu"
-      dropout="0.5"
-      lr="0.000002"
-      epochs="15"
-      batch_size="3"
-      weight_decay="0.000001"
-      scheduler_step_size="10"
-      scheduler_gamma="0.5"
-      grad_clip="10.0"
-      early_stopping_patience="5"
-    />
-
-    <data
-      dtype="float16"
-      compression="none"
-      data_start_ds="20160101"
-    >
-      <item name="factor.example_1" path="example_factor_1" role="factor" display_name="example_factor_1" />
-      <item name="factor.example_2" path="example_factor_2" role="factor" display_name="example_factor_2">
-        <op name="cs_zscore" />
-        <op name="truncate" min="-4" max="4" />
-        <op name="nan_to_num" value="0" />
-      </item>
-      <item name="label.default" path="vwap30_label1d" role="label" />
-    </data>
-
+    <paths model_path="Model.py" research_loader_path="Model.py" />
+    <runtime sample_times="100000,110000" trainDelay="2"
+             retDays="1" tsDays="8" max_train_days="2000"
+             snaptime="experiment" />
+    <loader dtype="float16" compression="none"
+            data_start_ds="20160104" registry_cache_days="64" />
+    <model device="cpu" epochs="15" batch_size="3" />
   </combo>
-
-  <backtest
-    daily_metrics_file="daily_pnl.csv"
-    cash="10000000.0"
-    fee_rate="0.0015"
-    reserve_cash="0.95"
-    verbose="false"
-    universe="base"
-    execution_price="vwap30"
-    drawdown_stop="0.0"
-    cooldown_days="0"
-  />
-
-  <monitor
-    enabled="false"
-    output_path=""
-    format="csv"
-    print_summary="true"
-    collect_gpu="true"
-    sync_cuda="false"
-    verbose="false"
-  />
+  <backtest execution_price="execution:execution"
+            cash="10000000" reserve_cash="0.95" fee_rate="0.00075" />
 </config>
 ```
 
-## 5. XML 通用规则
+sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。
 
-根节点必须是 `<config>`。
+## 声明与选择数据
 
-除 `<combo><model ... />` 外，其他稳定节点只接受已定义属性。`<combo><model>` 是开放字段，允许 research 模型自定义参数。
+```python
+from pathlib import Path
+from comb2 import ComboDataLoader, DataItem, LoadedSource
 
-常用类型写法：
+class ResearchLoader(ComboDataLoader):
+    def data_requirements(self):
+        root = Path(self.config.cache_path) / "AshareCache"
+        return (
+            DataItem("factor", path="factors/example", delay=1),
+            DataItem("returns", path=str(root / "1d_Returns" / "Returns.c2c_1d")),
+            DataItem("execution", path=str(
+                root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}"
+            )),
+        )
 
-| 类型 | 写法 |
-|---|---|
-| bool true | `1`, `true`, `yes`, `y`, `on` |
-| bool false | `0`, `false`, `no`, `n`, `off` |
-| int/float | 按默认字段类型转换，例如 `max_train_days="2000"`。 |
-| dtype | `float16`, `float32`, `float64`, `bfloat16` |
-| None | 对允许为空的字段写空字符串，例如 `load_chunk_days=""`。 |
+    def model_input_sources(self):
+        return ("factor",)
 
-路径规则：
+    def model_target(self):
+        return "returns", "returns"
 
-- 绝对路径保持不变。
-- 相对路径相对 `config.xml` 或 data-pack 文件所在目录解析。
-- `<item>` 缺省 `module="builtin.factorsim"`；普通数据源请写绝对路径，或写相对当前 XML/data-pack 的路径。
-- `role="label"` 的非绝对 `path` 相对 `{cache_path}/AshareCache/1d_DailyLabel` 解析。
-- `role="target"` 的非绝对 `path` 相对 `{cache_path}/AshareCache` 解析。
-- `constants.cache_path` 表示 `AshareCache` 的父目录，是所有固定 cache 数据的唯一配置真源。
-
-## 6. constants
-
-```xml
-<constants
-  cache_path="data/Cache"
-  output_root="output"
-  freq="1d"
-/>
+    def gen_raw_target(self, ds, ti):
+        self.set_current_ti(ti)
+        endpoint = self.didx2date(self.date2didx(ds) + 1)
+        return self.source_field(*self.model_target(), endpoint, endpoint)[0].float()
 ```
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `cache_path` | `data/Cache` | `AshareCache` 的父目录。运行时固定使用 `{cache_path}/AshareCache`。 |
-| `output_root` | `output` | 唯一输出根目录。日志、alpha、checkpoint、回测和评估子目录都从这里自动派生。 |
-| `freq` | `1d` | 执行模式：`1d` 使用原生日频 label、每日 alpha、daily IC 和日频回测；`5m`/`1m` 使用 `(di, ti)` returns target 与日内输出。 |
+data_requirements 返回 DataItem 序列，复用来源时直接在 Python 导入公共声明函数。DataItem 字段：
 
-`freq="1d"` 时数据区使用 `role="factor"` 和最多一个 `role="label"`。`freq="5m"`/`"1m"` 时必须有且仅有一个同频 `role="target"`；频率不一致会直接报错。
+| 字段 | 含义 |
+|---|---|
+| name | 唯一来源名称 |
+| path | Memmap 路径；可使用 {ti:06d} 引用当前采样时点 |
+| delay | 非负交易日数，默认 0；请求逻辑 D 读取物理 D-delay，只应用一次 |
+| module | 默认 builtin.factorsim；也可指定 module:function |
+| ops | OpSpec 序列，在源级降维之后执行 |
+| params | 自定义源参数 |
 
-固定派生路径：`train.log`、`alpha_history.pt`、`alpha.parquet`、`checkpoints/`、`backtest/`、`eval_report/`。
+model_input_sources 指定 X 来源及顺序；来源内部按处理结果 columns 的顺序拼接。feature_names 使用 source:column 标识最终特征列。来源可以同时用于输入和目标，缓存共用。
 
-## 7. strategy: 回测持仓逻辑接入
+model_target 返回 (source, column)。默认 gen_raw_target 读取该字段的 ds 行；研究员覆盖这个方法完成目标索引。IC 直接使用此方法的原始值。固定日期偏移可通过来源的 delay 表达；prefetch_targets(days) 按逻辑日期分块预取目标及有效性来源，自定义目标索引需要在此方法中声明对应的预取日期。默认 gen_target 对 ds 开始连续 retDays 个原始目标按 retDays,...,1 加权，再调用 preprocess_target；数据集为聚合预留 retDays-1 个结束日。自定义目标聚合可覆盖 gen_target，并自行确保与研究目标一致。
+
+配置 cache_path 时，model_validity_source 默认返回 None，启用 StockMask2.BaseUnivMask、StockMask2.NoNewStockMask 和 StockMask2.LimitMask 三种掩码的交集，均使用 delay=1，缺文件时直接报错。默认来源名称为 mask.base、mask.valid、mask.filtered；base 决定训练股票池，三种掩码共同决定标签权重、最终信号和 IC 的有效股票。不配置 cache_path 的独立 loader 不加载默认掩码。研究员可显式返回 (source, validity_fields, base_field) 替换默认筛选；mask 同样是普通来源，可在 process_source 中组合字段。
+
+## Memmap 与源级降维
+
+读取器保留 Memmap 的真实日期、股票和时间轴。LoadedSource 包含：
+
+- values：原始日矩阵为 [date, stock, 1]；带时间轴的矩阵为 [date, stock, bar, 1]。
+- dates、codes、columns：有序轴信息。
+- times：原始 bar 时间；降维结果为空元组。
+
+研究员在 process_source(source, loaded) 中完成按时点裁剪、降维和派生列。输出必须是 [date, stock, feature]，保留 dates/codes，columns 与特征列一一对应。
+
+```python
+from dataclasses import replace
+import torch
+
+def process_source(self, source, loaded):
+    if source.name == "minute_amount":
+        known = torch.tensor(loaded.times) < self.current_ti
+        assert known.any()
+        amount = loaded.values[:, :, known, :].sum(dim=2)
+        return replace(loaded, values=amount,
+                       columns=("amount_before_sample",), times=())
+    return super().process_source(source, loaded)
+```
+
+可从一个原始来源派生多个列。原始块处理完成后释放，仅保留降维数据。不要使用全天统计值冒充早盘快照。持续覆盖当天数据的来源需要能复现历史时点；读取层无法从历史收盘最终值还原早盘状态。
+
+常用读取接口：
+
+```python
+self.source_history(name, start_ds, end_ds)       # [date, stock, field]
+self.source_field(name, field, start_ds, end_ds)  # [date, stock]
+self.previous_date(ds, offset)
+self.date2didx(ds)
+self.didx2date(idx)
+```
+
+读取日期是逻辑日期，delay 在底层应用。单次显式范围不得超过 registry_cache_days；更长范围分块读取。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
+
+## X、Y 与模型
+
+```python
+idx, ds, ti, x, y, w = dataset[i]
+# x: [tsDays, stock, feature]
+# y, w: [stock]
+```
+
+窗口由连续 tsDays 个交易日的同一 ti 快照组成。每个来源再按自身 delay 对齐。PyTorch batch 的 X 为 [batch, tsDays, stock, feature]。模型接口：
+
+```python
+class ResearchModel:
+    def __init__(self, config): ...
+    def fit(self, dataset): ...
+    def predict(self, x_window, *, di, ti): ...
+    def save(self, path_or_buffer): ...
+    def load(self, path_or_buffer): ...
+```
+
+config 注入 dtype、tsDays、num_features、feature_names、sample_times。predict 返回 [stock] 张量或可转为张量的数组。模型可设置 trainii 为训练股票索引，框架筛选输入并将预测回填到完整股票轴。
+
+preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
+
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。registry_cache_days 限制源级 LRU 缓存条目数，不限制训练数据集存储。大型训练需评估全量训练特征、标签、模型、batch 和数据缓存的合计峰值内存；源数据更新后需重建数据集。
+
+## 日期口径与训练
+
+label、returns 都是普通数据。研究员负责目标索引和训练数据可知性：
+
+| 原始字段 | 索引含义 |
+|---|---|
+| snapshot label[T] | T+1 买入、T+2 卖出 |
+| Returns.vwap30_100000[T] | T-1 日到 T 日的对应 VWAP 收益 |
+| IntvReturns.c2c[D,ti] | 前一根收盘到 ti 收盘 |
+
+starter 的 gen_raw_target 把 D 日样本映射到 label[D-1]。VWAP 100000 表示 10:00-10:30 窗口，完整结果需要窗口结束后的数据。starter 设置 trainDelay=2，示范保留足够的目标观测时间；自定义目标需自行选择 trainDelay 和索引。
+
+框架 training_end = D-trainDelay。日期和目标的额外偏移在研究代码中明确实现，框架不从名称推断。CombineHist 先预测，再按现有 isTrainDay 规则判断训练，每天最多检查一次。研究员可以通过现有 combo_base_path 覆盖 isTrainDay。保存、加载和模型平滑使用现有流程。
+
+## 成交回测与输出
+
+execution_price 使用 source:column，引用研究员 loader 中普通来源的处理后字段。每次取得当前 (date,time) 的价格。多个日内时点明确使用 opt2；研究员保证价格窗口与策略决策的合理性。
+
+首个时点使用当日 pre_close 为持仓估值；后续时点使用上一执行点已知价格作为默认估值。直接调用 step 可传 mark_prices。优化器与成交价格分开，不能让本次尚不可知的执行价格参与本次优化估值。原始成交价不做前向填充；价格、涨跌停或停牌状态无效时，已有持仓固定在实际金额且不产生订单。策略返回不可执行订单会立即失败，不会静默跳过。
+
+退市状态只读取 factorsim 的 `StockMask2.StockListedDays`。已持仓股票从前一交易日有限值切换为当日缺失时，在当日优化前按零值核销；核销不计换手或手续费，其损失进入当日 PNL。普通停牌不会触发核销，继续沿用最后有效收盘估值；恢复行情后重新使用真实价格。
+
+opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计实际换手。买入增加锁仓，卖出受可卖股数约束；仅换日时解除锁定并重置每日累计状态。日终按收盘价结算，每天一行日报。
+
+输出：
+
+- train.log、checkpoints/：运行日志和模型。
+- alpha.parquet、alpha_history.pt：以 (date,time) 为样本索引。
+- daily_ic、ic_by_time.csv：原始研究目标的 IC。
+- backtest/daily_pnl.csv、pnl_summary.csv：实际成交日终资产及汇总。
+- backtest/executions.csv、settlements.csv：实际成交明细和 factorsim 退市零值核销明细。
+- backtest/*_position.csv：以 (date,time) 索引的目标持仓。
+- eval_report/：按时点评估 target IC、分层目标均值、Barra/CAP 暴露，以及实际成交 PnL。
+
+runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层输出是各层原始 target 均值，不把任意研究目标当作成交收益。需要 alpha.parquet 和成交日报。--skip-exposure 可跳过暴露，--skip-deciles 可跳过分层。--sim/--pnl/--corr/--va/--exposure 继续支持独立的本地表格分析。
+
+## 监控与运行参数
+
+loader 保留 dtype、compression、data_start_ds、data_offset、registry_cache_days。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+
+monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sync_cuda、verbose。长任务启动前按 cgroup 限制检查内存并用小规模验证估算峰值。
+
+## 优化器与持仓策略: 回测持仓逻辑接入
 
 ```xml
 <strategy start_ds="20200101" end_ds="20240628" />
@@ -298,9 +200,9 @@ runEval config.xml
 默认 strategy 行为：
 
 - 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
-- 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对指数方差约束下求目标权重。
-- 换手基准来自回测已真实成交的股数持仓；先按当日价格换算为市值，再剔除现金并归一化到股票 book。当前不可买的已有持仓仍进入候选集，但只能维持或减仓。
-- 中证 500 权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认的收益、指数、universe 和风险因子 delay 均为 `1`。
+- 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对基准方差约束下求目标权重。
+- 换手基准来自回测已真实成交的股数持仓，按当前估值换算为市值。opt1 将已有持仓除以实际股票持仓总额；opt2 除以当天目标股票预算。当前不可买的已有持仓仍进入候选集，但只能维持或减仓；不可交易持仓固定在实际金额。
+- 基准指数权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认基准为中证 500，收益、指数、universe 和风险因子 delay 均为 `1`。
 - 缺数据、候选数不足、许可证不可用或 MOSEK 调用失败时直接报错；MOSEK 正常完成但没有返回 `Optimal` 解时维持上一日实际股票 book，首日无持仓时保持空仓，并输出 RuntimeWarning。
 
 默认优化器要求安装 `Mosek==11.0.25`，并在运行前指向有效许可证：
@@ -318,6 +220,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
   <optimizer
     type="opt1"
     lambda0="0.5"
+    benchmark="000905.SH"
     maxtvr="0.4"
     max_weight="0.0075"
     num_mosek_threads="1"
@@ -329,12 +232,13 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | `type` | `opt1` | `opt1` 使用原权重优化器；`opt2` 使用带 T+1 约束的金额优化器。两者都返回买卖金额。 |
-| `lambda0` | `0.5` | 相对中证 500 方差在目标函数中的惩罚系数。设为 `0` 时不构造方差项。 |
+| `lambda0` | `0.5` | 相对配置基准的方差在目标函数中的惩罚系数。设为 `0` 时不构造方差项。 |
 | `shrinkage` | `0.5` | 历史协方差向对角方差收缩的比例，范围 `[0, 1]`。 |
 | `ret_days` | `60` | 方差和收益有效性检查使用的历史交易日数。 |
 | `ret_delay` | `1` | 方差收益窗口相对求解日的交易日延迟。 |
-| `ret_method` | `2` | `1` 使用个股收益；`2` 使用个股相对中证 500 的收益。 |
-| `benchmark_delay` | `1` | 目标风险暴露使用的中证 500 权重延迟。 |
+| `ret_method` | `2` | `1` 使用个股收益；`2` 使用个股相对配置基准的收益。 |
+| `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数代码；对应读取 `1d_IndexWeight/IndexWeight.<benchmark>`。不改变回测收益报告的评价基准。 |
+| `benchmark_delay` | `1` | 目标风险暴露使用的基准指数权重延迟。 |
 | `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元；opt2 的金额约束不使用该换算参数。 |
 | `maxtvr` | `0.4` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
 | `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
@@ -356,16 +260,16 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
 | `univ_list` | 见完整模板 | 股票集合权重硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
 | `soft_univ_list` | 见完整模板 | 软 universe 约束，格式为 `name:lo:hi:penalty,delay`。 |
-| `group_list` | 见完整模板 | 相对中证 500 的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
-| `soft_group_list` | 见完整模板 | 相对中证 500 的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
+| `group_list` | 见完整模板 | 相对配置基准的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
+| `soft_group_list` | 见完整模板 | 相对配置基准的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
 | `risk_list` | 见完整模板 | 硬风险约束，格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。 |
 | `soft_risk_list` | 见完整模板 | 软风险约束，格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。 |
 
 列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
 
-hard universe 的上界为 `0` 时，sellable 成员仓位必须退出；opt2 中当日买入的 locked 仓位优先满足 T+1，只保留 unavoidable locked amount 且禁止继续买入。强制卖出可突破 `maxtrd` 和当日剩余 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时记录未定价强退数量和权重。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。执行层未能成交时，下一次优化继续以实际持仓为准退出。
+hard universe 的上界为 `0` 时，可交易成员仓位必须退出；opt2 中当日买入的 locked 仓位优先满足 T+1，只保留 unavoidable locked amount 且禁止继续买入。强制卖出可突破 `maxtrd` 和当日剩余 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时记录未定价强退数量和权重。不可交易旧持仓固定在实际金额，恢复交易后再按当时约束退出。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。
 
-当 MOSEK primal solution status 不是 `Optimal` 时，优化器返回全零买卖金额，执行层完全跳过买卖，因此手续费和换手均为 `0`；订单 attrs 会记录 `solver_fallback=true` 和具体 `solver_status`，下一次优化重新求解。
+当 MOSEK primal solution status 不是 `Optimal` 时，优化器返回全零买卖金额，因此手续费和换手均为 `0`；订单 attrs 会记录 `solver_fallback=true` 和具体 `solver_status`，下一次优化重新求解。
 
 自定义 strategy：
 
@@ -389,6 +293,8 @@ class AlphaStrategy(StrategyBase):
         signals,
         sellable_amount,
         locked_amount,
+        buyable_mask,
+        market_sellable_mask,
         target_stock_amount,
         executed_turnover_today,
     ):
@@ -402,1010 +308,8 @@ class AlphaStrategy(StrategyBase):
 | `signals` | 当日 alpha 截面，通常是 index 为股票代码、value 为 alpha 的 pandas Series。 |
 | `sellable_amount` | 当前可卖持仓金额，单位为元。 |
 | `locked_amount` | 当日买入且受 T+1 限制的持仓金额，单位为元。 |
+| `buyable_mask` | 当前原始成交价、涨跌停、停牌和 base 状态均有效的股票布尔掩码。 |
+| `market_sellable_mask` | 当前原始成交价、涨跌停和停牌状态均有效的股票布尔掩码；不要求属于 base。 |
 | `target_stock_amount` | backtest 内部按当日第一次优化前 `总资产 * reserve_cash` 计算的固定金额。 |
 | `executed_turnover_today` | 当日已经实际成交的累计金额。 |
 | 返回值 | 与股票轴对齐、列为 `buy_amount` 和 `sell_amount` 的非负 pandas DataFrame。 |
-
-## 8. combo.paths
-
-```xml
-<paths
-  model_path="Model.py"
-  combo_base_path=""
-  research_loader_path=""
-  research_dataset_path=""
-/>
-```
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `model_path` | `Model.py` | research 模型文件，必须定义 `ResearchModel`。 |
-| `combo_base_path` | 空 | 可选运行时扩展文件，必须定义继承 `comb2.ComboBase` 的 `ComboBase`。适合覆写 `isTrainDay()`、`needTrain()` 等训练调度逻辑。 |
-| `research_loader_path` | 空 | 可选 loader 扩展文件，必须定义 `ResearchLoader`。 |
-| `research_dataset_path` | 空 | 可选 dataset 扩展文件，必须定义 `ResearchDataset`。 |
-
-### 8.1 自定义 ComboBase 训练调度
-
-如果只想改训练日判定，不需要改 vendor 目录。可以在项目目录新增一个 `combo_base.py`，然后在 XML 中接入：
-
-```xml
-<paths
-  model_path="Model.py"
-  combo_base_path="combo_base.py"
-/>
-```
-
-`combo_base.py` 必须定义一个继承 `comb2.ComboBase` 的 `ComboBase` 类。最常见场景是覆写 `isTrainDay(ds)`：
-
-```python
-from __future__ import annotations
-
-from comb2 import ComboBase as BaseComboBase
-
-
-class ComboBase(BaseComboBase):
-    def isTrainDay(self, ds: int) -> bool:
-        didx = self.loader.date2didx(ds)
-        return didx % 5 == 0
-```
-
-`isTrainDay(ds)` 的输入和语义：
-
-| 项目 | 说明 |
-|---|---|
-| `ds` 类型 | `YYYYMMDD` 格式的整数，例如 `20240628`。 |
-| `ds` 含义 | 这里传入的是训练目标日 `target_ds`，不是当前回测循环日。若设置了 `trainDelay`，框架会先做日期偏移，再把偏移后的 `target_ds` 传进来。 |
-| 返回 `True` | 表示这个 `target_ds` 按你的规则属于训练日。 |
-| 返回 `False` | 表示这个 `target_ds` 按你的规则不属于训练日。 |
-| 最终是否训练 | 完全由 `isTrainDay()` 决定训练日历；目标日期已有精确 checkpoint 时只复用该模型，不重复训练。 |
-
-写 `isTrainDay()` 时最常用的辅助能力：
-
-| 可用对象 / 方法 | 用途 |
-|---|---|
-| `self.loader.date2didx(ds)` | 把 `YYYYMMDD` 转成交易日序号。适合按“每 N 个交易日”写规则。 |
-| `self.loader.didx2date(didx)` | 把交易日序号转回 `YYYYMMDD`。适合向前向后看相邻交易日。 |
-
-建议优先按“交易日序号”写逻辑，而不是按自然日差值写逻辑。A 股节假日和停牌日会让自然日规则变得不稳定。
-
-接口约定：
-
-| 名称 | 约定 |
-|---|---|
-| 类名 | 必须叫 `ComboBase`。 |
-| 继承关系 | 必须继承 `comb2.ComboBase`。 |
-| `isTrainDay(ds)` | 只控制某个 `target_ds` 是否是训练日。 |
-| `needTrain(ds)` | 框架内部协调 `isTrainDay()` 与目标日期 checkpoint 复用，通常不需要覆写。 |
-
-建议：
-
-- 只改训练日规则时，优先覆写 `isTrainDay(ds)`。
-- 训练日历统一通过 `isTrainDay(ds)` 定义；不要通过 checkpoint 年龄间接控制训练日。
-- 保持方法签名不变，不要改 `ComboBase.__init__` 的输入协议。
-
-常见示例：
-
-1. 每 5 个交易日训练一次
-
-```python
-from comb2 import ComboBase as BaseComboBase
-
-
-class ComboBase(BaseComboBase):
-    def isTrainDay(self, ds: int) -> bool:
-        return self.loader.date2didx(ds) % 5 == 0
-```
-
-2. 只在白名单日期训练
-
-```python
-from comb2 import ComboBase as BaseComboBase
-
-
-TRAIN_DATES = {
-    20240131,
-    20240229,
-    20240329,
-}
-
-
-class ComboBase(BaseComboBase):
-    def isTrainDay(self, ds: int) -> bool:
-        return int(ds) in TRAIN_DATES
-```
-
-## 9. ResearchModel 接口
-
-`model_path` 指向的文件必须定义 `ResearchModel`，并实现 `__init__`、`fit`、`predict`、`save`、`load`。下面的最小形态可以直接作为 `Model.py` 起点。
-
-最小可运行形态：
-
-```python
-from __future__ import annotations
-
-import torch
-from comb2 import FeatureGroups
-
-
-class ResearchModel:
-    def __init__(self, config: dict):
-        self.config = config
-        self.dtype = config.get("dtype", torch.float16)
-        self.ts_days = int(config.get("tsDays", 8))
-        self.freqs = tuple(config.get("freqs", ("1d",)))
-        self.num_features_by_freq = dict(config.get("num_features_by_freq", {"1d": 1}))
-
-    def fit(self, dataset):
-        return self
-
-    def predict(self, x_window: FeatureGroups) -> torch.Tensor:
-        return torch.zeros(x_window.stock_count(), dtype=self.dtype)
-
-    def save(self, path_or_buffer):
-        torch.save({"config": self.config}, path_or_buffer)
-
-    def load(self, path_or_buffer):
-        payload = torch.load(path_or_buffer, map_location="cpu")
-        self.config = payload.get("config", {})
-        return self
-```
-
-稳定约定：
-
-| 接口 | 约定 |
-|---|---|
-| `__init__(config)` | `config` 额外注入 `freq`、`dtype`、`tsDays`、`freqs`、`num_features_by_freq`、`num_features`；日内模式还注入 `target_freq`、`target_times`。 |
-| `fit(dataset)` | 日频样本为 `(idx, x, y, w)`；日内样本为 `(idx, di, ti, x, y, w)`。 |
-| `predict(...)` | 日频调用 `predict(x_window)`；日内调用 `predict(x_window, di=..., ti=...)`。 |
-| `predict` 返回 | `[n_valid_instruments]` tensor，表示预测 alpha。 |
-| `save/load` | 用于 checkpoint 保存和加载，需能接受文件路径或 file-like buffer。 |
-
-模型应按 `config["freq"]` 实现对应接口；starter 已同时支持两种模式。
-
-`<combo><model>` 是开放字段。字段是否生效，取决于 `ResearchModel(config)` 是否读取它。
-
-模型侧 `FeatureGroups` 约定：
-
-| group | 单日 shape | 窗口 shape |
-|---|---|---|
-| `x["1d"]` | `[stock, F_1d]` | `[tsDays, stock, F_1d]` |
-| `x["5m"]` | `[stock, 49, F_5m]` | `[tsDays, stock, 49, F_5m]` |
-| `x["1m"]` | `[stock, 239, F_1m]` | `[tsDays, stock, 239, F_1m]` |
-
-如果 config 没有声明某个频率的 factor，该 key 不会出现在 `FeatureGroups` 中。模型应使用 `config["freqs"]` 或 `if "5m" in x_window` 判断，而不是假设所有 key 都存在。
-
-## 10. combo.output
-
-```xml
-<output
-  enable_alpha_analysis="true"
-/>
-```
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `enable_alpha_analysis` | `true` | 日频导出单层日期索引的 `alpha.parquet` 和 `daily_ic`；日内导出 `(dates,times)` alpha、`intraday_ic.csv` 和 `ic_by_time.csv`。 |
-
-`train.log` 和 `alpha_history.pt` 固定写入 `constants.output_root`；不再单独配置路径。
-
-## 11. combo.runtime
-
-```xml
-<runtime
-  snaptime="mlp_minimal"
-  snap_ti=""
-  livetrading="false"
-  deterministic="false"
-  trainDelay="0"
-  retDays="1"
-  tsDays="8"
-  load_chunk_days=""
-  torch_threads="64"
-  torch_interop_threads="1"
-  model_smooth_rate="0.7"
-  model_keep_num="2"
-  max_train_days="2000"
-  verbose="false"
-/>
-```
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `snaptime` | `mlp_minimal` | 训练快照名，checkpoint 子目录会使用它。 |
-| `snap_ti` | 空 | 仅日频模式使用；非空时沿用原生 snapshot label 与对应执行时点。 |
-| `seed` | 空 | 运行级随机种子；会用于 `random`、`numpy`、`torch`，并在有 CUDA 时同步设置 CUDA seed。 |
-| `deterministic` | `false` | 是否开启 PyTorch deterministic 模式。开启后通常更可复现，但可能变慢，且部分算子可能报 deterministic 限制。 |
-| `livetrading` | `false` | `false` 为历史训练/回测流程。 |
-| `trainDelay` | `0` | 日频沿用原生训练日规则；日内在 D-1 基础上额外后移。 |
-| `retDays` | `1` | 仅日频模式使用；label 聚合交易日数。 |
-| `tsDays` | `8` | 模型输入时间窗口长度。 |
-| `load_chunk_days` | 空 | 训练数据预取天数；空值时使用默认行为。 |
-| `torch_threads` | `64` | PyTorch intra-op 线程数。 |
-| `torch_interop_threads` | `1` | PyTorch inter-op 线程数。 |
-| `model_smooth_rate` | `0.7` | 新旧模型预测平滑比例；`1.0` 表示只用新模型。 |
-| `model_keep_num` | `2` | 保留 checkpoint 个数；`0` 表示不保存，负数表示不清理。 |
-| `max_train_days` | `2000` | 每次训练最多加载的训练日数。 |
-| `verbose` | `false` | 是否打印更详细进度。 |
-
-日频模式每个日期调用一次；日内模式会调用全部可训练 target 时点，且固定排除首个特殊竞价 bar。
-
-常用调优：
-
-| 目标 | 建议 |
-|---|---|
-| 降低内存 | 降低 `max_train_days`，或使用 `compression="fp4"`。 |
-| 禁用 checkpoint | 设置 `model_keep_num="0"`。 |
-| 快速 smoke run | 缩短 `strategy` 日期范围，降低 `epochs`、`max_train_days`。 |
-
-## 12. combo.model
-
-`combo.model` 是 research 模型参数区。starter 默认使用：
-
-```xml
-<model
-  device="cpu"
-  dropout="0.5"
-  lr="0.000002"
-  epochs="15"
-  batch_size="3"
-  weight_decay="0.000001"
-  scheduler_step_size="10"
-  scheduler_gamma="0.5"
-  grad_clip="10.0"
-  early_stopping_patience="5"
-/>
-```
-
-说明：
-
-- 这些字段只是 starter `ResearchModel` 的默认约定。
-- 可以添加任意自定义字段，例如 `hidden_size="256"`、`n_layers="3"`。
-- 数值会尽量解析为 bool/int/float，否则保留字符串。
-- 稳定包会额外注入 `freq`、`dtype`、`tsDays`、`freqs`、`num_features_by_freq`、`num_features`；日内模式另有 `target_freq`、`target_times`。
-- 兼容别名：`hiddenSize -> hidden_size`、`fcSize -> fc_size`、`batchSize -> batch_size`。
-
-## 13. combo.data
-
-```xml
-<data
-  dtype="float16"
-  compression="none"
-  data_start_ds="20160101"
-  data_offset="1024"
-  registry_cache_days="64"
->
-  <item name="factor.example_1" path="example_factor_1" role="factor" />
-  <item name="label.default" path="vwap30_label1d" role="label" />
-</data>
-```
-
-### 13.1 data 属性
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `dtype` | `float16` | loader 输出 dtype。 |
-| `compression` | `none` | feature 存储压缩：`none`、`fp4`、`fp8`。 |
-| `data_start_ds` | `20160101` | 数据业务起点。 |
-| `data_offset` | `1024` | 交易日轴起始偏移；会在构建 universe 时跳过更早的 mask/date 数据。通常保持默认，只有明确知道需要更早历史或更小 universe 起点时再改。 |
-| `registry_cache_days` | `64` | Registry 每个数据项最多保留的交易日数；`load_chunk_days` 不应超过它。 |
-`<data>` 统一描述输入、监督数据和辅助数据；股票池 mask 和 Barra 路径从 `constants.cache_path` 派生。
-
-压缩说明：
-
-| 值 | 说明 |
-|---|---|
-| `none` | 不压缩，最保守。 |
-| `fp4` | 4-bit 近似量化，主要降低训练和预测时的 feature 内存。 |
-| `fp8` | 使用 PyTorch float8，依赖当前 PyTorch 环境支持。 |
-
-启用方式：
-
-```xml
-<data dtype="float16" compression="fp4" data_start_ds="20160101" data_offset="1024">
-  <item name="factor.size" path="1d_BarraCNE5/BarraCNE5.SIZE" role="factor" />
-  <item name="label.default" path="vwap30_label1d" role="label" />
-</data>
-```
-
-使用边界：
-
-- 压缩对所有模型输入组生效，包括 `1d`、`5m`、`1m`。
-- 不压缩 target、mask、原始数据文件、模型参数和模型输出。
-- 模型侧仍拿到浮点 tensor，接口不变；区别主要是内存占用和数值精度。
-- `fp4` 是有损压缩，适合内存压力明显的训练；做数值排查或严格复现实验时优先用 `none`。
-- `fp4` / `fp8` 建议搭配 `dtype="float16"`、`float32` 或 `bfloat16`；如果需要 `float64`，使用 `compression="none"`。
-
-### 13.2 item
-
-```xml
-<item name="factor.example" path="example_factor" role="factor" display_name="example_factor" />
-<item name="label.default" path="vwap30_label1d" role="label" />
-```
-
-日内 `builtin.factorsim` 示例：
-
-```xml
-<item
-  name="factor.grid_close_1m"
-  path="1m_Grid1mBar/Grid1mBar.close"
-  role="factor"
-  freq="1m"
-/>
-```
-
-| 属性 | 说明 |
-|---|---|
-| `name` | 数据注册名，必须唯一。 |
-| `module` | 数据读取方式；缺省为 `builtin.factorsim`。通常不用写，除非使用 parquet 或自定义读取函数。 |
-| `path` | 数据路径或内置 module 参数。 |
-| `role` | 日频使用 `factor`/`label`；日内使用唯一 `target`，其余声明项作为模型输入。 |
-| 其他属性 | 会进入 item 参数，例如 `display_name`。 |
-
-内置 module：
-
-| module | 用途 |
-|---|---|
-| `builtin.factorsim` | 默认读取方式；读取因子、returns 或 AshareCache 数据。 |
-| `builtin.alpha_parquet` | 读取本地 alpha parquet 矩阵。 |
-| `my_data:load_data` | 自定义 data module。 |
-
-默认 loader 根据 `constants.freq` 选择契约：`1d` 使用原生 factor/label；`5m`/`1m` 使用同频 target。
-
-切换到 5m 时，执行频率和 target 必须同时匹配：
-
-```xml
-<constants cache_path="data/Cache" output_root="output-5m" freq="5m" />
-<combo>
-  <data>
-    <item name="data.example" path="example_factor" />
-    <item name="returns.c2c" path="5m_IntvReturns/IntvReturns.c2c" role="target" freq="5m" />
-  </data>
-</combo>
-```
-
-1m 同理使用 `freq="1m"` 和匹配的 1m target 数据源。不同模式应使用不同的 `output_root` 或 `snaptime`，避免加载另一种模型结构的 checkpoint。
-
-`builtin.factorsim` 补充约定：
-
-- `freq` 支持固定值 `1d`、`5m`、`1m`；缺省等价于 `freq="1d"`。
-- 2D 数据源通常使用默认 `1d`，进入模型后的 group key 是 `x["1d"]`。
-- 3D 日内数据源必须显式声明 `freq="5m"` 或 `freq="1m"`，系统保持完整 `[date, bar, code]` cube，不允许在数据层用 `nbar` 或 reducer 降维。
-- 输入会按 `freq` 分组进入模型，不会在框架内 concat 成一个大 tensor。
-- 如果没有配置某个频率的输入，模型输入里不会出现该 key；可通过模型 config 注入的 `freqs` 和 `num_features_by_freq` 判断。
-- 日频模式沿用原生日期对齐；日内目标 `(D, ti)` 的日频输入读取 D-1，D 日分钟输入只保留结束进度不晚于上一根 target bar 的数据。
-- 5m returns target 的 09:30 bar 不进入训练、预测、IC 或输出；09:30 竞价数据可作为 09:35 的输入。
-
-研究员可见的单日 group shape：
-
-| freq | 数据源 shape | loader 输出单日 shape |
-|---|---|---|
-| `1d` | `[date, code]` | `[stock, feature]` |
-| `5m` | `[date, 49, code]` | `[stock, 49, feature]` |
-| `1m` | `[date, 239, code]` | `[stock, 239, feature]` |
-
-训练和预测窗口会在最前面增加 `tsDays` 维度。日内聚合应在 `ResearchLoader.transform_feature_window(..., target_ti=ti)` 中显式实现，以控制内存并保持因果性。
-
-固定日内时间轴：
-
-- `1m` 固定为每天 `239` 个 bar。
-- `5m` 固定为每天 `49` 个 bar，包含 `15:00:00` 收盘 bar。
-- 自定义数据源必须按框架固定顺序返回完整 bar 轴；缺 bar 或顺序不同应在数据源侧修正。
-
-### 13.3 import
-
-导入内置 Barra 风格因子：
-
-```xml
-<import preset="barra" />
-```
-
-导入 data-pack：
-
-```xml
-<import path="data_packs/factors.xml" />
-```
-
-只导入某类 role：
-
-```xml
-<import path="data_packs/factors.xml" role="factor" />
-```
-
-data-pack 文件只写数据声明，不写完整任务配置：
-
-```xml
-<data-pack>
-  <item name="factor.turn20" path="turn20" role="factor" />
-  <item name="factor.size" path="size" role="aux" />
-</data-pack>
-```
-
-### 13.4 op
-
-`<op>` 是 item 级预处理，写在对应 `<item>` 下：
-
-```xml
-<item name="factor.example" path="example_factor" role="factor">
-  <op name="rolling_mean" window="5" />
-  <op name="neut(barra.size, barra.btop)" />
-  <op name="neut(['size', 'beta', 'sizenl'], 0.5)" />
-  <op name="cs_zscore" />
-  <op name="truncate" min="-4" max="4" />
-  <op name="nan_to_num" value="0" />
-</item>
-```
-
-稳定 op：
-
-| op | 说明 |
-|---|---|
-| `cs_zscore` / `zscore` | 截面 z-score。 |
-| `rank` | 排名，可选 `axis`、`pct`。 |
-| `truncate` | 截断到 `min`/`max`。 |
-| `nan_to_num` / `fillna` | 缺失和无穷替换为指定值。 |
-| `winsorize_by_quantile` | 分位数 winsorize，参数 `low`、`high`，可选 `axis`。 |
-| `normalize_by_max_abs` | 按最大绝对值归一化，可选 `axis`。 |
-| `rolling_mean` | 沿 `date` 轴滚动均值，参数 `window`。 |
-| `rolling_std` | 沿 `date` 轴滚动标准差，参数 `window`。 |
-| `neut(...)` | 仅支持 `1d` 数据，对一个或多个已注册 `1d` 依赖做中性化；依赖可逐个写，也可写成列表；末尾数值为扣除比例，默认 `1.0`。 |
-
-其中轴语义统一用命名轴：
-
-- `axis="date"`
-- `axis="bar"`
-- `axis="code"`
-
-item op 只接受上表白名单。`last/mean/std/sum/max/min` 和 `nbar` 不属于当前接口；如需日内聚合，应在 `ResearchLoader` 或 `ResearchModel` 中显式写代码。
-
-如果只需要改 item 级处理，优先用 `<op>`。如果要改完整输入或监督数据生成逻辑，再接入 `ResearchLoader`。
-
-## 14. ResearchLoader 和 ResearchDataset
-
-可选接入：
-
-```xml
-<paths
-  model_path="Model.py"
-  research_loader_path="loader.py"
-  research_dataset_path="dataset.py"
-/>
-```
-
-### 14.1 ResearchLoader
-
-`loader.py` 必须定义 `ResearchLoader`，并继承 `comb2.ComboDataLoader`。默认 loader 已经负责：
-
-- 统一注册 `<combo><data>` 中的所有数据，并按执行频率分配 factor/label 或输入/target。
-- 按 `freq` 组装 `FeatureGroups`。
-- 对 `1d` feature 做默认截面标准化、截断、缺失填 0。
-- 对 `5m` / `1m` feature 默认不做预处理，只转成配置的 dtype。
-- 日频沿用 `snap_ti` 的窗口裁剪；日内严格只保留目标 `ti` 前已经结束的 bars。
-
-优先覆盖 group 级或 target 级 hook，不建议直接重写 `preprocess_features()`。`preprocess_features()` 已经负责遍历所有 group。
-
-常见用途：
-
-| 目标 | 推荐覆盖 |
-|---|---|
-| 改某个频率 group 的预处理 | `preprocess_feature_group(freq, feature, ds)` |
-| 改日频默认预处理 | `preprocess_daily_features(feature, ds)` |
-| 给日内 group 增加默认处理 | `preprocess_feature_group(freq, feature, ds)` 中处理 `5m` / `1m` |
-| 改 target 预处理 | `preprocess_target(target_values, valid_mask, ds)` |
-| 改日频 label 预处理 | `preprocess_label(label_values, valid_mask, ds, ret_days)` |
-| 改 raw feature 组装方式 | `build_raw_feature(ds)` |
-| 完全替换 feature 生成流程 | `gen_feature(ds)` |
-| 改输入/target 分配 | `assign_data_items(items)` |
-| 改完整 target 生成方式 | `gen_target(ds, ti)` |
-| 改完整日频 label 生成方式 | `gen_label(ds, ret_days)` |
-| 改训练/预测窗口处理 | `transform_feature_window(feature_window, target_ti=..., stage=...)` |
-| 改预测股票可用性 mask | `_feature_available_mask(feature_window)` |
-
-Hook 契约：
-
-| 函数 | 输入 | 必须返回 | 负责什么 | 不应该做什么 |
-|---|---|---|---|---|
-| `build_raw_feature(ds)` | 单个交易日 `ds` | `FeatureGroups` | 组装原始 feature group，通常用于加入派生 feature 或 aux feature。 | 不要改变股票顺序；不要制造未配置的频率 key。 |
-| `preprocess_daily_features(feature, ds)` | `1d` 单日 `[stock, feature]` | 同 shape tensor | 日频默认处理。 | 不要改变 stock 或 feature 维度。 |
-| `preprocess_feature_group(freq, feature, ds)` | 单日 group：`1d=[stock,F]`，`5m/1m=[stock,bar,F]` | 同 freq 的单日 tensor | 每个频率自己的预处理。 | 不要跨 group concat；不要删除 bar 维；不要改变 stock 顺序。 |
-| `preprocess_features(features, ds)` | `FeatureGroups` | `FeatureGroups` | 总控函数，默认遍历所有 group。 | 通常不要覆盖；覆盖后必须保留缺失频率不存在的语义。 |
-| `gen_feature(ds)` | 单日 `ds` | `FeatureGroups` | 对外单日 feature 入口。 | 如果覆盖，需自己处理 `align_date`、dtype 和 group key。 |
-| `preprocess_target(target_values, valid_mask, ds)` | `[stock]` returns 和 bool mask | `(y, w)`，二者 `[stock]` | target 标准化、截断、权重处理。 | 不要改变股票顺序或长度。 |
-| `preprocess_label(label_values, valid_mask, ds, ret_days)` | 日频 `[stock]` label 和 bool mask | `(y, w)` | 日频 label 处理。 | 不要改变股票顺序或长度。 |
-| `gen_target(ds, ti)` | 目标日期和时点 | `(y, w)`，二者 `[stock]` | 从 returns 的 bar 索引生成监督目标。 | 不要使用 09:30 特殊 bar。 |
-| `transform_feature_window(feature_window, target_ti=..., stage=...)` | 窗口 `FeatureGroups` | `FeatureGroups` | train/predict 共用因果窗口处理。 | D 日输入最多使用结束于上一根 target bar 的数据。 |
-| `_feature_available_mask(feature_window)` | predict 窗口 `FeatureGroups` | `[stock]` bool | 决定预测阶段哪些股票有 alpha。 | 不要返回已筛选后的 feature；筛选由 `process_feature_window` 做。 |
-
-`nbar`、`last/mean/std/sum/max/min` reducer 和 `<combo><loader>` 不属于当前接口。
-
-最小示例：
-
-```python
-from __future__ import annotations
-
-import torch
-
-from comb2 import ComboDataLoader, FeatureGroups
-
-
-class ResearchLoader(ComboDataLoader):
-    def preprocess_feature_group(self, freq: str, feature, ds: int):
-        if freq != "1d":
-            return feature.to(self.dtype)
-        mean = feature.nanmean(dim=0, keepdim=True)
-        std = torch.sqrt(((feature - mean) ** 2).nanmean(dim=0, keepdim=True)).clamp_min(1e-4)
-        feature = (feature - mean) / std
-        feature = feature.clamp(-4.0, 4.0)
-        return torch.nan_to_num(feature, nan=0.0, posinf=0.0, neginf=0.0).to(self.dtype)
-
-    def transform_feature_window(self, feature_window: FeatureGroups, *, target_ti: int, stage: str) -> FeatureGroups:
-        feature_window = super().transform_feature_window(
-            feature_window, target_ti=target_ti, stage=stage
-        )
-        return feature_window
-```
-
-返回约定：
-
-| 接口 | 返回 |
-|---|---|
-| `gen_feature(ds)` | `FeatureGroups`，按 `freq` 分组。 |
-| `gen_label(ds, ret_days)` | 日频模式 `(y, w)`，二者 shape 都是 `[N]`。 |
-| `gen_target(ds, ti)` | 日内模式 `(y, w)`，二者 shape 都是 `[N]`。 |
-| `registry.get_data(name, start_ds, end_ds)` | 已声明 item 的处理后数据；`1d=[R,N]`，`5m=[R,49,N]`，`1m=[R,239,N]`。 |
-| `transform_feature_window(feature_window, target_ti=..., stage=...)` | `FeatureGroups`，默认对最后一天不可用 bars 填 NaN。 |
-
-`FeatureGroups` 是 mapping-like 对象，常用写法：
-
-```python
-import torch
-
-for freq, tensor in x.items():
-    print(freq, tuple(tensor.shape))
-
-if "1m" in x:
-    cube = x["1m"]
-
-x = x.to(dtype=torch.float32)
-x_valid = x.select_stocks(torch.arange(x.stock_count()))
-```
-
-日内默认 loader 会把 target 之外的全部声明项放进 `FeatureGroups`。需要保留只供内部计算的数据时，应覆盖 `assign_data_items()` 并从 `input_names` 中排除它。
-
-XML：
-
-```xml
-<item name="aux.can_trade" path="can_trade_mask" role="aux" />
-```
-
-在 `ResearchLoader` 中读取任意已声明数据，统一使用 `self.registry.get_data(name, start_ds, end_ds)`。传入日期范围时会自动加载缺失区间；返回始终保留 date 维。
-
-```python
-import torch
-
-from comb2 import ComboDataLoader
-
-
-class ResearchLoader(ComboDataLoader):
-    def preprocess_feature_group(self, freq: str, feature, ds: int):
-        if freq != "1d":
-            return feature.to(self.dtype)
-        can_trade = self.registry.get_data("aux.can_trade", ds, ds)[0].to(torch.bool)
-        feature = feature.masked_fill(~can_trade[:, None], torch.nan)
-        return super().preprocess_daily_features(feature, ds)
-```
-
-常见返回 shape：
-
-- `freq="1d"`: `[R, stock]`
-- `freq="5m"`: `[R, 49, stock]`
-- `freq="1m"`: `[R, 239, stock]`
-
-如果要把 aux 变成模型 feature，直接在 XML 中把它声明为 `role="factor"`，让框架自动计入对应 `freq` 的 feature 数。
-
-### 14.2 ResearchDataset
-
-`dataset.py` 必须定义 `ResearchDataset`。常见用途：
-
-| 目标 | 推荐覆盖 |
-|---|---|
-| 改训练股票池 | `_build_validinsts()` |
-| 改训练样本返回结构 | `__getitem__(idx)` |
-| 改整段训练数据构造 | `__init__(...)`，仅在确实需要时使用 |
-
-默认训练样本随模式变化。日频为 `(idx, x, y, w)`；日内字段如下：
-
-| 字段 | 类型和 shape |
-|---|---|
-| `idx` | Python int 或 0d index，用于定位样本。 |
-| `di` | target 日期。 |
-| `ti` | target 时点；5m 为 09:35 至 15:00，共 48 个。 |
-| `x` | `FeatureGroups`，窗口 shape：`1d=[tsDays, M, F]`，`5m/1m=[tsDays, M, bar, F]`。 |
-| `y` | `[M]` tensor。 |
-| `w` | `[M]` tensor，训练权重或有效 mask。 |
-
-最小示例：
-
-```python
-from __future__ import annotations
-
-from comb2 import ComboTrainDataset
-
-
-class ResearchDataset(ComboTrainDataset):
-    def _build_validinsts(self):
-        return super()._build_validinsts()
-
-    def __getitem__(self, idx: int):
-        return super().__getitem__(idx)
-```
-
-如果修改 `__getitem__` 的返回结构，必须同步修改 `ResearchModel.fit()`；预测阶段日频调用 `predict(x_window)`，日内调用 `predict(x_window, di=di, ti=ti)`。
-
-## 15. 外部 data module
-
-如果内置 module 不够，可以让 item 指向自定义读取函数：
-
-```xml
-<item
-  name="factor.my_custom"
-  module="my_data:load_data"
-  path="my_factor.parquet"
-  role="factor"
-  freq="1d"
-/>
-```
-
-`my_data.py`：
-
-```python
-from pathlib import Path
-
-import pandas as pd
-import torch
-
-
-def load_data(item, registry, start_ds: int, end_ds: int):
-    frame = pd.read_parquet(Path(item.path))
-    frame.index = frame.index.astype(int)
-    frame.columns = [str(code).zfill(6) for code in frame.columns]
-
-    start_idx = registry.universe.date2idx(start_ds)
-    end_idx = registry.universe.date2idx(end_ds)
-    dates = [registry.universe.idx2date(idx) for idx in range(start_idx, end_idx + 1)]
-    codes = list(registry.universe.codes)
-
-    aligned = frame.reindex(index=dates, columns=codes)
-    return torch.as_tensor(aligned.to_numpy(), dtype=registry.universe.dtype)
-```
-
-稳定要求：
-
-| 要求 | 说明 |
-|---|---|
-| shape | `freq="1d"` 返回 `[R, N]`；`freq="5m"` 返回 `[R, 49, N]`；`freq="1m"` 返回 `[R, 239, N]`。`R` 是日期数，`N` 是股票数。 |
-| 缺失值 | 用 `NaN`。 |
-| 对齐 | 日期和股票顺序必须与框架 universe 一致；日内 bar 顺序必须完全等于框架固定时间轴。 |
-| 频率 | 自定义 module 也遵守 item 上的 `freq`；缺省是 `1d`。 |
-| 预处理 | rolling、neutralize 等建议写在 `<op>` 或 `ResearchLoader`。 |
-
-自定义 module 可用的稳定输入：
-
-| 对象 | 用法 |
-|---|---|
-| `item.path` | XML `<item path="...">` 解析后的路径。 |
-| `item.params` | XML `<item>` 上除标准字段外的额外参数，例如 `display_name`、`freq`。 |
-| `registry.universe.dates` | 框架交易日序列。 |
-| `registry.universe.codes` | 框架股票代码序列。 |
-| `registry.universe.dtype` | 当前数据 dtype。 |
-| `registry.universe.date2idx(ds)` / `idx2date(idx)` | 日期和交易日序号互转。 |
-
-自定义 module 只负责读取和对齐原始数据，不负责把 cube 降维。是否聚合日内维度由 `ResearchLoader` 或 `ResearchModel` 决定。
-
-## 16. backtest
-
-`freq="1d"` 时 `runCombo` 调用日频撮合并生成回测输出。`freq="5m"`/`"1m"` 时不调用日频撮合；日内执行价格、持仓更新和交易成本契约需另行定义。
-
-## 17. monitor
-
-```xml
-<monitor
-  enabled="false"
-  output_path=""
-  format="csv"
-  print_summary="true"
-  collect_gpu="true"
-  sync_cuda="false"
-  verbose="false"
-/>
-```
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `enabled` | `false` | 是否启用性能监控。 |
-| `output_path` | 空 | 监控 CSV 输出路径；空值时可由输出根目录派生。 |
-| `format` | `csv` | 当前稳定格式为 CSV。 |
-| `print_summary` | `true` | 结束时是否打印 summary。 |
-| `collect_gpu` | `true` | 是否采集 GPU 显存信息。 |
-| `sync_cuda` | `false` | 计时时是否同步 CUDA；更准但可能变慢。 |
-| `verbose` | `false` | 是否打印主循环进度。 |
-
-## 18. runCombo 输出
-
-运行：
-
-```bash
-runCombo config.xml
-```
-
-成功后常见产物：
-
-```text
-output/
-  train.log
-  alpha_history.pt
-  alpha.parquet
-  checkpoints/
-```
-
-说明：
-
-- 日频：`alpha.parquet` 使用日期索引，并生成 `daily_ic` 和 `backtest/`。
-- 日内：`alpha.parquet` 使用 `(dates, times)` MultiIndex，并生成 `intraday_ic.csv` 与 `ic_by_time.csv`。
-- `intraday_ic.csv` 直接对同一 `(D, ti)` target returns 计算横截面 IC。
-- 如果 `enable_alpha_analysis="false"`，上述分析文件不会生成。
-
-## 19. runEval 评估入口
-
-`runEval` 的 overall/PNL 流程用于日频输出，不接受 `(dates,times)` alpha。日内任务以 `intraday_ic.csv` 和 `ic_by_time.csv` 为准。
-
-### 19.1 总体分析
-
-```bash
-runEval config.xml
-```
-
-或：
-
-```bash
-runEval --overall --config config.xml
-```
-
-默认检查 `<output_root>/alpha.parquet`，然后基于 alpha 和 config 指向的 label/cache 重新计算：
-
-- IC summary
-- PnL summary
-- IC/PNL checks
-- 10 分组回测
-- Barra exposure summary
-- CAP corr summary
-- top10 excess
-- `signal_analysis.png` 长图
-
-IC summary 中的分层主指标为 `lIC`：逐日按有效 alpha 等频分为 Q1--Q10，将每层平均 1d forward return 与层号求相关。`lIC.avg` 是跨日均值，`lIC.ir` 是跨日均值除以日频标准差；精简汇总展示为 `lIC` 和 `lIR`。`layerSpread.avg` 是 Q10--Q1 的平均收益差。若并列 alpha 使当天不能形成完整十层，该日的分层指标记为缺失，不进入汇总。
-
-默认输出：
-
-```text
-<output_root>/eval_report/
-  ic_summary.csv
-  pnl_summary.csv
-  ic_checks.csv
-  pnl_checks.csv
-  decile_summary.csv
-  barra_exposure_summary.csv
-  cap_corr_summary.csv
-  top10_excess.csv
-  signal_analysis.png
-  report.json
-```
-
-常用参数：
-
-```bash
-runEval config.xml --start 20200101 --end 20240101
-runEval config.xml --skip-deciles
-runEval config.xml --skip-exposure
-runEval config.xml --report-dir /tmp/eval_report
-runEval config.xml --plot-output /tmp/signal_analysis.png
-runEval config.xml --label vwap30_label1d.csv --label-is-table --label-5d vwap30_label5d.csv --label-5d-is-table
-```
-
-`--skip-exposure` 会同时跳过 Barra exposure 和 CAP corr。
-
-### 19.2 sim: IC 类评估
-
-输入已有 daily IC 文件并输出 simsummary 风格汇总：
-
-```bash
-runEval --sim daily_ic --normalize-names
-```
-
-可选摘要落盘：
-
-```bash
-runEval --sim daily_ic --normalize-names --summary-output simsummary.txt
-```
-
-### 19.3 pnl: PnL 类评估
-
-输入已有 daily PnL 文件并输出 pnlsummary 风格汇总：
-
-```bash
-runEval --pnl output/backtest/daily_pnl.csv
-```
-
-常用参数：
-
-```bash
-runEval --pnl output/backtest/daily_pnl.csv --pnlzz500 pnlzz500.tsv
-```
-
-### 19.4 corr: 两个矩阵相关
-
-用于 position、trade、alpha 等 `date x code` 矩阵：
-
-```bash
-runEval --corr pos_a.parquet pos_b.parquet
-```
-
-默认只看最近 240 个重叠交易日。
-
-常用参数：
-
-```bash
-runEval --corr pos_a.parquet pos_b.parquet --min-valid 1000
-runEval --corr pos_a.parquet pos_b.parquet --corr-days 250
-```
-
-输出包括平均、最大、最小日频截面相关、有效天数和日期范围。
-
-同时会输出多头持仓重合度：
-
-- 默认取每日共同有效股票池中两边分值最高的 top 10%。
-- 日重合度 = 两边 top 集合交集数量 / top 集合数量。
-- 摘要字段包括 `avg_long_overlap`、`max_long_overlap`、`min_long_overlap`。
-
-修改 top 比例：
-
-```bash
-runEval --corr pos_a.parquet pos_b.parquet --top-pct 5
-```
-
-### 19.5 exposure: Barra 暴露
-
-```bash
-runEval --exposure alpha.parquet --cache-path /path/to/Cache
-```
-
-显式 cache 父目录：
-
-```bash
-runEval --exposure alpha.parquet --cache-path /path/to/Cache
-```
-
-模式：
-
-```bash
-runEval --exposure alpha.parquet --cache-path /path/to/Cache --exposure-mode 0
-runEval --exposure alpha.parquet --cache-path /path/to/Cache --exposure-mode 1
-```
-
-`0` 表示截面相关暴露，`1` 表示 beta 暴露。输出各 Barra 风格的 `min/mean/max/std`。
-
-总体评估还会生成 `cap_corr_summary.csv`：使用 alpha 当日可得的 `AshareCache/1d_DailyFdm/DailyFdm.mkt_cap`，与已应用总体评估股票池和交易掩码的 alpha 按相同日期、股票代码对齐。市值逐日做截面 rank；alpha 逐日减中位数并将多头、空头分别归一化后，与 rank 市值计算日频 Pearson 相关。输出每年和全样本的 `cap_corr.avg`、`cap_corr.ir`、`cap_corr.std`。
-
-### 19.6 va: value-add
-
-输入已有 PnL 文件：
-
-```bash
-runEval --va base_daily_pnl.csv new_daily_pnl.csv
-```
-
-常用参数：
-
-```bash
-runEval --va base.csv new.csv --column longonly_pnl
-runEval --va base.csv new.csv --weights 0.01,0.03,0.05,0.1
-runEval --va base.csv new.csv --blended-output blended.csv
-```
-
-`--sim/--pnl/--corr/--exposure/--va` 都是直接文件模式，不接受 `config.xml`。需要从 alpha 和 label 重新计算完整指标时，使用 `runEval config.xml`。
-
-输出按年度和 full period 展示 base、new 以及不同混合权重对应的年化收益增量。
-
-## 20. 消融和持仓相关
-
-两个 position parquet 平均日频相关：
-
-```bash
-comb-pos-corr pos_a.parquet pos_b.parquet
-comb-pos-corr pos_a.parquet pos_b.parquet --min-valid 1000
-```
-
-## 21. 排错与验收
-
-### 21.1 配置无法加载
-
-检查：
-
-- XML 根节点是否为 `<config>`。
-- 节点属性是否拼写正确；除 `<model>` 外，未知属性会失败。
-- bool 是否写成支持的值。
-- dtype 是否是 `float16/float32/float64/bfloat16`。
-- 相对路径是否应相对 `config.xml` 所在目录，而不是当前 shell 目录。
-
-### 21.2 数据找不到
-
-检查：
-
-- `constants.cache_path` 是否指向包含 `AshareCache` 的根目录。
-- `<item module="builtin.factorsim" path="...">` 的绝对路径是否存在，或相对路径是否能相对当前 XML/data-pack 文件找到。
-- target returns 路径是否存在，例如 `AshareCache/5m_IntvReturns/IntvReturns.c2c`。
-- `strategy.start_ds/end_ds` 是否落在数据日期范围内。
-
-### 21.3 模型接入失败
-
-检查：
-
-- `model_path` 是否存在。
-- 文件里是否定义 `ResearchModel`。
-- `ResearchModel` 是否实现 `fit/predict/save/load`。
-- `predict()` 返回是否是一维 tensor，长度等于可预测股票数。
-- `ResearchModel.fit()` 是否匹配 dataset 返回结构。
-
-### 21.4 回测没有正常产出
-
-检查：
-
-- `strategy.start_ds/end_ds` 是否有交易日。
-- `enable_alpha_analysis` 是否为 `true`。
-- `constants.output_root` 是否可写。
-- 自定义 `AlphaStrategy.generate_orders()` 是否返回金额订单 DataFrame。
-- 买卖金额是否包含 NaN、负数或同一股票同时买卖。
-
-### 21.5 runEval 总体评估失败
-
-检查：
-
-- `<output_root>/alpha.parquet` 是否存在且非空。
-- 如果 `enable_alpha_analysis="false"`，先改为 `true` 重新跑 `runCombo`。
-- config 指向的 label/cache 是否存在。
-- 如果 label 是本地表，使用 `--label ... --label-is-table --label-5d ... --label-5d-is-table`。
-- 日期过滤后是否还有 alpha 行。
-
-### 21.6 内存或速度问题
-
-建议：
-
-- 降低 `max_train_days`。
-- 尝试 `compression="fp4"`。
-- 降低模型 `batch_size` 或 `epochs`。
-- 调整 `torch_threads`，避免多任务并发时 CPU 线程过量。
-- 开启 monitor 定位阶段耗时。
-
-### 21.7 成功验收清单
-
-一次完整训练回测通常应有：
-
-```text
-output/train.log
-output/alpha.parquet
-```
-
-日频还应有 `output/daily_ic` 和 `output/backtest/`；日内还应有 `output/intraday_ic.csv` 与 `output/ic_by_time.csv`。
-
-如果启用了 checkpoint，还应有：
-
-```text
-output/checkpoints/
-```
-
-一个 agent 接手项目时，优先按这个顺序确认：
-
-1. `config.xml` 可读，路径都能解析。
-2. 日频 factor/label 或日内输入/target 能找到，且与 `constants.freq` 一致。
-3. `ResearchModel` 接口完整。
-4. `runCombo config.xml` 能生成 `alpha.parquet`。
-5. 日频检查 `daily_ic` 与回测；日内检查分时 IC 覆盖配置频率的全部 target 时点。
-6. 评估结果里 IC 和 coverage 没有明显异常。
