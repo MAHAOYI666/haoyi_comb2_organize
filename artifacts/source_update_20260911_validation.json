@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-11",
+  "scope": "local documentation and synthetic interface checks only",
+  "python": "3.10.11",
+  "torch": "2.11.0+cpu",
+  "checks": [
+    "8 files: UTF-8 readable; all 3 Python files parse",
+    "5 copied files match current repository bytes exactly",
+    "README relative file links resolve",
+    "current config parser: sample time, delay, optimizer, fees, execution field, paths",
+    "synthetic six-field dataset: fit, tensor predict(di/ti), trainii, save/load roundtrip",
+    "IC loss excludes masked synthetic stock"
+  ],
+  "files": {
+    "combo框架整体架构.txt": {
+      "bytes": 26352,
+      "sha256": "2d0499ed2e5427f0b7abb0857c30b2da747a8054baf93ab5f955c3310a4eb099"
+    },
+    "config.human": {
+      "bytes": 21416,
+      "sha256": "dc551cf86b7a65df31d8a935912c0502eaeb105aa7610bfb1a6e0d27390dce71"
+    },
+    "config.xml": {
+      "bytes": 1189,
+      "sha256": "a493cb671a019e0161f1fe0374a14a224c0bf0e09a2eeebb7c973113a2085a96"
+    },
+    "dataset.py": {
+      "bytes": 438,
+      "sha256": "6792bfaacf4892c65299b6a2a6b3095fdb1af9eaf9efc85a637d349fe94fd311"
+    },
+    "loader.py": {
+      "bytes": 1752,
+      "sha256": "2805bba3750725245788da4b5804839694e7fa0bda7d850ee0f7d6e34092f96a"
+    },
+    "model.py": {
+      "bytes": 9980,
+      "sha256": "57da5d62ea77f2fbe24f1c936f82180801d1f8bdd7efc5529262accc63669e44"
+    },
+    "README.md": {
+      "bytes": 11203,
+      "sha256": "8dbc3b6c903467c9cdc4d1b723a25ef5f72f74b5c7601063203f82c4ca613734"
+    },
+    "现在的负责点.txt": {
+      "bytes": 4294,
+      "sha256": "8f25aa8c5f7a7635e6fe841c49c1ab0bf50ac7a9fafe4508a3368f9a886527bd"
+    }
+  },
+  "not_run": [
+    "remote data verification",
+    "factor-backed training",
+    "MOSEK backtest",
+    "deployment"
+  ]
+}

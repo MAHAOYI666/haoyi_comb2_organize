@@ -1,0 +1,317 @@
+# combo2 研究员接口
+
+combo2 使用 Python 声明数据，Memmap 分块读取，源级处理后把普通张量送入模型。每个样本由 (交易日, 采样时点) 标识。所有日期移动使用交易日历。
+
+## 创建与运行
+
+```bash
+combo-hello-world -y
+runCombo config.xml
+runEval config.xml
+```
+
+starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 ResearchLoader 和 ResearchModel。先修改 data_requirements 中的因子路径再运行。XML 中的相对路径相对 XML 所在目录；Python 声明的相对数据路径相对 ResearchLoader 所在文件目录。
+
+```xml
+<config>
+  <constants cache_path="/data/Cache" output_root="output" />
+  <strategy start_ds="20241028" end_ds="20241029">
+    <optimizer type="opt2" />
+  </strategy>
+  <combo>
+    <paths model_path="Model.py" research_loader_path="Model.py" />
+    <runtime sample_times="100000,110000" trainDelay="2"
+             retDays="1" tsDays="8" max_train_days="2000"
+             snaptime="experiment" />
+    <loader dtype="float16" compression="none"
+            data_start_ds="20160104" registry_cache_days="64" />
+    <model device="cpu" epochs="15" batch_size="3" />
+  </combo>
+  <backtest execution_price="execution:execution"
+            cash="10000000" reserve_cash="0.95" fee_rate="0.00075" />
+</config>
+```
+
+sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。
+
+## 声明与选择数据
+
+```python
+from pathlib import Path
+from comb2 import ComboDataLoader, DataItem, LoadedSource
+
+class ResearchLoader(ComboDataLoader):
+    def data_requirements(self):
+        root = Path(self.config.cache_path) / "AshareCache"
+        return (
+            DataItem("factor", path="factors/example", delay=1),
+            DataItem("returns", path=str(root / "1d_Returns" / "Returns.c2c_1d")),
+            DataItem("execution", path=str(
+                root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}"
+            )),
+        )
+
+    def model_input_sources(self):
+        return ("factor",)
+
+    def model_target(self):
+        return "returns", "returns"
+
+    def gen_raw_target(self, ds, ti):
+        self.set_current_ti(ti)
+        endpoint = self.didx2date(self.date2didx(ds) + 1)
+        return self.source_field(*self.model_target(), endpoint, endpoint)[0].float()
+```
+
+data_requirements 返回 DataItem 序列，复用来源时直接在 Python 导入公共声明函数。DataItem 字段：
+
+| 字段 | 含义 |
+|---|---|
+| name | 唯一来源名称 |
+| path | Memmap 路径；可使用 {ti:06d} 引用当前采样时点 |
+| delay | 非负交易日数，默认 0；请求逻辑 D 读取物理 D-delay，只应用一次 |
+| module | 默认 builtin.factorsim；也可指定 module:function |
+| ops | OpSpec 序列，在源级降维之后执行 |
+| params | 自定义源参数 |
+
+model_input_sources 指定 X 来源及顺序；来源内部按处理结果 columns 的顺序拼接。feature_names 使用 source:column 标识最终特征列。来源可以同时用于输入和目标，缓存共用。
+
+model_target 返回 (source, column)。默认 gen_raw_target 读取该字段的 ds 行；研究员覆盖这个方法完成目标索引。IC 直接使用此方法的原始值。固定日期偏移可通过来源的 delay 表达；prefetch_targets(days) 按逻辑日期分块预取目标及有效性来源，自定义目标索引需要在此方法中声明对应的预取日期。默认 gen_target 对 ds 开始连续 retDays 个原始目标按 retDays,...,1 加权，再调用 preprocess_target；数据集为聚合预留 retDays-1 个结束日。自定义目标聚合可覆盖 gen_target，并自行确保与研究目标一致。
+
+配置 cache_path 时，model_validity_source 默认返回 None，启用 StockMask2.BaseUnivMask、StockMask2.NoNewStockMask 和 StockMask2.LimitMask 三种掩码的交集，均使用 delay=1，缺文件时直接报错。默认来源名称为 mask.base、mask.valid、mask.filtered；base 决定训练股票池，三种掩码共同决定标签权重、最终信号和 IC 的有效股票。不配置 cache_path 的独立 loader 不加载默认掩码。研究员可显式返回 (source, validity_fields, base_field) 替换默认筛选；mask 同样是普通来源，可在 process_source 中组合字段。
+
+## Memmap 与源级降维
+
+读取器保留 Memmap 的真实日期、股票和时间轴。LoadedSource 包含：
+
+- values：原始日矩阵为 [date, stock, 1]；带时间轴的矩阵为 [date, stock, bar, 1]。
+- dates、codes、columns：有序轴信息。
+- times：原始 bar 时间；降维结果为空元组。
+
+研究员在 process_source(source, loaded) 中完成按时点裁剪、降维和派生列。输出必须是 [date, stock, feature]，保留 dates/codes，columns 与特征列一一对应。
+
+```python
+from dataclasses import replace
+import torch
+
+def process_source(self, source, loaded):
+    if source.name == "minute_amount":
+        known = torch.tensor(loaded.times) < self.current_ti
+        assert known.any()
+        amount = loaded.values[:, :, known, :].sum(dim=2)
+        return replace(loaded, values=amount,
+                       columns=("amount_before_sample",), times=())
+    return super().process_source(source, loaded)
+```
+
+可从一个原始来源派生多个列。原始块处理完成后释放，仅保留降维数据。不要使用全天统计值冒充早盘快照。持续覆盖当天数据的来源需要能复现历史时点；读取层无法从历史收盘最终值还原早盘状态。
+
+常用读取接口：
+
+```python
+self.source_history(name, start_ds, end_ds)       # [date, stock, field]
+self.source_field(name, field, start_ds, end_ds)  # [date, stock]
+self.previous_date(ds, offset)
+self.date2didx(ds)
+self.didx2date(idx)
+```
+
+读取日期是逻辑日期，delay 在底层应用。单次显式范围不得超过 registry_cache_days；更长范围分块读取。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
+
+## X、Y 与模型
+
+```python
+idx, ds, ti, x, y, w = dataset[i]
+# x: [tsDays, stock, feature]
+# y, w: [stock]
+```
+
+窗口由连续 tsDays 个交易日的同一 ti 快照组成。每个来源再按自身 delay 对齐。PyTorch batch 的 X 为 [batch, tsDays, stock, feature]。模型接口：
+
+```python
+class ResearchModel:
+    def __init__(self, config): ...
+    def fit(self, dataset): ...
+    def predict(self, x_window, *, di, ti): ...
+    def save(self, path_or_buffer): ...
+    def load(self, path_or_buffer): ...
+```
+
+config 注入 dtype、tsDays、num_features、feature_names、sample_times。predict 返回 [stock] 张量或可转为张量的数组。模型可设置 trainii 为训练股票索引，框架筛选输入并将预测回填到完整股票轴。
+
+preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
+
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。registry_cache_days 限制源级 LRU 缓存条目数，不限制训练数据集存储。大型训练需评估全量训练特征、标签、模型、batch 和数据缓存的合计峰值内存；源数据更新后需重建数据集。
+
+## 日期口径与训练
+
+label、returns 都是普通数据。研究员负责目标索引和训练数据可知性：
+
+| 原始字段 | 索引含义 |
+|---|---|
+| snapshot label[T] | T+1 买入、T+2 卖出 |
+| Returns.vwap30_100000[T] | T-1 日到 T 日的对应 VWAP 收益 |
+| IntvReturns.c2c[D,ti] | 前一根收盘到 ti 收盘 |
+
+starter 的 gen_raw_target 把 D 日样本映射到 label[D-1]。VWAP 100000 表示 10:00-10:30 窗口，完整结果需要窗口结束后的数据。starter 设置 trainDelay=2，示范保留足够的目标观测时间；自定义目标需自行选择 trainDelay 和索引。
+
+框架 training_end = D-trainDelay。日期和目标的额外偏移在研究代码中明确实现，框架不从名称推断。CombineHist 先预测，再按现有 isTrainDay 规则判断训练，每天最多检查一次。研究员可以通过现有 combo_base_path 覆盖 isTrainDay。保存、加载和模型平滑使用现有流程。
+
+## 成交回测与输出
+
+`backtest.fee_rate` 默认 `0.00075`，即买入、卖出分别按成交额固定扣除 7.5bp，不随日期变化。
+
+execution_price 使用 source:column，引用研究员 loader 中普通来源的处理后字段。每次取得当前 (date,time) 的价格。多个日内时点明确使用 opt2；研究员保证价格窗口与策略决策的合理性。
+
+首个时点使用当日 pre_close 为持仓估值；后续时点使用上一执行点已知价格作为默认估值。直接调用 step 可传 mark_prices。优化器与成交价格分开，不能让本次尚不可知的执行价格参与本次优化估值。原始成交价不做前向填充；价格、涨跌停或停牌状态无效时，已有持仓固定在实际金额且不产生订单。策略返回不可执行订单会立即失败，不会静默跳过。
+
+退市状态只读取 factorsim 的 `StockMask2.StockListedDays`。已持仓股票从前一交易日有限值切换为当日缺失时，在当日优化前按零值核销；核销不计换手或手续费，其损失进入当日 PNL。普通停牌不会触发核销，继续沿用最后有效收盘估值；恢复行情后重新使用真实价格。
+
+opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计实际换手。买入增加锁仓，卖出受可卖股数约束；仅换日时解除锁定并重置每日累计状态。日终按收盘价结算，每天一行日报。
+
+输出：
+
+- train.log、checkpoints/：运行日志和模型。
+- alpha.parquet、alpha_history.pt：以 (date,time) 为样本索引。
+- daily_ic、ic_by_time.csv：原始研究目标的 IC。
+- backtest/daily_pnl.csv、pnl_summary.csv：实际成交日终资产及汇总。
+- backtest/executions.csv、settlements.csv：实际成交明细和 factorsim 退市零值核销明细。
+- backtest/*_position.csv：以 (date,time) 索引的目标持仓。
+- eval_report/：按时点评估 target IC、分层目标均值、Barra/CAP 暴露，以及实际成交 PnL。
+
+runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层输出是各层原始 target 均值，不把任意研究目标当作成交收益。需要 alpha.parquet 和成交日报。--skip-exposure 可跳过暴露，--skip-deciles 可跳过分层。--sim/--pnl/--corr/--va/--exposure 继续支持独立的本地表格分析。
+
+## 监控与运行参数
+
+loader 保留 dtype、compression、data_start_ds、data_offset、registry_cache_days。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+
+monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sync_cuda、verbose。长任务启动前按 cgroup 限制检查内存并用小规模验证估算峰值。
+
+## 优化器与持仓策略: 回测持仓逻辑接入
+
+```xml
+<strategy start_ds="20200101" end_ds="20240628" />
+```
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `start_ds` | `20160111` | 回测开始日期，格式 `YYYYMMDD`。 |
+| `end_ds` | `20200101` | 回测结束日期。 |
+| `path` | 空 | 可选自定义 strategy 文件。省略时使用包内默认 `AlphaStrategy`。 |
+
+默认 strategy 行为：
+
+- 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
+- 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对基准方差约束下求目标权重。
+- 换手基准来自回测已真实成交的股数持仓，按当前估值换算为市值。opt1 将已有持仓除以实际股票持仓总额；opt2 除以当天目标股票预算。当前不可买的已有持仓仍进入候选集，但只能维持或减仓；不可交易持仓固定在实际金额。
+- 基准指数权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认基准为中证 500，收益、指数、universe 和风险因子 delay 均为 `1`。
+- 缺数据、候选数不足、许可证不可用或 MOSEK 调用失败时直接报错；MOSEK 正常完成但没有返回 `Optimal` 解时维持上一日实际股票 book，首日无持仓时保持空仓，并输出 RuntimeWarning。
+
+默认优化器要求安装 `Mosek==11.0.25`，并在运行前指向有效许可证：
+
+```bash
+export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+```
+
+源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。
+
+研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值：
+
+```xml
+<strategy start_ds="20200101" end_ds="20240628">
+  <optimizer
+    type="opt1"
+    lambda0="0.5"
+    benchmark="000905.SH"
+    maxtvr="0.2"
+    max_weight="0.0075"
+    num_mosek_threads="1"
+    risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
+  />
+</strategy>
+```
+
+| 参数 | 默认值 | 说明 |
+|---|---:|---|
+| `type` | `opt1` | `opt1` 使用原权重优化器；`opt2` 使用带 T+1 约束的金额优化器。两者都返回买卖金额。 |
+| `lambda0` | `0.5` | 相对配置基准的方差在目标函数中的惩罚系数。设为 `0` 时不构造方差项。 |
+| `shrinkage` | `0.5` | 历史协方差向对角方差收缩的比例，范围 `[0, 1]`。 |
+| `ret_days` | `60` | 方差和收益有效性检查使用的历史交易日数。 |
+| `ret_delay` | `1` | 方差收益窗口相对求解日的交易日延迟。 |
+| `ret_method` | `2` | `1` 使用个股收益；`2` 使用个股相对配置基准的收益。 |
+| `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数代码；对应读取 `1d_IndexWeight/IndexWeight.<benchmark>`。不改变回测收益报告的评价基准。 |
+| `benchmark_delay` | `1` | 目标风险暴露使用的基准指数权重延迟。 |
+| `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元；opt2 的金额约束不使用该换算参数。 |
+| `maxtvr` | `0.2` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
+| `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
+| `maxtrd` | `0.0` | 单票交易额相对 delay-1 全日成交额的上限。opt1 先用 `target_size` 换算成权重；opt2 直接约束人民币金额。`0` 表示不添加，hard `0:0` universe 强退可突破卖出上限。 |
+| `maxpos` | `0.0` | 单票持仓额相对 delay-1 全日成交额的上限。opt1 先换算成权重，opt2 直接约束人民币金额；`0` 表示不添加，历史持仓超限不强制一次性卖回。 |
+| `liquidity_delay` | `1` | `maxtrd` 和 `maxpos` 使用的 `DailyKline.amount` 交易日延迟。 |
+| `lambda_slp` | `0.0` | 逐股滑点成本在目标函数中的惩罚系数；成本率为 delay-1 `spread_slippage_new / close`。 |
+| `slippage_delay` | `1` | 滑点和对应收盘价的交易日延迟。缺失 spread 的股票不可交易。 |
+| `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
+| `parti_penalty` | `0.0` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
+| `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
+| `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
+| `min_return_obs` | `20` | `ret_days` 窗口内要求的最少有效收益观测数。 |
+| `soft_univ_penalty` | `0.00025` | soft universe 越界松弛的全局惩罚系数。 |
+| `soft_risk_penalty` | `0.00004` | soft risk 越界松弛的全局惩罚系数。 |
+| `soft_group_penalty` | `0.0002` | soft industry group 越界松弛的全局惩罚系数。 |
+| `num_mosek_threads` | `1` | MOSEK 求解线程数。 |
+| `max_time` | `30.0` | 单日 MOSEK 最大求解秒数；`0` 表示不设置时间上限。 |
+| `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
+| `univ_list` | 见完整模板 | 股票集合权重硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
+| `soft_univ_list` | 见完整模板 | 软 universe 约束，格式为 `name:lo:hi:penalty,delay`。 |
+| `group_list` | 见完整模板 | 相对配置基准的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
+| `soft_group_list` | 见完整模板 | 相对配置基准的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
+| `risk_list` | 见完整模板 | 硬风险约束，格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。 |
+| `soft_risk_list` | 见完整模板 | 软风险约束，格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。 |
+
+列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
+
+hard universe 的上界为 `0` 时，可交易成员仓位必须退出；opt2 中当日买入的 locked 仓位优先满足 T+1，只保留 unavoidable locked amount 且禁止继续买入。强制卖出可突破 `maxtrd` 和当日剩余 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时记录未定价强退数量和权重。不可交易旧持仓固定在实际金额，恢复交易后再按当时约束退出。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。
+
+当 MOSEK primal solution status 不是 `Optimal` 时，优化器返回全零买卖金额，因此手续费和换手均为 `0`；订单 attrs 会记录 `solver_fallback=true` 和具体 `solver_status`，下一次优化重新求解。
+
+自定义 strategy：
+
+```xml
+<strategy
+  start_ds="20200101"
+  end_ds="20240628"
+  path="strategy.py"
+/>
+```
+
+`strategy.py` 必须定义 `AlphaStrategy`：
+
+```python
+from comb2_pcmaster.strategy import StrategyBase
+
+
+class AlphaStrategy(StrategyBase):
+    def generate_orders(
+        self,
+        signals,
+        sellable_amount,
+        locked_amount,
+        buyable_mask,
+        market_sellable_mask,
+        target_stock_amount,
+        executed_turnover_today,
+    ):
+        ...
+```
+
+接口约定：
+
+| 名称 | 约定 |
+|---|---|
+| `signals` | 当日 alpha 截面，通常是 index 为股票代码、value 为 alpha 的 pandas Series。 |
+| `sellable_amount` | 当前可卖持仓金额，单位为元。 |
+| `locked_amount` | 当日买入且受 T+1 限制的持仓金额，单位为元。 |
+| `buyable_mask` | 当前原始成交价、涨跌停、停牌和 base 状态均有效的股票布尔掩码。 |
+| `market_sellable_mask` | 当前原始成交价、涨跌停和停牌状态均有效的股票布尔掩码；不要求属于 base。 |
+| `target_stock_amount` | backtest 内部按当日第一次优化前 `总资产 * reserve_cash` 计算的固定金额。 |
+| `executed_turnover_today` | 当日已经实际成交的累计金额。 |
+| 返回值 | 与股票轴对齐、列为 `buy_amount` 和 `sell_amount` 的非负 pandas DataFrame。 |
