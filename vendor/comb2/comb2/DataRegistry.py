@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import bisect
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 import importlib
 import re
@@ -495,7 +495,7 @@ class DataRegistry:
     def __init__(
         self, items, *, universe, data_start_ds, ashare_cache_path=None,
         config_path=None, presets=(), verbose=False, cache_days=64,
-        process_source=None,
+        load_chunk_days=64, process_source=None,
     ):
         self.universe = universe
         self.data_start_ds = int(data_start_ds)
@@ -505,6 +505,8 @@ class DataRegistry:
         self.verbose = verbose
         self.cache_days = int(cache_days)
         assert self.cache_days > 0
+        self.load_chunk_days = int(load_chunk_days)
+        assert self.load_chunk_days > 0
         self.process_source = process_source
         self.runtime_context = {"ti": 150000, "date": None}
         self.module_cache = {}
@@ -515,6 +517,14 @@ class DataRegistry:
             assert item.name not in self.items, f"duplicate data source: {item.name}"
             self.items[item.name] = item
         self.processed_cache = {name: OrderedDict() for name in self.items}
+        self.working_cache = {name: {} for name in self.items}
+        self.retention_start_idx = None
+        self.retention_end_idx = None
+        self._scope_depth = 0
+        self._scope_reads = None
+        self._scope_stats = None
+        self.last_scope_reads = {}
+        self.last_scope_stats = LoadStats()
         self.columns = {}
         self.aliases = self._build_aliases()
 
@@ -542,11 +552,81 @@ class DataRegistry:
     def set_current_ti(self, ti):
         self.runtime_context["ti"] = int(ti)
 
+    @property
+    def in_cache_scope(self):
+        return self._scope_depth > 0
+
+    @contextmanager
+    def cache_scope(self, *, retention=None):
+        outer = self._scope_depth == 0
+        if outer:
+            self.release_working_cache()
+            self._scope_reads = {name: set() for name in self.items}
+            self._scope_stats = LoadStats()
+        self._scope_depth += 1
+        try:
+            if retention is not None:
+                self.set_retention_window(*retention)
+            yield self
+        finally:
+            self._scope_depth -= 1
+            if outer:
+                self.last_scope_reads = {
+                    name: set(keys) for name, keys in (self._scope_reads or {}).items() if keys
+                }
+                self.last_scope_stats = self._scope_stats or LoadStats()
+                self._scope_reads = None
+                self._scope_stats = None
+                self.release_working_cache()
+
+    def release_working_cache(self):
+        for cache in self.working_cache.values():
+            cache.clear()
+
+    def set_retention_window(self, start_idx=None, end_idx=None):
+        if start_idx is None:
+            assert end_idx is None
+            self.retention_start_idx = None
+            self.retention_end_idx = None
+            for cache in self.processed_cache.values():
+                cache.clear()
+            self.release_working_cache()
+            return
+        start_idx = int(start_idx)
+        end_idx = int(end_idx)
+        assert self.data_start_idx <= start_idx <= end_idx < len(self.universe.dates)
+        assert end_idx - start_idx + 1 <= self.cache_days
+        self.retention_start_idx = start_idx
+        self.retention_end_idx = end_idx
+        for cache in self.processed_cache.values():
+            for key in list(cache):
+                if not self._in_retention(key[0]):
+                    del cache[key]
+
+    def _in_retention(self, idx):
+        return (
+            self.retention_start_idx is not None
+            and self.retention_start_idx <= int(idx) <= self.retention_end_idx
+        )
+
+    def _record_access(self, name, indices, ti):
+        if self._scope_reads is None:
+            return
+        self._scope_reads.setdefault(name, set()).update((int(idx), int(ti)) for idx in indices)
+
+    def _record_stats(self, stats):
+        if self._scope_stats is not None:
+            self._scope_stats.merge(stats)
+
     def set_point(self, ds, ti, *, refresh=False):
         self.runtime_context.update(date=int(ds), ti=int(ti))
         if refresh:
             idx = self.universe.date2idx(int(ds))
             for cache in self.processed_cache.values():
+                for key in list(cache):
+                    if key[0] >= idx:
+                        del cache[key]
+            for cache in self.working_cache.values():
                 for key in list(cache):
                     if key[0] >= idx:
                         del cache[key]
@@ -568,18 +648,27 @@ class DataRegistry:
         return fn
 
     def get_data(self, name, start_ds=None, end_ds=None):
+        if not self.in_cache_scope:
+            with self.cache_scope():
+                return self.get_data(name, start_ds, end_ds)
         name = self._resolve_name(name)
         assert start_ds is not None and end_ds is not None, "explicit logical dates are required"
         lo = self.universe.date2idx(int(start_ds))
         hi = self.universe.date2idx(int(end_ds))
         assert self.data_start_idx <= lo <= hi
-        assert hi - lo + 1 <= self.cache_days, "request exceeds registry_cache_days; read in chunks"
-        self._ensure_processed_range(name, start_ds, end_ds)
+        self._ensure_range((name,), start_ds, end_ds)
         ti = self.runtime_context["ti"]
-        cache = self.processed_cache[name]
+        values = []
         for i in range(lo, hi + 1):
-            cache.move_to_end((i, ti))
-        return torch.stack([cache[(i, ti)] for i in range(lo, hi + 1)])
+            key = (i, ti)
+            if key in self.processed_cache[name]:
+                values.append(self.processed_cache[name][key])
+            elif key in self.working_cache[name]:
+                values.append(self.working_cache[name][key])
+            else:
+                raise AssertionError(f"{name}: processed value missing for date index {i}, ti={ti}")
+        self._record_access(name, range(lo, hi + 1), ti)
+        return torch.stack(values)
 
     def get_field(self, name, field, start_ds, end_ds):
         name = self._resolve_name(name)
@@ -587,12 +676,12 @@ class DataRegistry:
         return values[..., self.columns[name].index(field)]
 
     def _cache_day(self, name, idx, value):
-        cache = self.processed_cache[name]
         key = (int(idx), self.runtime_context["ti"])
-        cache[key] = value.clone(memory_format=torch.contiguous_format)
-        cache.move_to_end(key)
-        while len(cache) > self.cache_days:
-            cache.popitem(last=False)
+        value = value.clone(memory_format=torch.contiguous_format)
+        if self._in_retention(idx):
+            self.processed_cache[name][key] = value
+        else:
+            self.working_cache[name][key] = value
 
     def _ensure_processed_range(self, name, start_ds, end_ds, stack=(), stats=None):
         name = self._resolve_name(name)
@@ -602,58 +691,103 @@ class DataRegistry:
         item = self.items[name]
         ti = self.runtime_context["ti"]
         cache = self.processed_cache[name]
-        missing = [i for i in range(lo, hi + 1) if (i, ti) not in cache]
+        working = self.working_cache[name]
+        missing = [
+            i for i in range(lo, hi + 1)
+            if (i, ti) not in cache and (i, ti) not in working
+        ]
         if not missing:
             return
         requirements = _op_requirements(item.ops)
         ranges = []
         for idx in missing:
-            if ranges and idx == ranges[-1][1] + 1 and idx - ranges[-1][0] < self.cache_days:
+            if ranges and idx == ranges[-1][1] + 1:
                 ranges[-1] = (ranges[-1][0], idx)
             else:
                 ranges.append((idx, idx))
         for first, last in ranges:
-            raw_lo = max(self.data_start_idx, first - requirements.lookback_days + 1)
-            assert raw_lo - item.delay >= 0, f"{name}: insufficient delay history"
-            logical_start = self.universe.idx2date(raw_lo)
-            logical_end = self.universe.idx2date(last)
-            for dependency in requirements.data_deps:
-                self._ensure_processed_range(dependency, logical_start, logical_end, (*stack, name), stats)
-            start = self.universe.idx2date(raw_lo - item.delay)
-            end = self.universe.idx2date(last - item.delay)
-            began = time.perf_counter()
-            loaded = self._module_for(item)(item, self, start, end)
-            assert isinstance(loaded, LoadedSource), f"{name}: reader must return LoadedSource"
-            expected_dates = tuple(self.universe.idx2date(i - item.delay) for i in range(raw_lo, last + 1))
-            assert loaded.dates == expected_dates and loaded.codes == self.universe.codes
-            processed = self.process_source(item, loaded) if self.process_source else loaded
-            assert isinstance(processed, LoadedSource)
-            assert processed.dates == loaded.dates and processed.codes == loaded.codes
-            values = torch.as_tensor(processed.values)
-            assert values.ndim == 3 and values.shape[:2] == (last - raw_lo + 1, len(self.universe.codes)), (
-                f"{name}: process_source must reduce to [date, code, field], got {tuple(values.shape)}"
-            )
-            assert not processed.times, f"{name}: reduced source must not retain a bar axis"
-            assert len(processed.columns) == values.shape[-1] and len(set(processed.columns)) == len(processed.columns)
-            if name in self.columns:
-                assert self.columns[name] == processed.columns, f"{name}: feature columns changed"
-            self.columns[name] = processed.columns
-            del loaded, processed
-            if stats:
-                stats.raw_time += time.perf_counter() - began
-                stats.raw_chunks += 1
-                stats.raw_points += last - raw_lo + 1
-            began = time.perf_counter()
-            values = self._apply_ops(item, values, raw_lo, last)
-            for idx in range(first, last + 1):
-                self._cache_day(name, idx, values[idx - raw_lo])
-            if stats:
-                stats.ops_time += time.perf_counter() - began
+            for chunk_first in range(first, last + 1, self.load_chunk_days):
+                chunk_last = min(chunk_first + self.load_chunk_days - 1, last)
+                raw_lo = max(self.data_start_idx, chunk_first - requirements.lookback_days + 1)
+                assert raw_lo - item.delay >= 0, f"{name}: insufficient delay history"
+                logical_start = self.universe.idx2date(raw_lo)
+                logical_end = self.universe.idx2date(chunk_last)
+                for dependency in requirements.data_deps:
+                    self._ensure_processed_range(dependency, logical_start, logical_end, (*stack, name), stats)
+                start = self.universe.idx2date(raw_lo - item.delay)
+                end = self.universe.idx2date(chunk_last - item.delay)
+                began = time.perf_counter()
+                loaded = self._module_for(item)(item, self, start, end)
+                assert isinstance(loaded, LoadedSource), f"{name}: reader must return LoadedSource"
+                expected_dates = tuple(self.universe.idx2date(i - item.delay) for i in range(raw_lo, chunk_last + 1))
+                assert loaded.dates == expected_dates and loaded.codes == self.universe.codes
+                processed = self.process_source(item, loaded) if self.process_source else loaded
+                assert isinstance(processed, LoadedSource)
+                assert processed.dates == loaded.dates and processed.codes == loaded.codes
+                values = torch.as_tensor(processed.values)
+                assert values.ndim == 3 and values.shape[:2] == (chunk_last - raw_lo + 1, len(self.universe.codes)), (
+                    f"{name}: process_source must reduce to [date, code, field], got {tuple(values.shape)}"
+                )
+                assert not processed.times, f"{name}: reduced source must not retain a bar axis"
+                assert len(processed.columns) == values.shape[-1] and len(set(processed.columns)) == len(processed.columns)
+                if name in self.columns:
+                    assert self.columns[name] == processed.columns, f"{name}: feature columns changed"
+                self.columns[name] = processed.columns
+                del loaded, processed
+                if stats:
+                    stats.raw_time += time.perf_counter() - began
+                    stats.raw_chunks += 1
+                    stats.raw_points += chunk_last - raw_lo + 1
+                began = time.perf_counter()
+                values = self._apply_ops(item, values, raw_lo, chunk_last)
+                for idx in range(chunk_first, chunk_last + 1):
+                    self._cache_day(name, idx, values[idx - raw_lo])
+                if stats:
+                    stats.ops_time += time.perf_counter() - began
 
     def _ensure_range(self, names, start_ds, end_ds):
+        if not self.in_cache_scope:
+            with self.cache_scope():
+                return self._ensure_range(names, start_ds, end_ds)
         stats = LoadStats()
+        lo = self.universe.date2idx(int(start_ds))
+        hi = self.universe.date2idx(int(end_ds))
+        stats.request_days = hi - lo + 1
         for name in names:
-            self._ensure_processed_range(name, start_ds, end_ds, stats=stats)
+            resolved = self._resolve_name(name)
+            self._ensure_processed_range(resolved, start_ds, end_ds, stats=stats)
+            self._record_access(resolved, range(lo, hi + 1), self.runtime_context["ti"])
+        self._record_stats(stats)
+        return stats
+
+    def warm_retention(self, reads, start_idx, end_idx, set_current_ti=None):
+        assert self.in_cache_scope
+        stats = LoadStats()
+        for name, keys in reads.items():
+            grouped = {}
+            for idx, ti in keys:
+                if start_idx <= idx <= end_idx:
+                    grouped.setdefault(int(ti), []).append(int(idx))
+            for ti, indices in grouped.items():
+                if set_current_ti is None:
+                    self.set_current_ti(ti)
+                else:
+                    set_current_ti(ti)
+                missing = sorted({
+                    idx for idx in indices
+                    if (idx, ti) not in self.processed_cache[name]
+                })
+                ranges = []
+                for idx in missing:
+                    if ranges and idx == ranges[-1][1] + 1:
+                        ranges[-1] = (ranges[-1][0], idx)
+                    else:
+                        ranges.append((idx, idx))
+                for first, last in ranges:
+                    stats.merge(self._ensure_range(
+                        (name,), self.universe.idx2date(first), self.universe.idx2date(last)
+                    ))
+                    self.release_working_cache()
         return stats
 
     def _apply_ops(self, item, values, lo_idx, hi_idx):
@@ -686,10 +820,9 @@ class DataRegistry:
                     deps, ratio = _neut_deps_and_ratio(op, args)
                     xs = []
                     for dep in deps:
-                        data = torch.cat([
-                            self.get_data(dep, self.universe.idx2date(first), self.universe.idx2date(min(first + self.cache_days - 1, hi_idx)))
-                            for first in range(lo_idx, hi_idx + 1, self.cache_days)
-                        ])
+                        data = self.get_data(
+                            dep, self.universe.idx2date(lo_idx), self.universe.idx2date(hi_idx)
+                        )
                         xs.extend(data.unbind(-1))
                     out = neut(out, xs, ratio=ratio)
             columns.append(out)

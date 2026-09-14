@@ -24,7 +24,7 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
              retDays="1" tsDays="8" max_train_days="2000"
              snaptime="experiment" />
     <loader dtype="float16" compression="none"
-            data_start_ds="20160104" registry_cache_days="64" />
+            data_start_ds="20160104" cacheDays="64" />
     <model device="cpu" epochs="15" batch_size="3" />
   </combo>
   <backtest execution_price="execution:execution"
@@ -116,7 +116,9 @@ self.date2didx(ds)
 self.didx2date(idx)
 ```
 
-读取日期是逻辑日期，delay 在底层应用。单次显式范围不得超过 registry_cache_days；更长范围分块读取。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
+批量 `prefetch_features()` 和 `prefetch_targets()` 必须在同一个 `loader.cache_scope()` 中完成预取和消费；作用域结束后，保留区外的工作数据会释放。单独的 `source_history()` 和 `source_field()` 会自动建立一次请求作用域。
+
+读取日期是逻辑日期，delay 在底层应用。降维后的来源缓存按每个来源保留 `cacheDays` 个交易日，每个交易日包含全部配置的 ti；一次原始读取块由 `runtime.load_chunk_days` 控制，范围可以大于 `cacheDays`。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
 
 ## X、Y 与模型
 
@@ -141,7 +143,7 @@ config 注入 dtype、tsDays、num_features、feature_names、sample_times。pre
 
 preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
 
-训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。registry_cache_days 限制源级 LRU 缓存条目数，不限制训练数据集存储。大型训练需评估全量训练特征、标签、模型、batch 和数据缓存的合计峰值内存；源数据更新后需重建数据集。
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。`cacheDays` 只限制降维后来源缓存的日期数，不限制训练数据集存储；训练跨 ckpt 时优先保留下次训练需要的最早日期，超出保留区的来源数据在当前读取块结束后释放。大型训练需评估全量训练特征、标签、模型、batch 和来源缓存的合计峰值内存；源数据更新后需重建数据集。
 
 ## 日期口径与训练
 
@@ -181,7 +183,7 @@ runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层�
 
 ## 监控与运行参数
 
-loader 保留 dtype、compression、data_start_ds、data_offset、registry_cache_days。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+loader 保留 dtype、compression、data_start_ds、data_offset、cacheDays。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
 
 monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sync_cuda、verbose。长任务启动前按 cgroup 限制检查内存并用小规模验证估算峰值。
 

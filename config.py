@@ -158,7 +158,7 @@ DEFAULT_CONFIG = {
             "compression": "none",
             "data_start_ds": 20160101,
             "data_offset": 1024,
-            "registry_cache_days": 64,
+            "cacheDays": 64,
         },
     },
     "backtest": {
@@ -339,8 +339,8 @@ def _validate_config(config: dict) -> None:
     loader = config["combo"]["loader"]
     if int(loader["data_offset"]) < 0:
         raise ValueError("combo.data.data_offset must be nonnegative")
-    if int(loader["registry_cache_days"]) <= 0:
-        raise ValueError("combo.data.registry_cache_days must be positive")
+    if int(loader["cacheDays"]) <= 0:
+        raise ValueError("combo.loader.cacheDays must be positive")
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")

@@ -5,23 +5,41 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.2`
-- Version date: `2026-09-09`
+- Version: `1.0.3`
+- Version date: `2026-09-14`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.3-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: the `1.0.2` wheel was built and installed locally; it has not been published to a remote package registry.
+- Status: the `1.0.3` protected wheel was built locally; it has not been installed or published to a remote package registry.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.3-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.3
+
+Source cache and training handoff:
+
+- Replace the per-entry source-cache setting with `cacheDays`, which retains each source by trading date and keeps all configured sampling times for a retained date.
+- Separate `load_chunk_days` from source retention. Raw intraday blocks are processed temporarily, while source results outside the active training retention window live only in the current work area.
+- Add fixed training retention windows that protect the earliest `cacheDays` dates needed by the next scheduled training. The handoff uses the completed Dataset's captured source-read metadata and does not prefetch unread future dates.
+- Keep source cache state across checkpoint changes, use the Loader's effective truncated calendar for training-date lookahead, and support requests that cross the retention boundary without missing or reordering rows.
+- Require an active cache scope for bulk prefetch and require `ComboTrainDataset` to own a top-level scope. Invalid scope usage now fails at the interface boundary instead of silently causing repeated reads or incorrect handoff statistics.
+- Update the starter, Torch and LightGBM examples, researcher guide, architecture documentation, and cache-related regression tests for the new configuration and lifecycle contract.
+
+Validation:
+
+- `pytest -q`: 122 passed, 11 conditional skips, 16 warnings.
+- Real Memmap and Dataset handoff tests cover multiple sampling times, delay, rolling source operations, Codec paths, checkpoint save/load, calendar-end lookahead, and exact 20-day-window read counts.
+- A formal-configuration synthetic benchmark with a full 5,642-stock axis, 667 factors, four legal sampling times, default feature/target preprocessing, a rolling source operation, and the real `ComboBase.Train` path measured 349.282 seconds for a cold Dataset and 55.781 seconds after source-cache reuse. The second training took 492.010 seconds after checkpoint reload and cache reuse versus 811.677 seconds from a fresh loader. Independent process peaks were 25,222 MiB for the cold Dataset and 25,430 MiB for cold training; the source cache was about 11.23 GiB.
+- The performance benchmark uses synthetic finite source values and validates framework behavior and memory scale; its timings do not represent production data-source disk throughput. The `1.0.3` protected wheel still requires a separate install verification.
 
 ## 1.0.2
 

@@ -264,7 +264,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
-    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds"}
+    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds", "cacheDays"}
     assert "output_path" not in root.find("./backtest").attrib
     assert root.find("./combo/defaults") is None
 
@@ -287,7 +287,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
         "compression",
         "data_start_ds",
         "data_offset",
-        "registry_cache_days",
+        "cacheDays",
     }
     assert parsed["combo"]["runtime"]["sample_times"] == (100000,)
 
@@ -304,6 +304,14 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     unknown_constant.write_text('<config><constants custom_path="value" /></config>', encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
         load_config(str(unknown_constant))
+
+    legacy_loader = tmp_path / "legacy-loader.xml"
+    legacy_loader.write_text(
+        '<config><combo><loader registry_cache_days="4" /></combo></config>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported config key 'registry_cache_days'"):
+        load_config(str(legacy_loader))
 
     invalid_times = tmp_path / "times.xml"
     invalid_times.write_text('<config><combo><runtime sample_times="110000,100000" /></combo></config>')

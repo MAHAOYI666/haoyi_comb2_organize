@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import inspect
 from pathlib import Path
@@ -24,9 +25,10 @@ class LoaderConfig:
     data_offset: int = 1024
     compression: str = "none"
     cache_path: str | None = None
-    registry_cache_days: int = 64
+    cacheDays: int = 64
     sample_times: tuple[int, ...] = (100000,)
     verbose: bool = False
+    load_chunk_days: int | None = None
 
 
 class ComboDataLoader:
@@ -36,6 +38,10 @@ class ComboDataLoader:
         self.config = config
         self.dtype = config.dtype
         self.codec = build_codec(config.compression, self.dtype)
+        self.cacheDays = int(config.cacheDays)
+        assert self.cacheDays > 0
+        self.load_chunk_days = 64 if config.load_chunk_days is None else int(config.load_chunk_days)
+        assert self.load_chunk_days > 0
         self.mask = MASK
         self.universe = Universe.from_mask(self.mask, self.dtype, data_offset=config.data_offset)
         self.data_start_ds = int(config.data_start_ds)
@@ -65,7 +71,8 @@ class ComboDataLoader:
         self.registry = DataRegistry(
             sources, universe=self.universe, data_start_ds=self.data_start_ds,
             ashare_cache_path=str(ashare_cache_path(config.cache_path)) if config.cache_path else None,
-            config_path=str(root), cache_days=config.registry_cache_days,
+            config_path=str(root), cache_days=self.cacheDays,
+            load_chunk_days=self.load_chunk_days,
             process_source=self.process_source, verbose=config.verbose,
         )
         self.registry.set_current_ti(self.current_ti)
@@ -101,6 +108,37 @@ class ComboDataLoader:
         self.current_date = int(ds)
         self.set_current_ti(ti)
         self.registry.set_point(ds, ti, refresh=refresh)
+
+    @contextmanager
+    def cache_scope(self, *, retention=None):
+        with self.registry.cache_scope(retention=retention):
+            yield self
+
+    def training_retention_window(self, end_didx, ndays):
+        end_didx = int(end_didx)
+        ndays = int(ndays)
+        assert self.data_start_didx <= end_didx < len(self.universe.dates)
+        assert ndays > 0
+        start_didx = max(self.data_start_didx, end_didx - ndays + 1)
+        retention_end = min(end_didx, start_didx + self.cacheDays - 1)
+        return start_didx, retention_end
+
+    def set_training_retention(self, end_didx, ndays):
+        window = self.training_retention_window(end_didx, ndays)
+        self.registry.set_retention_window(*window)
+        return window
+
+    def warm_next_training_cache(self, end_didx, ndays, *, reads):
+        window = self.training_retention_window(end_didx, ndays)
+        reads = {name: set(keys) for name, keys in reads.items()}
+        previous_ti = self.current_ti
+        with self.cache_scope(retention=window):
+            stats = self.registry.warm_retention(reads, *window, set_current_ti=self.set_current_ti)
+        self.set_current_ti(previous_ti)
+        return stats
+
+    def release_working_cache(self):
+        self.registry.release_working_cache()
 
     def date2didx(self, ds):
         return self.universe.date2idx(int(ds))
@@ -155,16 +193,20 @@ class ComboDataLoader:
         return value
 
     def prefetch_features(self, days, chunk_days=None):
+        assert self.registry.in_cache_scope, "prefetch_features requires an active cache scope"
         stats = LoadStats()
         days = list(days)
-        width = min(int(chunk_days or self.registry.cache_days), self.registry.cache_days)
+        if not days:
+            return stats
+        width = self.load_chunk_days if chunk_days is None else int(chunk_days)
         assert width > 0
         for offset in range(0, len(days), width):
             chunk = days[offset:offset + width]
             stats.merge(self.registry._ensure_range(self.input_names, chunk[0], chunk[-1]))
         return stats
 
-    def prefetch_targets(self, days):
+    def prefetch_targets(self, days, chunk_days=None):
+        assert self.registry.in_cache_scope, "prefetch_targets requires an active cache scope"
         days = list(days)
         names = [self.target[0]] if self.target is not None else []
         if self.validity is not None:
@@ -172,8 +214,12 @@ class ComboDataLoader:
         elif self.config.cache_path:
             names.extend(("mask.base", "mask.valid", "mask.filtered"))
         stats = LoadStats()
-        for offset in range(0, len(days), self.registry.cache_days):
-            chunk = days[offset:offset + self.registry.cache_days]
+        if not days:
+            return stats
+        width = self.load_chunk_days if chunk_days is None else int(chunk_days)
+        assert width > 0
+        for offset in range(0, len(days), width):
+            chunk = days[offset:offset + width]
             stats.merge(self.registry._ensure_range(tuple(dict.fromkeys(names)), chunk[0], chunk[-1]))
         return stats
 
@@ -242,10 +288,12 @@ class ComboDataLoader:
         assert start >= self.data_start_didx, "insufficient feature history"
         self.set_current_ti(target_ti)
         features = []
-        for first in range(start, end + 1, self.registry.cache_days):
-            days = [self.didx2date(i) for i in range(first, min(first + self.registry.cache_days, end + 1))]
-            self.prefetch_features(days)
-            features.extend(self.gen_feature(ds, target_ti) for ds in days)
+        with self.cache_scope():
+            for first in range(start, end + 1, self.load_chunk_days):
+                days = [self.didx2date(i) for i in range(first, min(first + self.load_chunk_days, end + 1))]
+                self.prefetch_features(days)
+                features.extend(self.gen_feature(ds, target_ti) for ds in days)
+                self.release_working_cache()
         values = torch.stack(features)
         return self.transform_feature_window(values, target_ti=target_ti, stage="predict")
 
@@ -256,51 +304,62 @@ class ComboTrainDataset(Dataset):
     def __init__(self, loader, end_ds, ndays, x_delay=None, ts_days=8,
                  validinsts=None, load_chunk_days=None, codec=None):
         self.loader = loader
+        assert not loader.registry.in_cache_scope, (
+            "ComboTrainDataset must be constructed outside an active cache scope"
+        )
         self.end_ds = loader.align_date(end_ds)
         self.ret_days = 1 if x_delay is None else int(x_delay)
         assert self.ret_days > 0
         self.ts_days = int(ts_days)
-        self.load_chunk_days = min(int(load_chunk_days or loader.registry.cache_days), loader.registry.cache_days)
+        self.load_chunk_days = loader.load_chunk_days if load_chunk_days is None else int(load_chunk_days)
+        assert self.load_chunk_days > 0
         self.end_didx = loader.date2didx(self.end_ds)
         self.start_didx = max(loader.data_start_didx, self.end_didx - int(ndays) + 1)
         self.first_sample = self.start_didx + self.ts_days - 1
         self.last_sample = self.end_didx - self.ret_days + 1
         assert self.first_sample <= self.last_sample, "not enough training history"
-        loader.build_raw_feature(loader.didx2date(self.first_sample))
         self.ndays = self.end_didx - self.start_didx + 1
-        self.validinsts = self._build_validinsts() if validinsts is None else validinsts.to(torch.long)
-        self.numValidinsts = len(self.validinsts)
-        assert self.numValidinsts > 0, "no training instruments"
-        self.codec = codec or PassthroughCodec(loader.dtype)
-        self.X = {}
-        self.X_meta = {}
-        sample_days = self.last_sample - self.first_sample + 1
-        self.Y = torch.empty((sample_days, len(loader.sample_times), self.numValidinsts), dtype=loader.dtype)
-        self.W = torch.empty_like(self.Y, dtype=torch.bool)
-        storage_days = self.last_sample - self.start_didx + 1
-        for part, ti in enumerate(loader.sample_times):
-            loader.set_current_ti(ti)
-            self.X[ti], self.X_meta[ti] = self.codec.allocate(
-                (storage_days, self.numValidinsts, loader.num_features), "cpu", loader.dtype,
-            )
-            for offset in range(0, storage_days, self.load_chunk_days):
-                stop = min(offset + self.load_chunk_days, storage_days)
-                days = [loader.didx2date(self.start_didx + i) for i in range(offset, stop)]
-                loader.prefetch_features(days, self.load_chunk_days)
-                for i, ds in enumerate(days, offset):
-                    values = loader.gen_feature(ds, ti).index_select(0, self.validinsts)
-                    self.codec.encode_into(self.X[ti], self.X_meta[ti], i, values)
-            for offset in range(0, sample_days, self.load_chunk_days):
-                stop = min(offset + self.load_chunk_days, sample_days)
-                loader.prefetch_targets([
-                    loader.didx2date(self.first_sample + i)
-                    for i in range(offset, stop + self.ret_days - 1)
-                ])
-                for day in range(offset, stop):
-                    ds = loader.didx2date(self.first_sample + day)
-                    y, w = loader.gen_target(ds, ti, ret_days=self.ret_days)
-                    self.Y[day, part] = y[self.validinsts]
-                    self.W[day, part] = w[self.validinsts]
+        retention = loader.training_retention_window(self.end_didx, self.ndays)
+        with loader.cache_scope(retention=retention):
+            loader.build_raw_feature(loader.didx2date(self.first_sample))
+            loader.release_working_cache()
+            self.validinsts = self._build_validinsts() if validinsts is None else validinsts.to(torch.long)
+            self.numValidinsts = len(self.validinsts)
+            assert self.numValidinsts > 0, "no training instruments"
+            self.codec = codec or PassthroughCodec(loader.dtype)
+            self.X = {}
+            self.X_meta = {}
+            sample_days = self.last_sample - self.first_sample + 1
+            self.Y = torch.empty((sample_days, len(loader.sample_times), self.numValidinsts), dtype=loader.dtype)
+            self.W = torch.empty_like(self.Y, dtype=torch.bool)
+            storage_days = self.last_sample - self.start_didx + 1
+            for part, ti in enumerate(loader.sample_times):
+                loader.set_current_ti(ti)
+                self.X[ti], self.X_meta[ti] = self.codec.allocate(
+                    (storage_days, self.numValidinsts, loader.num_features), "cpu", loader.dtype,
+                )
+                for offset in range(0, storage_days, self.load_chunk_days):
+                    stop = min(offset + self.load_chunk_days, storage_days)
+                    days = [loader.didx2date(self.start_didx + i) for i in range(offset, stop)]
+                    loader.prefetch_features(days, self.load_chunk_days)
+                    for i, ds in enumerate(days, offset):
+                        values = loader.gen_feature(ds, ti).index_select(0, self.validinsts)
+                        self.codec.encode_into(self.X[ti], self.X_meta[ti], i, values)
+                    loader.release_working_cache()
+                for offset in range(0, sample_days, self.load_chunk_days):
+                    stop = min(offset + self.load_chunk_days, sample_days)
+                    loader.prefetch_targets([
+                        loader.didx2date(self.first_sample + i)
+                        for i in range(offset, stop + self.ret_days - 1)
+                    ])
+                    for day in range(offset, stop):
+                        ds = loader.didx2date(self.first_sample + day)
+                        y, w = loader.gen_target(ds, ti, ret_days=self.ret_days)
+                        self.Y[day, part] = y[self.validinsts]
+                        self.W[day, part] = w[self.validinsts]
+                    loader.release_working_cache()
+        self.load_stats = loader.registry.last_scope_stats
+        self.cache_reads = loader.registry.last_scope_reads
 
     def _build_validinsts(self):
         valid = torch.zeros(len(self.loader.mask.code), dtype=torch.bool)
@@ -308,6 +367,7 @@ class ComboTrainDataset(Dataset):
             for ti in self.loader.sample_times:
                 self.loader.set_current_ti(ti)
                 valid |= self.loader.gen_base_universe_mask(self.loader.didx2date(idx))
+                self.loader.release_working_cache()
         return torch.where(valid)[0]
 
     def __len__(self):

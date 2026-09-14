@@ -403,7 +403,7 @@ CONFIG_TEMPLATE = '''
       early_stopping_patience="5"
     />
 
-    <loader dtype="float16" compression="none" data_start_ds="20160101" />
+    <loader dtype="float16" compression="none" data_start_ds="20160101" cacheDays="64" />
 
   </combo>
 
