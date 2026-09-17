@@ -61,6 +61,35 @@ class BacktestNode:
     ax: Any | None = None
     daily_metrics_written: bool = False
     prev_total_asset: float | None = None
+    draw_output: bool = True
+
+
+def _adjust_alpha_by_long_ratio(
+    values: pd.Series,
+    eligible: pd.Series,
+    long_ratio: float,
+) -> pd.Series:
+    """Shift alpha by the cross-sectional threshold for the long bucket.
+
+    long_ratio is the desired fraction of eligible instruments that may have
+    positive adjusted alpha, so the threshold is the (1 - long_ratio) quantile.
+    Missing and non-eligible values do not contribute to the threshold.
+    """
+    if not 0.0 <= float(long_ratio) <= 1.0:
+        raise ValueError("long_ratio must be between 0 and 1")
+
+    raw = pd.to_numeric(values, errors="coerce").astype(float)
+    eligible_values = (
+        eligible.reindex(raw.index).fillna(False).to_numpy(dtype=bool)
+    )
+    raw_values = raw.to_numpy(dtype=np.float64)
+    finite = np.isfinite(raw_values)
+    valid = eligible_values & finite
+    adjusted = np.where(finite, raw_values, np.nan)
+    if valid.any():
+        threshold = float(np.quantile(raw_values[valid], 1.0 - float(long_ratio)))
+        adjusted[valid] -= threshold
+    return pd.Series(adjusted, index=raw.index, name=raw.name)
 
 
 class DailyBacktest:
@@ -267,7 +296,17 @@ class DailyBacktest:
             ts_code="000905.SH",
         )
 
-    def step(self, date, alpha, *, ti=150000, prices=None, mark_prices=None, last=True):
+    def step(
+        self,
+        date,
+        alpha,
+        *,
+        ti=150000,
+        prices=None,
+        mark_prices=None,
+        last=True,
+        alpha_already_adjusted=False,
+    ):
         date = self._align_date(date)
         point = (date, int(ti))
         assert self.last_point is None or point > self.last_point, "execution points must increase"
@@ -312,7 +351,7 @@ class DailyBacktest:
             self.cooldown_left = max(self.cooldown_left, int(self.node.cooldown_days))
             self.equity_peak = float(pre_trade_total)
 
-        signals = self._coerce_alpha(alpha).fillna(0.0)
+        signals = self._coerce_alpha(alpha)
         if stop_triggered or self.cooldown_left > 0:
             orders = pd.DataFrame(
                 {
@@ -331,7 +370,20 @@ class DailyBacktest:
             if new_day and not stop_triggered:
                 self.cooldown_left -= 1
         else:
-            signal_masked = signals * self.universe.loc[date].fillna(0.0)
+            universe_today = (
+                self.universe.loc[date].reindex(signals.index).fillna(0.0)
+            )
+            if not alpha_already_adjusted:
+                optimizer_config = self.node.strategy_config.get("optimizer", {})
+                long_ratio = float(optimizer_config.get("long_ratio", 0.5))
+                signals = _adjust_alpha_by_long_ratio(
+                    signals,
+                    universe_today.gt(0),
+                    long_ratio,
+                ).fillna(0.0)
+            else:
+                signals = signals.fillna(0.0)
+            signal_masked = signals * universe_today
             self.dataloader.date = date
             orders = self.strategy.generate_orders(
                 signal_masked,
@@ -497,7 +549,8 @@ class DailyBacktest:
             ],
         ).set_index("date")
         summary = self._pnl_summary()
-        self.draw()
+        if self.node.draw_output:
+            self.draw()
         prefix = f"{self.node.strategy_class}_{self.node.start_ds}_{self.node.end_ds}"
         self.asset_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_yield.csv"))
         self.position_data.to_csv(os.path.join(self.node.output_path, f"{prefix}_position.csv"))

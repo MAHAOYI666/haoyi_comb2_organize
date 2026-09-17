@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy optimizer configuration snapshot from before combo2 1.0.4.
+
+  The optimizer values and hard/soft universe, risk, and industry-group
+  lists below are preserved for migration and口径 comparison. This file is
+  not loaded automatically. The long_ratio attribute was added after this
+  snapshot and is set explicitly to the current schema default so the sample
+  remains valid with the current parser.
+-->
+<config>
+  <constants cache_path="data/Cache" output_root="output-old" />
+  <strategy start_ds="20160111" end_ds="20200101">
+    <optimizer
+      type="opt1"
+      lambda0="0.5"
+      shrinkage="0.5"
+      ret_days="60"
+      ret_delay="1"
+      ret_method="2"
+      benchmark="000905.SH"
+      benchmark_delay="1"
+      target_size="100000000"
+      maxtvr="0.4"
+      max_weight="0.0075"
+      maxtrd="0.0"
+      maxpos="0.0"
+      liquidity_delay="1"
+      lambda_slp="0.0"
+      slippage_delay="1"
+      min_participation_ratio="0.07"
+      parti_penalty="0.0"
+      trim_threshold="0.00001"
+      long_ratio="0.5"
+      min_valid_instruments="200"
+      min_return_obs="20"
+      soft_univ_penalty="0.00025"
+      soft_risk_penalty="0.00004"
+      soft_group_penalty="0.0002"
+      num_mosek_threads="1"
+      max_time="30.0"
+      post_trim_renorm="false"
+      univ_list="ZZ500:0.18:0.70,1|AshareST:0.00:0.00,1|AshareSH:0.00:0.60,1|AshareSZ:0.00:0.60,1|NONETOP3000:0.00:0.17,1|AshareCYB:0.10:0.30,1"
+      soft_univ_list="ZZ1800:0.74:0.85:0.70,1|ZZ1800:0.79:0.85:0.45,1|ZZ1800:0.83:0.89:0.25,1|ZZ500:0.28:0.50:2.0,1|ZZ500:0.30:0.50:0.2,1|ZZ500:0.32:0.50:0.05,1|AshareSH:0.00:0.55:0.50,1|AshareCYB:0.10:0.25:1.00,1|AshareSZ:0.00:0.55:0.50,1|HS300:0.10:0.30:1.00,1|NONETOP3000:0.00:0.15:1.00,1"
+      risk_list="cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|returns120:-0.14:0.14,1|vola_30:-0.30:0.30,1|vola_5:-0.30:0.30,1|close:-0.10:0.10,1|BarraCNE5.BETA:-0.20:0.30,1|BarraCNE5.GROWTH:-0.15:0.20,1|BarraCNE5.BTOP:-0.15:0.20,1|BarraCNE5.LEVERAGE:-0.30:0.30,1|BarraCNE5.RESVOL:-0.30:0.30,1"
+      soft_risk_list="cap:-0.02:0.07:2.0,1,4|returns120:-0.08:0.08:5.0,1|close:-0.05:0.05:1.0,1|BarraCNE5.BETA:0.00:0.04:1.7,1|BarraCNE5.GROWTH:-0.02:0.06:1.3,1|BarraCNE5.BTOP:-0.02:0.07:1.3,1|BarraCNE5.EARNYILD:-0.03:0.03:2.0,1"
+      group_list="WindIndustry.sw1:-0.065:0.065,1"
+      soft_group_list="WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
+    />
+  </strategy>
+  <combo>
+    <paths
+      model_path="eg-torch/model.py"
+      research_loader_path="eg-torch/loader.py"
+      research_dataset_path="eg-torch/dataset.py"
+    />
+    <output enable_alpha_analysis="true" />
+    <runtime
+      snaptime="mlp_minimal"
+      sample_times="100000"
+      seed="42"
+      livetrading="false"
+      trainDelay="2"
+      retDays="1"
+      tsDays="8"
+      load_chunk_days=""
+      model_smooth_rate="0.7"
+      model_keep_num="2"
+      max_train_days="2000"
+      verbose="false"
+    />
+    <model
+      device="cpu"
+      hiddenSize="512"
+      fcSize="256"
+      dropout="0.5"
+      lr="0.000002"
+      epochs="15"
+      batchSize="3"
+      weight_decay="0.000001"
+      scheduler_step_size="10"
+      scheduler_gamma="0.5"
+      grad_clip="10.0"
+    />
+    <loader
+      dtype="float16"
+      compression="none"
+      data_start_ds="20160101"
+      data_offset="1024"
+      cacheDays="64"
+    />
+  </combo>
+  <backtest
+    daily_metrics_file="daily_pnl.csv"
+    cash="10000000.0"
+    fee_rate="0.0015"
+    reserve_cash="0.95"
+    verbose="false"
+    universe="base"
+    execution_price="execution:execution"
+    drawdown_stop="0.0"
+    cooldown_days="0"
+  />
+  <monitor
+    enabled="false"
+    output_path=""
+    format="csv"
+    print_summary="true"
+    collect_gpu="true"
+    sync_cuda="false"
+    verbose="false"
+  />
+</config>

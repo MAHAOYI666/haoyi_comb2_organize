@@ -32,7 +32,7 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
 </config>
 ```
 
-sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。
+sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。当前 `config.py` 默认使用旧配置的 `100000`；上面的 `100000,110000` 仅是多时点配置示例。
 
 ## 声明与选择数据
 
@@ -201,7 +201,7 @@ monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sy
 
 默认 strategy 行为：
 
-- 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
+- 在当前有效截面上按 `long_ratio` 计算做多桶阈值，将原始 alpha 减去该阈值；正、负两侧分别归一化到 `1` 和 `-1`。
 - 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对基准方差约束下求目标权重。
 - 换手基准来自回测已真实成交的股数持仓，按当前估值换算为市值。opt1 将已有持仓除以实际股票持仓总额；opt2 除以当天目标股票预算。当前不可买的已有持仓仍进入候选集，但只能维持或减仓；不可交易持仓固定在实际金额。
 - 基准指数权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认基准为中证 500，收益、指数、universe 和风险因子 delay 均为 `1`。
@@ -215,7 +215,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。
 
-研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值：
+研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值。当前默认值恢复为旧配置：`maxtvr=0.4`、`max_weight=0.0075`、`min_participation_ratio=0.07`、`parti_penalty=0.0`、`long_ratio=0.5`，并保留完整的 hard/soft universe、risk 和 industry group 列表。直接 daily VA 评估传入 `runEval ... --simple` 时，才切换到简化配置：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且上述列表为空。旧版完整样例见仓库根目录 `config.eg.old.xml`。
 
 ```xml
 <strategy start_ds="20200101" end_ds="20240628">
@@ -225,6 +225,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
     benchmark="000905.SH"
     maxtvr="0.4"
     max_weight="0.0075"
+    long_ratio="0.5"
     num_mosek_threads="1"
     risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
   />
@@ -252,6 +253,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
 | `parti_penalty` | `0.0` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
 | `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
+| `long_ratio` | `0.5` | 当前有效截面上保留为正 alpha 的目标做多比例；阈值为 `1 - long_ratio` 分位数。范围 `[0, 1]`。 |
 | `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
 | `min_return_obs` | `20` | `ret_days` 窗口内要求的最少有效收益观测数。 |
 | `soft_univ_penalty` | `0.00025` | soft universe 越界松弛的全局惩罚系数。 |
@@ -260,12 +262,12 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `num_mosek_threads` | `1` | MOSEK 求解线程数。 |
 | `max_time` | `30.0` | 单日 MOSEK 最大求解秒数；`0` 表示不设置时间上限。 |
 | `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
-| `univ_list` | 见完整模板 | 股票集合权重硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
-| `soft_univ_list` | 见完整模板 | 软 universe 约束，格式为 `name:lo:hi:penalty,delay`。 |
-| `group_list` | 见完整模板 | 相对配置基准的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
-| `soft_group_list` | 见完整模板 | 相对配置基准的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
-| `risk_list` | 见完整模板 | 硬风险约束，格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。 |
-| `soft_risk_list` | 见完整模板 | 软风险约束，格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。 |
+| `univ_list` | 见 `config.eg.old.xml` | 默认 hard universe 配置；格式为 `name:lo:hi,delay`，多项用 `|` 分隔。`--simple` 时为空。 |
+| `soft_univ_list` | 见 `config.eg.old.xml` | 默认 soft universe 配置；格式为 `name:lo:hi:penalty,delay`。`--simple` 时为空。 |
+| `group_list` | 见 `config.eg.old.xml` | 默认 hard industry group 配置；格式为 `name:lo:hi,delay`。`--simple` 时为空。 |
+| `soft_group_list` | 见 `config.eg.old.xml` | 默认 soft industry group 配置；格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。`--simple` 时为空。 |
+| `risk_list` | 见 `config.eg.old.xml` | 默认 hard risk 配置；格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
+| `soft_risk_list` | 见 `config.eg.old.xml` | 默认 soft risk 配置；格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
 
 列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
 

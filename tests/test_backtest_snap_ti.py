@@ -10,6 +10,7 @@ import pytest
 
 import runCombo
 from comb2_pcmaster import BacktestNode, DailyBacktest
+from comb2_pcmaster.backtest import _adjust_alpha_by_long_ratio
 from comb2_pcmaster import dataloader as dataloader_module
 from comb2_pcmaster import default_strategy as default_strategy_module
 from comb2_pcmaster.default_strategy import AlphaStrategy, _normalize_alpha, _parse_limits
@@ -195,6 +196,11 @@ def test_real_optimizer_solves_with_configured_benchmark_and_keeps_zz500_univers
 
     signals = pd.read_parquet(alpha_path).loc[date].reindex(strategy.index_weight.columns)
     base = strategy._row_at_delay(strategy.base, date, 0, "base universe")
+    signals = _adjust_alpha_by_long_ratio(
+        signals,
+        pd.Series(np.isfinite(base) & (base != 0), index=signals.index),
+        float(optimizer["long_ratio"]),
+    ).fillna(0.0)
     signals *= np.isfinite(base) & (base != 0)
     zero_amount = pd.Series(0.0, index=signals.index)
     tradable = pd.Series(True, index=signals.index)
@@ -287,8 +293,14 @@ def test_real_default_optimizer_uses_actual_holdings_for_two_days(tmp_path: Path
     assert previous.sum() > 0.0
 
     date = dates[1]
-    signals = alpha.loc[date].reindex(backtest.strategy.columns).fillna(0.0)
-    signals *= backtest.universe.loc[date].reindex(backtest.strategy.columns).fillna(0.0)
+    signals = alpha.loc[date].reindex(backtest.strategy.columns)
+    universe_today = backtest.universe.loc[date].reindex(backtest.strategy.columns).fillna(0.0)
+    signals = _adjust_alpha_by_long_ratio(
+        signals,
+        universe_today.gt(0),
+        float(optimizer["long_ratio"]),
+    ).fillna(0.0)
+    signals *= universe_today
     normalized_alpha = _normalize_alpha(
         signals.to_numpy(dtype=float),
         float(DEFAULT_OPTIMIZER_CONFIG["trim_threshold"]),

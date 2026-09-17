@@ -5,23 +5,46 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.3`
-- Version date: `2026-09-14`
+- Version: `1.0.4`
+- Version date: `2026-09-17`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.3-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.4-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: the `1.0.3` protected wheel was built locally; it has not been installed or published to a remote package registry.
+- Status: the `1.0.4` protected wheel was built and installed locally; publication is still pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.3-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.4-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.4
+
+Evaluation and runtime:
+
+- Add direct daily value-add evaluation through `runEval myposition.parquet target.parquet [run|read]`.
+- Align the daily evaluator with the backtest path, including long-short adjustment, `093000` execution/label timing, opt1 defaults, a 10-worker default, and the `--long-ratio` CLI option.
+- Report PnL as ZZ500-excess PnL and retain the zero-signal target-only result as the 0.00 benchmark.
+- Add an explicit `--mosek` license-path option with default `/root/mosek/mosek.lic`.
+
+Configuration and packaging:
+
+- Add and validate optimizer `long_ratio`; restore the old optimizer defaults for the normal workflow and expose the simplified profile through `runEval --simple`.
+- The normal defaults retain the pre-1.0.4 values (`maxtvr=0.4`, `max_weight=0.0075`, `min_participation_ratio=0.07`, `parti_penalty=0.0`) and the complete hard/soft universe, risk, and industry-group lists; `config.eg.old.xml` preserves the same legacy sample.
+- Include the daily evaluator in the protected wheel through the existing `comb_eval` package and `runEval` entry point.
+
+Validation:
+
+- `pytest -q`: 132 passed, 12 skipped, 13 warnings.
+- Protected-wheel build and local installation passed.
+- Installed-wheel smoke test passed for the initial MOE/residual-label pair on 20240102--20240105; `read` mode reproduced the saved result.
+- Installed-wheel smoke test with `--long-ratio 0.33` passed; the manifest records the selected ratio.
+- Publication to the remote package registry remains pending.
 
 ## 1.0.3
 

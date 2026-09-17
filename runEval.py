@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +17,7 @@ for local_path in (ORGANIZE_ROOT, ORGANIZE_ROOT / "evals", ORGANIZE_ROOT / "vend
         sys.path.insert(0, text_path)
 
 from comb_eval.correlation import matrix_correlation
+from comb_eval.daily_eval import DEFAULT_LONG_RATIO, evaluate_daily, format_daily_evaluation, read_daily_evaluation
 from comb_eval.exposure import compute_barra_style_exposure
 from comb_eval.formatting import output_dict_to_lines, output_frame_to_text
 from comb_eval.ic import summarize_ic
@@ -36,9 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="runEval",
         description="Evaluate comb2 config outputs or local parquet/csv artifacts.",
-        epilog="examples: runEval config.xml | runEval --sim daily_ic.parquet | runEval --corr pos_a.parquet pos_b.parquet",
+        epilog="examples: runEval config.xml | runEval myposition.parquet target.parquet [run|read] | runEval --sim daily_ic.parquet",
     )
     parser.add_argument("config", nargs="?", default=None, help="Path to XML experiment config")
+    parser.add_argument("target_path", nargs="?", default=None, help="Target alpha parquet for direct daily VA evaluation")
+    parser.add_argument("daily_mode", nargs="?", choices=("run", "read"), default="run", help="Direct daily VA mode; run computes and saves results, read reuses saved results")
     parser.add_argument("--config", dest="config_flag", type=str, default=None, help="Path to XML experiment config")
 
     mode = parser.add_mutually_exclusive_group()
@@ -58,6 +63,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-valid", type=int, default=1000, help="For --corr, minimum nonzero overlapping instruments per day")
     parser.add_argument("--top-pct", type=float, default=10.0, help="For --corr, long-holding overlap top percentage; default 10")
     parser.add_argument("--cache-path", help="For --exposure, parent directory containing AshareCache")
+    parser.add_argument("--eval-dir", help="For direct daily VA, persistent result directory used by run/read")
+    parser.add_argument("--mosek", default="/root/mosek/mosek.lic", help="MOSEK license file for direct daily evaluation; default: /root/mosek/mosek.lic")
+    parser.add_argument("--worker", type=int, default=10, help="For direct daily VA, concurrent weight backtests; default 10")
+    parser.add_argument("--long-ratio", type=float, default=DEFAULT_LONG_RATIO, help="For direct daily VA, long bucket ratio used by long-short adjustment; default 0.5")
+    parser.add_argument("--ti", type=int, help="For direct daily VA, execution and label time in HHMMSS; omitted when both inputs have one common intraday time")
+    parser.add_argument("--simple", action="store_true", help="For direct daily VA, use the simplified optimizer profile; default uses the legacy optimizer profile")
     parser.add_argument("--exposure-mode", type=int, choices=(0, 1), default=0, help="For --exposure, 0=cross-sectional correlation, 1=beta")
     parser.add_argument("--column", default="longonly_pnl", help="For --va, PnL column to compare")
     parser.add_argument("--weights", default=DEFAULT_VA_WEIGHTS, help="For --va, comma-separated new-pnl blend weights")
@@ -74,6 +85,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        if args.target_path is not None:
+            return run_daily_eval(args)
+        if args.simple:
+            raise ValueError("--simple requires direct daily evaluation inputs")
         if args.corr is not None:
             return run_corr(args)
         if args.sim is not None:
@@ -88,6 +103,65 @@ def main() -> int:
     except Exception as exc:
         print(f"[EVAL] {exc}", file=sys.stderr)
         return 2
+
+
+def run_daily_eval(args: argparse.Namespace) -> int:
+    if args.config_flag:
+        raise ValueError("direct daily evaluation does not accept --config")
+    if args.overall or any(
+        value is not None
+        for value in (args.corr, args.sim, args.pnl, args.exposure, args.va)
+    ):
+        raise ValueError("direct daily evaluation cannot be combined with another mode")
+    if args.worker <= 0:
+        raise ValueError("--worker must be positive")
+    if not 0.0 <= args.long_ratio <= 1.0:
+        raise ValueError("--long-ratio must be between 0 and 1")
+    if args.daily_mode == "run":
+        mosek_path = Path(args.mosek).expanduser().resolve()
+        if not mosek_path.is_file():
+            raise FileNotFoundError(f"MOSEK license file not found: {mosek_path}")
+        os.environ["MOSEKLM_LICENSE_FILE"] = str(mosek_path)
+    if args.daily_mode == "run":
+        print(
+            "\n".join(
+                [
+                    f"[{time.strftime('%H:%M:%S', time.localtime())}]Start Evaluation",
+                    str(Path(args.config).expanduser().resolve()),
+                    str(Path(args.target_path).expanduser().resolve()),
+                ]
+            ),
+            flush=True,
+        )
+        result = evaluate_daily(
+            args.config,
+            args.target_path,
+            cache_path=args.cache_path,
+            eval_dir=args.eval_dir,
+            worker=args.worker,
+            long_ratio=args.long_ratio,
+            ti=args.ti,
+            simple=args.simple,
+            start=args.start,
+            end=args.end,
+        )
+    else:
+        result = read_daily_evaluation(
+            args.config,
+            args.target_path,
+            cache_path=args.cache_path,
+            eval_dir=args.eval_dir,
+            long_ratio=args.long_ratio,
+            ti=args.ti,
+            simple=args.simple,
+            start=args.start,
+            end=args.end,
+        )
+    _write_frame_if_requested(result.va_table, args.output)
+    text = format_daily_evaluation(result, include_header=False)
+    print(text)
+    _write_text_if_requested(text, args.summary_output)
+    return 0
 
 
 def run_overall(args: argparse.Namespace) -> int:

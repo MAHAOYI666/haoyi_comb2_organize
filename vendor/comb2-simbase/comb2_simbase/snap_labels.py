@@ -26,8 +26,15 @@ def load_snap_vwap_labels(
     *,
     periods: tuple[int, ...] = (1, 5),
 ) -> dict[int, pd.DataFrame]:
-    """Build the standard 1d and 5d labels from a snapshot VWAP cache field."""
-    assert periods and set(periods) <= {1, 5}
+    """Build forward labels from a snapshot VWAP cache field.
+
+    Period one keeps the historical close-to-snapshot convention used by the
+    existing label cache. Longer periods use the same next-day snapshot anchor
+    and support arbitrary positive periods.
+    """
+    if not periods or any(int(period) <= 0 for period in periods):
+        raise ValueError("periods must contain positive integers")
+    periods = tuple(int(period) for period in periods)
     root = ashare_cache_path(cache_path)
     price_reader = Memmaper2(str(root / "1d_IntraVwap" / snap_vwap_price_name(snap_ti)))
     dates = np.asarray(price_reader._index, dtype=np.int64)
@@ -52,8 +59,11 @@ def load_snap_vwap_labels(
     if 1 in periods:
         label = (close / price - 1).shift(-1) + (price / close.shift(1) - 1).shift(-2).fillna(0)
         labels[1] = (label * label_mask).reindex(index=requested_index)
-    if 5 in periods:
-        labels[5] = (price.pct_change(5, fill_method=None).shift(-6) * label_mask).reindex(index=requested_index)
+    for period in periods:
+        if period == 1:
+            continue
+        label = price.pct_change(period, fill_method=None).shift(-(period + 1))
+        labels[period] = (label * label_mask).reindex(index=requested_index)
     return labels
 
 
