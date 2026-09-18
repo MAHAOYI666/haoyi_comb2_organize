@@ -269,7 +269,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `risk_list` | 见 `config.eg.old.xml` | 默认 hard risk 配置；格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
 | `soft_risk_list` | 见 `config.eg.old.xml` | 默认 soft risk 配置；格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
 
-列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
+列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `1` 表示在有效股票截面上直接做 z-score 标准化（均值为 `0`、总体标准差为 `1`）；method `2` 表示截面 rank 后居中；method `4` 表示正值取自然对数后做截面 z-score。method `1` 对非有限值、掩码外股票以及有效值不足两个或截面方差为零的情况返回 `0`。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
 
 hard universe 的上界为 `0` 时，可交易成员仓位必须退出；opt2 中当日买入的 locked 仓位优先满足 T+1，只保留 unavoidable locked amount 且禁止继续买入。强制卖出可突破 `maxtrd` 和当日剩余 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时记录未定价强退数量和权重。不可交易旧持仓固定在实际金额，恢复交易后再按当时约束退出。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。
 

@@ -5,10 +5,10 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.5`
+- Version: `1.0.6`
 - Version date: `2026-09-18`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.5-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
 - Status: source release prepared; protected-wheel build and publication are pending.
 
@@ -16,12 +16,20 @@ Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.5-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.6
+
+Optimizer:
+
+- Add risk limit method `1`, which directly standardizes finite factor values with a cross-sectional z-score over the selected universe. Masked or non-finite values remain zero, and degenerate cross-sections return zero.
+- Keep risk methods `2` and `4` unchanged: method `2` is centered cross-sectional rank, while method `4` applies a positive-value logarithm before cross-sectional z-score normalization.
+- Add regression coverage for method `1` parsing, normalization, and masked-value behavior.
 
 ## 1.0.5
 

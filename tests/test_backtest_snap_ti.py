@@ -92,7 +92,7 @@ def test_default_optimizer_normalizes_actual_holdings_to_stock_book():
 
 def test_default_optimizer_parses_and_transforms_cap_methods():
     hard = _parse_limits(
-        "cap:-0.4:0.3,1,4|cap:-0.2:0.21,1,2",
+        "cap:-0.4:0.3,1,4|cap:-0.2:0.21,1,2|cap:-1.0:1.0,1,1",
         soft=False,
         label="risk_list",
     )
@@ -101,7 +101,7 @@ def test_default_optimizer_parses_and_transforms_cap_methods():
         soft=True,
         label="soft_risk_list",
     )
-    assert [(item.delay, item.method) for item in hard] == [(1, 4), (1, 2)]
+    assert [(item.delay, item.method) for item in hard] == [(1, 4), (1, 2), (1, 1)]
     assert (soft[0].penalty, soft[0].delay, soft[0].method) == (2.0, 1, 4)
 
     strategy = AlphaStrategy.__new__(AlphaStrategy)
@@ -115,11 +115,16 @@ def test_default_optimizer_parses_and_transforms_cap_methods():
 
     method4 = strategy._factor(hard[0]._replace(delay=0), 20240102, mask)
     method2 = strategy._factor(hard[1]._replace(delay=0), 20240102, mask)
+    method1 = strategy._factor(hard[2]._replace(delay=0), 20240102, mask)
 
     np.testing.assert_allclose(
         method4[:3], np.array([-1.22474487, 0.0, 1.22474487])
     )
     np.testing.assert_allclose(method2, np.array([-0.5, 0.0, 0.5, 0.0]))
+    np.testing.assert_allclose(
+        method1[:3], np.array([-0.9258201, -0.46291005, 1.38873015])
+    )
+    assert method1[3] == 0.0
 
     with pytest.raises(ValueError, match="invalid strategy.optimizer.risk_list"):
         _parse_limits("cap:-0.4:0.3,1,3", soft=False, label="risk_list")
