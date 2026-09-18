@@ -39,6 +39,7 @@ DEFAULT_WORKERS = 10
 DEFAULT_LONG_RATIO = 0.5
 TRADING_DAYS = 250
 LABEL_PERIODS = (1, 2, 5, 10, 20)
+SIGNAL_BLEND_PROFILE = "long_short_l1_v1"
 ZZ500_TS_CODE = "000905.SH"
 PNL_MODE = "excess_zz500"
 VA_WEIGHTS = (0.00, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20, 1.00)
@@ -110,7 +111,7 @@ def resolve_daily_eval_dir(
     )
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
     ratio_tag = f"{float(long_ratio):.6f}"
-    return myposition_path.parent / "comb2_eval" / f"{myposition_path.stem}__{target_path.stem}_{digest}_{profile_tag}_lr{ratio_tag}"
+    return myposition_path.parent / "comb2_eval" / f"{myposition_path.stem}__{target_path.stem}_{digest}_{profile_tag}_{SIGNAL_BLEND_PROFILE}_lr{ratio_tag}"
 
 
 def _date_int(value) -> int:
@@ -414,7 +415,8 @@ def _write_daily_eval_artifacts(
                 raw_frame["excess_return"] = raw_frame["excess_pnl"] / cash
                 raw_frame.to_csv(raw_path.with_name("daily_pnl_excess.csv"), index=False)
     manifest = {
-        "version": 2,
+        "version": 3,
+        "signal_blend": SIGNAL_BLEND_PROFILE,
         "pnl_mode": PNL_MODE,
         "benchmark_ts_code": ZZ500_TS_CODE,
         "myposition_path": str(myposition_path),
@@ -466,6 +468,12 @@ def _read_daily_eval_artifacts(
         raise ValueError(
             f"read artifacts use config profile {artifact_profile}, "
             f"but requested {requested_profile}"
+        )
+    artifact_signal_blend = manifest.get("signal_blend")
+    if artifact_signal_blend != SIGNAL_BLEND_PROFILE:
+        raise ValueError(
+            f"read artifacts use signal blend {artifact_signal_blend!r}, "
+            f"but current runEval requires {SIGNAL_BLEND_PROFILE!r}; rerun the evaluation"
         )
     results: dict[float, WeightResult] = {}
     for raw_weight in manifest.get("weights", []):
@@ -556,6 +564,39 @@ def adjust_position(frame: pd.DataFrame, base_mask: pd.DataFrame, long_ratio: fl
             long_ratio,
         ).to_numpy(dtype=np.float64)
     return pd.DataFrame(output, index=frame.index, columns=frame.columns)
+
+
+def normalize_position_sides(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize positive and negative alpha mass independently for each day.
+
+    Finite positive values are divided by their positive-side L1 sum, and
+    finite negative values are divided by the absolute negative-side L1 sum.
+    Missing values remain missing. If one side has no finite nonzero mass,
+    that side is left at zero rather than being artificially filled.
+    """
+    values = frame.to_numpy(dtype=np.float64, copy=True)
+    finite = np.isfinite(values)
+    values[~finite] = np.nan
+    positive = finite & (values > 0.0)
+    negative = finite & (values < 0.0)
+    positive_sum = np.where(positive, values, 0.0).sum(axis=1)
+    negative_sum = np.where(negative, -values, 0.0).sum(axis=1)
+    normalized = values.copy()
+    positive_where = positive & (positive_sum[:, None] > 0.0)
+    negative_where = negative & (negative_sum[:, None] > 0.0)
+    np.divide(
+        values,
+        positive_sum[:, None],
+        out=normalized,
+        where=positive_where,
+    )
+    np.divide(
+        normalized,
+        negative_sum[:, None],
+        out=normalized,
+        where=negative_where,
+    )
+    return pd.DataFrame(normalized, index=frame.index, columns=frame.columns)
 
 
 def blend_positions(target: pd.DataFrame, myposition: pd.DataFrame, weight: float) -> pd.DataFrame:
@@ -738,6 +779,11 @@ def run_weight_backtests(
 ) -> dict[float, WeightResult]:
     ti = _coerce_ti(ti)
     simple = bool(simple)
+    # evaluate_daily applies long_ratio adjustment first. Normalize each
+    # source by positive/negative L1 mass before any weight is blended so that
+    # the VA weight has a stable signal-space meaning across the two inputs.
+    target = normalize_position_sides(target)
+    myposition = normalize_position_sides(myposition)
     dates = tuple(int(date) for date in target.index if start_ds <= int(date) <= end_ds)
     if not dates:
         raise ValueError("no common alpha dates are available for backtest")
@@ -1126,7 +1172,7 @@ def format_daily_evaluation(
         )
     lines.extend(
         [
-            f"[VA] workers={result.workers} execution={result.ti:06d} config={profile}",
+            f"[VA] workers={result.workers} execution={result.ti:06d} config={profile} signal_blend={SIGNAL_BLEND_PROFILE}",
             _format_va_table(result.va_table),
             f"IC FROM {result.start_ds} to {result.end_ds}",
             result.ic_table.to_string(),

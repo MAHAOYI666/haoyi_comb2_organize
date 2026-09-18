@@ -5,23 +5,40 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.4`
-- Version date: `2026-09-17`
+- Version: `1.0.5`
+- Version date: `2026-09-18`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.4-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.5-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: the `1.0.4` protected wheel was built and installed locally; publication is still pending.
+- Status: source release prepared; protected-wheel build and publication are pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.4-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.5-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.5
+
+Direct daily evaluation:
+
+- Define the signal pipeline as independent `long_ratio` adjustment for target and myposition, independent daily L1 normalization of positive and negative sides for each source, weighted signal blending, and only then optimizer execution.
+- Preserve missing values and normalize each sign side independently; a side with no finite nonzero mass remains zero instead of being filled artificially.
+- Keep the optimizer's existing post-blend normalization, trimming, and portfolio constraints. The VA weight `w` is a signal-space coefficient, not a final capital-allocation percentage.
+- Add the `long_short_l1_v1` signal-blend profile to result-directory names, manifests, and formatted output. Bump the artifact schema to version 3 and reject artifacts produced by the previous blending order.
+- Document the new order and add regression coverage for independent long/short L1 normalization and artifact separation.
+
+Validation:
+
+- `pytest -q tests/test_daily_eval.py`: 8 passed.
+- Re-ran direct daily VA for the residual-label-barra versus dual-label-MOE-vwap30 pair from 20220104 through 20240520 with `093000`, the legacy optimizer profile, and 10 workers.
+- Saved all ten weight result series and detailed per-weight backtest artifacts, including daily PnL, excess PnL, executions, holdings, positions, settlements, and summaries.
+- `runEval read` reproduced the complete VA and IC tables from the saved manifest.
 
 ## 1.0.4
 

@@ -10,6 +10,7 @@ from evals.comb_eval.daily_eval import (
     _normalize_daily_frame,
     _apply_excess_returns,
     _read_daily_eval_artifacts,
+    normalize_position_sides,
     resolve_daily_eval_dir,
     _write_daily_eval_artifacts,
     blend_positions,
@@ -67,6 +68,22 @@ def test_normalize_daily_frame_selects_the_093000_sample():
     assert normalized.iloc[0, 0] == 2.0
 
 
+def test_normalize_position_sides_uses_independent_long_short_l1_sums():
+    index = pd.Index([20240102], name="date")
+    columns = pd.Index(["000001", "000002", "000003", "000004", "000005"])
+    frame = pd.DataFrame([[2.0, -3.0, 1.0, -1.0, np.nan]], index=index, columns=columns)
+
+    normalized = normalize_position_sides(frame)
+
+    np.testing.assert_allclose(
+        normalized.iloc[0, :4].to_numpy(),
+        [2.0 / 3.0, -3.0 / 4.0, 1.0 / 3.0, -1.0 / 4.0],
+    )
+    assert normalized.iloc[0, 0] + normalized.iloc[0, 2] == pytest.approx(1.0)
+    assert -(normalized.iloc[0, 1] + normalized.iloc[0, 3]) == pytest.approx(1.0)
+    assert np.isnan(normalized.iloc[0, 4])
+
+
 def test_daily_eval_directory_separates_long_ratio_variants(tmp_path):
     myposition = tmp_path / "myposition.parquet"
     target = tmp_path / "target.parquet"
@@ -78,10 +95,10 @@ def test_daily_eval_directory_separates_long_ratio_variants(tmp_path):
     )
 
     assert ratio_33 != ratio_50
-    assert ratio_33.name.endswith("_old_lr0.330000")
-    assert ratio_50.name.endswith("_old_lr0.500000")
+    assert ratio_33.name.endswith("_old_long_short_l1_v1_lr0.330000")
+    assert ratio_50.name.endswith("_old_long_short_l1_v1_lr0.500000")
     assert simple_50 != ratio_50
-    assert simple_50.name.endswith("_simple_lr0.500000")
+    assert simple_50.name.endswith("_simple_long_short_l1_v1_lr0.500000")
 
 
 def test_daily_eval_profile_switches_optimizer_defaults():
