@@ -189,6 +189,8 @@ monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sy
 
 ## 优化器与持仓策略: 回测持仓逻辑接入
 
+默认 opt1 参数的完整逐项说明及 --simple 对比见 [opt1_parameters.md](opt1_parameters.md)。
+
 ```xml
 <strategy start_ds="20200101" end_ds="20240628" />
 ```

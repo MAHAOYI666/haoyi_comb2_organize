@@ -5,10 +5,10 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.6`
-- Version date: `2026-09-18`
+- Version: `1.0.7`
+- Version date: `2026-09-20`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.7-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
 - Status: source release prepared; protected-wheel build and publication are pending.
 
@@ -16,12 +16,21 @@ Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.7-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.7
+
+Configuration and documentation:
+
+- Remove the unreleased direct daily execution-price selector. The supported contract remains `backtest.execution_price="source:column"`.
+- Align the normal optimizer configuration with `DEFAULT_OPTIMIZER_CONFIG`, including the full hard/soft universe, risk, and industry-group lists.
+- Add `opt1_parameters.md` with the complete default parameter table, risk-method definitions, and the `--simple` profile differences.
+- Bump the source and protected-wheel version to `1.0.7`.
 
 ## 1.0.6
 
