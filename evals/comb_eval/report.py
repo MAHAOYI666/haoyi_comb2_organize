@@ -133,9 +133,8 @@ def run_config_evaluation(
     skip_exposure: bool = False,
 ) -> ConfigEvalResult:
     assert label_path is None and label_5d_path is None, "define evaluation targets in ResearchLoader"
-    import torch
     import runCombo
-    import matplotlib.pyplot as plt
+    from .report_details import build_target_details, execution_details, render_config_report
 
     config = _load_organize_config(config_path)
     artifacts = _resolve_artifacts(
@@ -159,7 +158,7 @@ def run_config_evaluation(
     ic_summary = ic.groupby(level="time")["ic"].agg(["mean", "std", "count"])
     ic.to_csv(artifacts.report_dir / "daily_ic.csv")
     daily_path = Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]
-    daily = pd.read_csv(daily_path).set_index("date")
+    daily = pd.read_csv(daily_path).set_index("date").sort_index()
     daily = daily.loc[(daily.index >= lo) & (daily.index <= hi)]
     assert not daily.empty
     initial_asset = float(daily.total_asset.iloc[0] - daily.pnl.iloc[0])
@@ -174,50 +173,56 @@ def run_config_evaluation(
         "max_drawdown_pct": drawdown.min() * 100,
         "trade_cost": daily.trade_cost.sum(), "turnover_mean": daily.tvr.mean(),
     }], index=["actual_execution"])
+    daily, pnl_periods = execution_details(daily)
+    daily.to_csv(artifacts.report_dir / "daily_execution.csv")
+    pnl_periods.to_csv(artifacts.report_dir / "pnl_by_period.csv")
     decile_summary = None
+    decile_daily = None
+    target_diagnostics = None
     if not skip_deciles:
-        layers = []
-        for (ds, ti), row in alpha.iterrows():
-            target, valid = sample_inputs[(int(ds), int(ti))]
-            values = row.to_numpy(dtype=float)
-            valid &= np.isfinite(values) & np.isfinite(target)
-            selected = np.flatnonzero(valid)
-            buckets = pd.qcut(values[selected], 10, labels=False, duplicates="drop") if len(selected) else np.array([])
-            complete = len(np.unique(buckets[np.isfinite(buckets)])) == 10
-            for layer in range(1, 11):
-                indices = selected[buckets == layer - 1] if complete else np.array([], dtype=int)
-                layers.append((ti, layer, float(target[indices].mean()) if len(indices) else np.nan))
-        decile_summary = pd.DataFrame(layers, columns=["time", "decile", "target_mean"]).groupby(["time", "decile"]).mean()
+        decile_daily, target_diagnostics = build_target_details(alpha, sample_inputs)
+        decile_summary = decile_daily.groupby(["time", "decile"])[["target_mean"]].mean()
+        decile_daily.to_csv(artifacts.report_dir / "decile_daily.csv")
+        target_diagnostics.to_csv(artifacts.report_dir / "target_diagnostics.csv")
+        ic = ic.join(target_diagnostics[["rank_ic", "layer_ic", "q10_minus_q1", "q10_minus_universe"]])
+        ic.to_csv(artifacts.report_dir / "daily_ic.csv")
     exposure_summary = None
     cap_corr_summary = None
+    exposure_daily = None
+    cap_daily = None
     if not skip_exposure:
-        exposures, caps = [], []
+        exposures, caps, exposure_frames, cap_frames = [], [], [], []
         for ti, frame in alpha.groupby(level=1):
             signal = frame.droplevel(1)
             exposure = compute_barra_style_exposure(signal, start_ds=lo, end_ds=hi, mode=0, cache_path=artifacts.cache_path)
             exposures.append(pd.concat({ti: summarize_exposure(exposure)}, names=["time"]))
+            exposure_frames.append(pd.concat({ti: exposure}, names=["time"]))
             cap = compute_cap_corr(signal, start_ds=lo, end_ds=hi, cache_path=artifacts.cache_path)
             caps.append(pd.concat({ti: summarize_cap_corr(cap)}, names=["time"]))
+            cap_frames.append(pd.concat({ti: cap.to_frame()}, names=["time"]))
         exposure_summary = pd.concat(exposures)
         cap_corr_summary = pd.concat(caps)
-    messages = ["IC and deciles use ResearchLoader.gen_raw_target; PnL uses actual execution and daily settlement."]
+        exposure_daily = pd.concat(exposure_frames)
+        cap_daily = pd.concat(cap_frames)
+        exposure_daily.to_csv(artifacts.report_dir / "barra_exposure_daily.csv")
+        cap_daily.to_csv(artifacts.report_dir / "cap_corr_daily.csv")
+    messages = [
+        "IC and deciles use ResearchLoader.gen_raw_target and the public evaluation mask; PnL uses actual execution and daily settlement.",
+        "Decile and top-decile excess curves sum raw targets without execution constraints or transaction costs; they are signal diagnostics.",
+        "Barra and CAP follow the existing same-date cache alignment; IC IR is not annualized.",
+    ]
     _write_outputs(
         artifacts, ic_summary=ic_summary, pnl_summary=pnl_summary,
         ic_checks=None, pnl_checks=None, decile_summary=decile_summary,
         exposure_summary=exposure_summary, cap_corr_summary=cap_corr_summary,
         top10_excess=None, messages=messages, start=str(lo), end=str(hi),
     )
-    fig, axes = plt.subplots(2, 1, figsize=(12, 8))
-    for ti, frame in ic.groupby(level="time"):
-        axes[0].plot(pd.to_datetime(frame.index.get_level_values(0).astype(str)), frame.ic, label=str(ti))
-    axes[0].set_ylabel("Target IC")
-    axes[0].legend()
-    axes[1].plot(pd.to_datetime(daily.index.astype(str)), daily.total_asset / initial_asset)
-    axes[1].set_ylabel("Actual execution NAV")
-    fig.tight_layout()
-    artifacts.plot_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(artifacts.plot_path)
-    plt.close(fig)
+    render_config_report(
+        artifacts, alpha=alpha, ic=ic, daily=daily, pnl_periods=pnl_periods,
+        decile_daily=decile_daily, target_diagnostics=target_diagnostics,
+        exposure_daily=exposure_daily, exposure_summary=exposure_summary,
+        cap_daily=cap_daily, messages=messages,
+    )
     return ConfigEvalResult(
         artifacts, ic_summary, pnl_summary, None, None, decile_summary,
         exposure_summary, cap_corr_summary, None, messages,

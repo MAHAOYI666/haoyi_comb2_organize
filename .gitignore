@@ -21,3 +21,4 @@ runFactorCorr.py
 *.txt
 
 /artifacts/
+/spectral_shrinkwhite_factor_mapping.md
