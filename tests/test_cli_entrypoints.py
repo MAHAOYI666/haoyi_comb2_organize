@@ -66,12 +66,26 @@ def test_run_combo_help_and_missing_config():
 def test_run_eval_help_and_missing_config():
     help_proc = run_cli("runEval.py", "-h")
     assert help_proc.returncode == 0
+    assert "--long-ratio" in help_proc.stdout
+    assert "--simple" in help_proc.stdout
     assert "Evaluate comb2 config outputs or local parquet/csv artifacts" in help_proc.stdout
 
     missing_proc = run_cli("runEval.py")
     assert missing_proc.returncode == 2
     assert "missing config.xml" in missing_proc.stderr
     assert "Traceback" not in missing_proc.stderr
+
+    invalid_ratio_proc = run_cli(
+        "runEval.py",
+        "missing_myposition.parquet",
+        "missing_target.parquet",
+        "--long-ratio",
+        "1.1",
+        "--mosek",
+        str(REPO_ROOT / "mosek.lic"),
+    )
+    assert invalid_ratio_proc.returncode == 2
+    assert "--long-ratio must be between 0 and 1" in invalid_ratio_proc.stderr
 
 
 def test_run_eval_specialized_modes(tmp_path):
@@ -264,7 +278,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
-    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds"}
+    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds", "cacheDays"}
     assert "output_path" not in root.find("./backtest").attrib
     assert root.find("./combo/defaults") is None
 
@@ -287,7 +301,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
         "compression",
         "data_start_ds",
         "data_offset",
-        "registry_cache_days",
+        "cacheDays",
     }
     assert parsed["combo"]["runtime"]["sample_times"] == (100000,)
 
@@ -305,6 +319,14 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     with pytest.raises(ValueError, match="unsupported config key 'custom_path'"):
         load_config(str(unknown_constant))
 
+    legacy_loader = tmp_path / "legacy-loader.xml"
+    legacy_loader.write_text(
+        '<config><combo><loader registry_cache_days="4" /></combo></config>',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported config key 'registry_cache_days'"):
+        load_config(str(legacy_loader))
+
     invalid_times = tmp_path / "times.xml"
     invalid_times.write_text('<config><combo><runtime sample_times="110000,100000" /></combo></config>')
     with pytest.raises(AssertionError, match="increasing"):
@@ -315,7 +337,7 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
 
 
 def test_config_loads_researcher_optimizer_parameters(tmp_path):
-    from config import DEFAULT_OPTIMIZER_CONFIG, load_config
+    from config import DEFAULT_OPTIMIZER_CONFIG, SIMPLE_OPTIMIZER_CONFIG, load_config
 
     config_path = tmp_path / "optimizer.xml"
     config_path.write_text(
@@ -374,25 +396,23 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
         "group_list",
         "soft_group_list",
     ):
-        assert all(entry.split(",")[1] == "1" for entry in optimizer[name].split("|"))
+        entries = [entry for entry in optimizer[name].split("|") if entry]
+        assert all(entry.split(",")[1] == "1" for entry in entries)
     assert DEFAULT_OPTIMIZER_CONFIG["ret_delay"] == 1
     assert DEFAULT_OPTIMIZER_CONFIG["benchmark"] == "000905.SH"
     assert DEFAULT_OPTIMIZER_CONFIG["type"] == "opt1"
     assert DEFAULT_OPTIMIZER_CONFIG["maxtrd"] == 0.0
     assert DEFAULT_OPTIMIZER_CONFIG["maxpos"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["maxtvr"] == 0.4
+    assert DEFAULT_OPTIMIZER_CONFIG["max_weight"] == 0.0075
     assert DEFAULT_OPTIMIZER_CONFIG["min_participation_ratio"] == 0.07
     assert DEFAULT_OPTIMIZER_CONFIG["parti_penalty"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["long_ratio"] == 0.5
     assert DEFAULT_OPTIMIZER_CONFIG["risk_list"].startswith(
         "cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|"
     )
-    assert DEFAULT_OPTIMIZER_CONFIG["soft_risk_list"].startswith(
-        "cap:-0.02:0.07:2.0,1,4|"
-    )
     hard_universes = {
-        entry.split(":", 1)[0] for entry in optimizer["univ_list"].split("|")
-    }
-    soft_universes = {
-        entry.split(":", 1)[0] for entry in optimizer["soft_univ_list"].split("|")
+        entry.split(":", 1)[0] for entry in DEFAULT_OPTIMIZER_CONFIG["univ_list"].split("|")
     }
     assert hard_universes == {
         "ZZ500",
@@ -402,24 +422,20 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
         "NONETOP3000",
         "AshareCYB",
     }
-    assert soft_universes == {
-        "ZZ1800",
-        "ZZ500",
-        "AshareSH",
-        "AshareCYB",
-        "AshareSZ",
-        "HS300",
-        "NONETOP3000",
-    }
-    assert "AshareDelistRisk" not in optimizer["univ_list"]
-    assert DEFAULT_OPTIMIZER_CONFIG["group_list"] == (
-        "WindIndustry.sw1:-0.065:0.065,1"
-    )
+    assert DEFAULT_OPTIMIZER_CONFIG["group_list"] == "WindIndustry.sw1:-0.065:0.065,1"
     assert DEFAULT_OPTIMIZER_CONFIG["soft_group_list"] == (
         "WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
     )
-    assert "WindIndustry.wind1" not in DEFAULT_OPTIMIZER_CONFIG["group_list"]
-    assert "WindIndustry.wind1" not in DEFAULT_OPTIMIZER_CONFIG["soft_group_list"]
+    assert SIMPLE_OPTIMIZER_CONFIG["maxtvr"] == 0.08
+    assert SIMPLE_OPTIMIZER_CONFIG["max_weight"] == 0.008
+    assert SIMPLE_OPTIMIZER_CONFIG["min_participation_ratio"] == 0.1
+    assert SIMPLE_OPTIMIZER_CONFIG["parti_penalty"] == 0.05
+    assert SIMPLE_OPTIMIZER_CONFIG["univ_list"] == ""
+    assert SIMPLE_OPTIMIZER_CONFIG["soft_univ_list"] == ""
+    assert SIMPLE_OPTIMIZER_CONFIG["risk_list"] == ""
+    assert SIMPLE_OPTIMIZER_CONFIG["soft_risk_list"] == ""
+    assert SIMPLE_OPTIMIZER_CONFIG["group_list"] == ""
+    assert SIMPLE_OPTIMIZER_CONFIG["soft_group_list"] == ""
 
 
 def test_config_rejects_invalid_optimizer_parameters(tmp_path):

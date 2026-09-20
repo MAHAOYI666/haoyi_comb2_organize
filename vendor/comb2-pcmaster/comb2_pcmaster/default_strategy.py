@@ -49,7 +49,7 @@ def _parse_limits(raw: str, *, soft: bool, label: str) -> tuple[RangeLimit, ...]
             or lo > hi
             or penalty < 0
             or delay < 0
-            or (is_risk and method not in {2, 4})
+            or (is_risk and method not in {1, 2, 4})
         ):
             raise ValueError(f"invalid strategy.optimizer.{label} entry: {entry!r}")
         limits.append(RangeLimit(name, lo, hi, penalty, delay, method))
@@ -89,6 +89,21 @@ def _centered_rank(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
     ranks /= len(indexes) - 1
     ranks -= float(ranks.mean())
     result[indexes] = ranks
+    return result
+
+
+def _cross_sectional_zscore(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Standardize factor values cross-sectionally over the supplied universe."""
+    result = np.zeros_like(values, dtype=np.float64)
+    indexes = np.flatnonzero(mask & np.isfinite(values))
+    if len(indexes) <= 1:
+        return result
+    valid_values = values[indexes].astype(np.float64, copy=False)
+    mean = float(valid_values.mean())
+    scale = float(valid_values.std(ddof=0))
+    if not np.isfinite(scale) or scale <= 0.0:
+        return result
+    result[indexes] = (valid_values - mean) / scale
     return result
 
 
@@ -417,6 +432,8 @@ class AlphaStrategy(StrategyBase):
                 values[valid] -= float(values[valid].mean())
         else:
             values = self._derived_factor(limit.name, date, limit.delay)
+        if limit.method == 1:
+            return _cross_sectional_zscore(values, factor_mask)
         if limit.method == 2:
             return _centered_rank(values, factor_mask)
 

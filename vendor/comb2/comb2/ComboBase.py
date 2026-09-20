@@ -222,7 +222,7 @@ class ComboBase:
     def _resolve_date(self, di) -> int:
         if isinstance(di, int) and di in self.loader.mask.date:
             return di
-        if isinstance(di, int) and 0 <= di < len(self.loader.mask.date):
+        if isinstance(di, int) and 0 <= di < len(self.loader.universe.dates):
             return self.loader.didx2date(di)
         return self.loader.align_date(int(di))
 
@@ -255,12 +255,14 @@ class ComboBase:
                 first = min(first, end)
         days = [self.loader.didx2date(i) for i in range(first, end + 1)]
         self.loader.set_current_ti(ti)
-        width = self.loader.registry.cache_days
-        for offset in range(0, len(days), width):
-            chunk = days[offset:offset + width]
-            self.loader.prefetch_features(chunk)
-            for idx, day in enumerate(chunk, first + offset):
-                self.buffer[ti].append(self.loader.gen_feature(day, ti), idx)
+        width = self.loader.load_chunk_days
+        with self.loader.cache_scope():
+            for offset in range(0, len(days), width):
+                chunk = days[offset:offset + width]
+                self.loader.prefetch_features(chunk)
+                for idx, day in enumerate(chunk, first + offset):
+                    self.buffer[ti].append(self.loader.gen_feature(day, ti), idx)
+                self.loader.release_working_cache()
         if days:
             self._predict_feature_window[ti] = self.buffer[ti].get(range(start, end + 1))
             self._predict_model_windows = {
@@ -317,6 +319,8 @@ class ComboBase:
         if ndays < self.tsDays + self.retDays - 1:
             raise ValueError(f"not enough training window for ds={ds}")
 
+        self.loader.set_training_retention(target_didx, ndays)
+
         if self.model is not None:
             model_data_in_memory = BytesIO()
             self.model.save(model_data_in_memory)
@@ -345,6 +349,7 @@ class ComboBase:
         )
         dataset_time = time.perf_counter() - dataset_start
         print(f"[TRAIN] dataset_len={len(dataset)} valid_instruments={dataset.numValidinsts}")
+        cache_reads = {name: set(keys) for name, keys in dataset.cache_reads.items()}
         self.model = None
         self._release_torch_cache("before_new_model_fit")
         self.model = self.research_model_cls(self._model_config())
@@ -353,6 +358,16 @@ class ComboBase:
         fit_time = time.perf_counter() - fit_start
         dataset = None
         self._release_torch_cache("after_fit_dataset_release")
+        next_target_ds = self._next_training_target_ds(ds)
+        if next_target_ds is not None:
+            transition = self.loader.warm_next_training_cache(
+                self.loader.date2didx(next_target_ds), self.max_train_days,
+                reads=cache_reads,
+            )
+            print(
+                f"[TRAIN_CACHE] next_target_ds={next_target_ds} "
+                f"raw_chunks={transition.raw_chunks} raw_points={transition.raw_points}"
+            )
         if getattr(self.loader, "verbose", False):
             print_progress(
                 f"Stage:Train ds={ds}",
@@ -376,20 +391,40 @@ class ComboBase:
         model_day = self.LoadCheckpointModel(self.modelDir, target_ds)
         return model_day != target_ds
 
+    def _checkpoint_exists(self, dt: int) -> bool:
+        if not self.modelDir:
+            return False
+        return (Path(self.modelDir) / str(int(dt)) / "model").is_file()
+
+    def _next_training_target_ds(self, ds: int) -> int | None:
+        current_idx = self.loader.date2didx(ds)
+        for candidate_idx in range(current_idx + 1, len(self.loader.universe.dates)):
+            if candidate_idx - self.trainDelay < self.loader.data_start_didx:
+                continue
+            candidate_ds = self.loader.didx2date(candidate_idx)
+            target_ds = self._train_target_ds(candidate_ds)
+            if not self.isTrainDay(target_ds):
+                continue
+            if self._checkpoint_exists(target_ds):
+                continue
+            return target_ds
+        return None
+
     def isTrainDay(self, ds: int) -> bool:
         didx = self.loader.date2didx(ds)
-        if didx >= len(self.loader.mask.date) - 1:
+        calendar_size = len(self.loader.universe.dates)
+        if didx >= calendar_size - 1:
             return True
 
         def is_trading_week_end(cur_didx: int) -> bool:
-            if cur_didx >= len(self.loader.mask.date) - 1:
+            if cur_didx >= calendar_size - 1:
                 return True
             today = datetime.datetime.strptime(str(self.loader.didx2date(cur_didx)), "%Y%m%d")
             next_day = datetime.datetime.strptime(str(self.loader.didx2date(cur_didx + 1)), "%Y%m%d")
             return (next_day - today).days > 1
 
         def next_trading_week_end(cur_didx: int) -> int:
-            upper = min(cur_didx + 10, len(self.loader.mask.date) - 1)
+            upper = min(cur_didx + 10, calendar_size - 1)
             for next_idx in range(cur_didx + 1, upper):
                 if is_trading_week_end(next_idx):
                     return self.loader.didx2date(next_idx)

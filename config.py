@@ -55,6 +55,7 @@ DEFAULT_OPTIMIZER_CONFIG = {
     "min_participation_ratio": 0.07,
     "parti_penalty": 0.0,
     "trim_threshold": 1.0e-5,
+    "long_ratio": 0.5,
     "min_valid_instruments": 200,
     "min_return_obs": 20,
     "soft_univ_penalty": 0.00025,
@@ -113,6 +114,20 @@ DEFAULT_OPTIMIZER_CONFIG = {
     ),
 }
 
+SIMPLE_OPTIMIZER_CONFIG = {
+    **DEFAULT_OPTIMIZER_CONFIG,
+    "maxtvr": 0.08,
+    "max_weight": 0.008,
+    "min_participation_ratio": 0.1,
+    "parti_penalty": 0.05,
+    "univ_list": "",
+    "soft_univ_list": "",
+    "risk_list": "",
+    "soft_risk_list": "",
+    "group_list": "",
+    "soft_group_list": "",
+}
+
 
 DEFAULT_CONFIG = {
     "constants": {
@@ -158,7 +173,7 @@ DEFAULT_CONFIG = {
             "compression": "none",
             "data_start_ds": 20160101,
             "data_offset": 1024,
-            "registry_cache_days": 64,
+            "cacheDays": 64,
         },
     },
     "backtest": {
@@ -339,8 +354,8 @@ def _validate_config(config: dict) -> None:
     loader = config["combo"]["loader"]
     if int(loader["data_offset"]) < 0:
         raise ValueError("combo.data.data_offset must be nonnegative")
-    if int(loader["registry_cache_days"]) <= 0:
-        raise ValueError("combo.data.registry_cache_days must be positive")
+    if int(loader["cacheDays"]) <= 0:
+        raise ValueError("combo.loader.cacheDays must be positive")
     strategy = config["strategy"]
     if int(strategy["start_ds"]) > int(strategy["end_ds"]):
         raise ValueError("strategy.start_ds must not be after end_ds")
@@ -374,6 +389,9 @@ def _validate_config(config: dict) -> None:
             raise ValueError(f"strategy.optimizer.{name} must be nonnegative")
     if not 0.0 <= float(optimizer["shrinkage"]) <= 1.0:
         raise ValueError("strategy.optimizer.shrinkage must be between 0 and 1")
+    long_ratio = float(optimizer["long_ratio"])
+    if not 0.0 <= long_ratio <= 1.0:
+        raise ValueError("strategy.optimizer.long_ratio must be between 0 and 1")
     if float(optimizer["max_weight"]) <= 0:
         raise ValueError("strategy.optimizer.max_weight must be positive")
     if float(optimizer["target_size"]) <= 0:

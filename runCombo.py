@@ -157,6 +157,7 @@ class Node:
         loader_config = {key: value for key, value in config["loader"].items() if key in loader_fields}
         loader_config["cache_path"] = organize_config["constants"]["cache_path"]
         loader_config["sample_times"] = self.sample_times
+        loader_config["load_chunk_days"] = self.load_chunk_days
         loader_config["verbose"] = bool(getattr(self, "verbose", False))
         self.loader_config = LoaderConfig(**loader_config)
 
@@ -218,22 +219,26 @@ def calculate_alpha_ic(alpha, combo, *, sample_inputs=None):
     for ti, frame in alpha.groupby(level=1):
         frame = frame.sort_index()
         combo.loader.set_current_ti(int(ti))
-        width = combo.loader.registry.cache_days
-        for offset in range(0, len(frame), width):
-            chunk = frame.iloc[offset:offset + width]
-            combo.loader.prefetch_targets(chunk.index.get_level_values(0).astype(int))
-            for (ds, ti), prediction in chunk.iterrows():
-                target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
-                valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
-                values = prediction.to_numpy(dtype=float)
-                valid &= np.isfinite(values) & np.isfinite(target)
-                if sample_inputs is not None:
-                    sample_inputs[(int(ds), int(ti))] = (target, valid)
-                count = int(valid.sum())
-                ic = np.nan
-                if count >= 2 and np.std(values[valid]) > 0 and np.std(target[valid]) > 0:
-                    ic = float(np.corrcoef(values[valid], target[valid])[0, 1])
-                rows.append((int(ds), int(ti), ic, count))
+        width = combo.loader.load_chunk_days
+        with combo.loader.cache_scope():
+            for offset in range(0, len(frame), width):
+                chunk = frame.iloc[offset:offset + width]
+                combo.loader.prefetch_targets(
+                    chunk.index.get_level_values(0).astype(int), chunk_days=width,
+                )
+                for (ds, ti), prediction in chunk.iterrows():
+                    target = combo.loader.gen_raw_target(int(ds), int(ti)).cpu().numpy()
+                    valid = combo.loader.gen_valid_mask(int(ds), int(ti)).cpu().numpy()
+                    values = prediction.to_numpy(dtype=float)
+                    valid &= np.isfinite(values) & np.isfinite(target)
+                    if sample_inputs is not None:
+                        sample_inputs[(int(ds), int(ti))] = (target, valid)
+                    count = int(valid.sum())
+                    ic = np.nan
+                    if count >= 2 and np.std(values[valid]) > 0 and np.std(target[valid]) > 0:
+                        ic = float(np.corrcoef(values[valid], target[valid])[0, 1])
+                    rows.append((int(ds), int(ti), ic, count))
+                combo.loader.release_working_cache()
     return pd.DataFrame(rows, columns=["date", "time", "ic", "count"]).set_index(["date", "time"]).reindex(alpha.index)
 
 

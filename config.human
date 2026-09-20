@@ -24,7 +24,7 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
              retDays="1" tsDays="8" max_train_days="2000"
              snaptime="experiment" />
     <loader dtype="float16" compression="none"
-            data_start_ds="20160104" registry_cache_days="64" />
+            data_start_ds="20160104" cacheDays="64" />
     <model device="cpu" epochs="15" batch_size="3" />
   </combo>
   <backtest execution_price="execution:execution"
@@ -32,7 +32,7 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
 </config>
 ```
 
-sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。
+sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。当前 `config.py` 默认使用旧配置的 `100000`；上面的 `100000,110000` 仅是多时点配置示例。
 
 ## 声明与选择数据
 
@@ -116,7 +116,9 @@ self.date2didx(ds)
 self.didx2date(idx)
 ```
 
-读取日期是逻辑日期，delay 在底层应用。单次显式范围不得超过 registry_cache_days；更长范围分块读取。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
+批量 `prefetch_features()` 和 `prefetch_targets()` 必须在同一个 `loader.cache_scope()` 中完成预取和消费；作用域结束后，保留区外的工作数据会释放。单独的 `source_history()` 和 `source_field()` 会自动建立一次请求作用域。
+
+读取日期是逻辑日期，delay 在底层应用。降维后的来源缓存按每个来源保留 `cacheDays` 个交易日，每个交易日包含全部配置的 ti；一次原始读取块由 `runtime.load_chunk_days` 控制，范围可以大于 `cacheDays`。source ops 支持截面标准化、rank、truncate、fillna、winsorize、normalize_by_max_abs、日期 rolling_mean/rolling_std 和 neut。中性化依赖也必须显式声明。
 
 ## X、Y 与模型
 
@@ -141,7 +143,7 @@ config 注入 dtype、tsDays、num_features、feature_names、sample_times。pre
 
 preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
 
-训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。registry_cache_days 限制源级 LRU 缓存条目数，不限制训练数据集存储。大型训练需评估全量训练特征、标签、模型、batch 和数据缓存的合计峰值内存；源数据更新后需重建数据集。
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。`cacheDays` 只限制降维后来源缓存的日期数，不限制训练数据集存储；训练跨 ckpt 时优先保留下次训练需要的最早日期，超出保留区的来源数据在当前读取块结束后释放。大型训练需评估全量训练特征、标签、模型、batch 和来源缓存的合计峰值内存；源数据更新后需重建数据集。
 
 ## 日期口径与训练
 
@@ -183,7 +185,7 @@ runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层�
 
 ## 监控与运行参数
 
-loader 保留 dtype、compression、data_start_ds、data_offset、registry_cache_days。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+loader 保留 dtype、compression、data_start_ds、data_offset、cacheDays。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
 
 monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sync_cuda、verbose。长任务启动前按 cgroup 限制检查内存并用小规模验证估算峰值。
 
@@ -201,7 +203,7 @@ monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sy
 
 默认 strategy 行为：
 
-- 以原始零点区分正负 alpha，不做中位数中心化；正、负两侧分别归一化到 `1` 和 `-1`。
+- 在当前有效截面上按 `long_ratio` 计算做多桶阈值，将原始 alpha 减去该阈值；正、负两侧分别归一化到 `1` 和 `-1`。
 - 使用 MOSEK Fusion 在 long-only、满仓、单票上限、L1 换手、中证 500 成分比例、风险暴露、有效持股数和相对基准方差约束下求目标权重。
 - 换手基准来自回测已真实成交的股数持仓，按当前估值换算为市值。opt1 将已有持仓除以实际股票持仓总额；opt2 除以当天目标股票预算。当前不可买的已有持仓仍进入候选集，但只能维持或减仓；不可交易持仓固定在实际金额。
 - 基准指数权重、BarraCNE5、行情和股票池统一从 `{cache_path}/AshareCache` 读取。默认基准为中证 500，收益、指数、universe 和风险因子 delay 均为 `1`。
@@ -215,7 +217,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。
 
-研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值：
+研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值。当前默认值恢复为旧配置：`maxtvr=0.4`、`max_weight=0.0075`、`min_participation_ratio=0.07`、`parti_penalty=0.0`、`long_ratio=0.5`，并保留完整的 hard/soft universe、risk 和 industry group 列表。直接 daily VA 评估传入 `runEval ... --simple` 时，才切换到简化配置：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且上述列表为空。旧版完整样例见仓库根目录 `config.eg.old.xml`。
 
 ```xml
 <strategy start_ds="20200101" end_ds="20240628">
@@ -225,6 +227,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
     benchmark="000905.SH"
     maxtvr="0.2"
     max_weight="0.0075"
+    long_ratio="0.5"
     num_mosek_threads="1"
     risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
   />
@@ -252,6 +255,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
 | `parti_penalty` | `0.0` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
 | `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
+| `long_ratio` | `0.5` | 当前有效截面上保留为正 alpha 的目标做多比例；阈值为 `1 - long_ratio` 分位数。范围 `[0, 1]`。 |
 | `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
 | `min_return_obs` | `20` | `ret_days` 窗口内要求的最少有效收益观测数。 |
 | `soft_univ_penalty` | `0.00025` | soft universe 越界松弛的全局惩罚系数。 |
@@ -260,14 +264,14 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `num_mosek_threads` | `1` | MOSEK 求解线程数。 |
 | `max_time` | `30.0` | 单日 MOSEK 最大求解秒数；`0` 表示不设置时间上限。 |
 | `post_trim_renorm` | `false` | 是否在求解后裁掉小仓位后重新归一化；默认保持参考实现口径，不重新归一化。 |
-| `univ_list` | 见完整模板 | 股票集合权重硬约束，格式为 `name:lo:hi,delay`，多项用 `|` 分隔。 |
-| `soft_univ_list` | 见完整模板 | 软 universe 约束，格式为 `name:lo:hi:penalty,delay`。 |
-| `group_list` | 见完整模板 | 相对配置基准的逐行业主动权重硬约束，格式为 `name:lo:hi,delay`。 |
-| `soft_group_list` | 见完整模板 | 相对配置基准的逐行业主动权重软约束，格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。 |
-| `risk_list` | 见完整模板 | 硬风险约束，格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。 |
-| `soft_risk_list` | 见完整模板 | 软风险约束，格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。 |
+| `univ_list` | 见 `config.eg.old.xml` | 默认 hard universe 配置；格式为 `name:lo:hi,delay`，多项用 `|` 分隔。`--simple` 时为空。 |
+| `soft_univ_list` | 见 `config.eg.old.xml` | 默认 soft universe 配置；格式为 `name:lo:hi:penalty,delay`。`--simple` 时为空。 |
+| `group_list` | 见 `config.eg.old.xml` | 默认 hard industry group 配置；格式为 `name:lo:hi,delay`。`--simple` 时为空。 |
+| `soft_group_list` | 见 `config.eg.old.xml` | 默认 soft industry group 配置；格式为 `name:lo:hi,delay`，惩罚由 `soft_group_penalty` 统一控制。`--simple` 时为空。 |
+| `risk_list` | 见 `config.eg.old.xml` | 默认 hard risk 配置；格式为 `name:lo:hi,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
+| `soft_risk_list` | 见 `config.eg.old.xml` | 默认 soft risk 配置；格式为 `name:lo:hi:penalty,delay,method`；method 省略时为 `2`。`--simple` 时为空。 |
 
-列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `2` 表示截面 rank 后居中，method `4` 表示正值取自然对数后做截面 z-score。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
+列表中的 `delay` 不写时解析为 `0`；默认列表均显式写为 `1`。风险 method `1` 表示在有效股票截面上直接做 z-score 标准化（均值为 `0`、总体标准差为 `1`）；method `2` 表示截面 rank 后居中；method `4` 表示正值取自然对数后做截面 z-score。method `1` 对非有限值、掩码外股票以及有效值不足两个或截面方差为零的情况返回 `0`。universe 支持 `ZZ500`、`ZZ1800`、`HS300`、`AshareST`、`AshareSH`、`AshareSZ`、`AshareCYB` 和 `NONETOP3000`；其中 `ZZ1800` 是中证 800 与中证 1000 成员并集，`NONETOP3000` 是 `TradeUniverse.TOP3000` 的反向集合。industry group 支持 `WindIndustry.sw1` 和 `WindIndustry.sw3`，分别读取申万 2021 一级和三级分类。支持的衍生风险项为 `cap`、`returns120`、`vola_30`、`vola_5`、`close`；`cap` 读取 `DailyFdm.mkt_cap`，Barra 风格项写成 `BarraCNE5.<NAME>`。
 
 hard universe 的上界为 `0` 时，可交易成员仓位必须退出；opt2 中当日买入的 locked 仓位优先满足 T+1，只保留 unavoidable locked amount 且禁止继续买入。强制卖出可突破 `maxtrd` 和当日剩余 `maxtvr`；有 delay-1 spread 时仍计入滑点目标项，缺失时记录未定价强退数量和权重。不可交易旧持仓固定在实际金额，恢复交易后再按当时约束退出。回测 PNL 仍只扣 `fee_rate` 手续费，不扣 spread。
 

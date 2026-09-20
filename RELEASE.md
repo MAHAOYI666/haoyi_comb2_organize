@@ -5,23 +5,89 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.2`
-- Version date: `2026-09-09`
+- Version: `1.0.6`
+- Version date: `2026-09-18`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: the `1.0.2` wheel was built and installed locally; it has not been published to a remote package registry.
+- Status: source release prepared; protected-wheel build and publication are pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.2-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.6-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.6
+
+Optimizer:
+
+- Add risk limit method `1`, which directly standardizes finite factor values with a cross-sectional z-score over the selected universe. Masked or non-finite values remain zero, and degenerate cross-sections return zero.
+- Keep risk methods `2` and `4` unchanged: method `2` is centered cross-sectional rank, while method `4` applies a positive-value logarithm before cross-sectional z-score normalization.
+- Add regression coverage for method `1` parsing, normalization, and masked-value behavior.
+
+## 1.0.5
+
+Direct daily evaluation:
+
+- Define the signal pipeline as independent `long_ratio` adjustment for target and myposition, independent daily L1 normalization of positive and negative sides for each source, weighted signal blending, and only then optimizer execution.
+- Preserve missing values and normalize each sign side independently; a side with no finite nonzero mass remains zero instead of being filled artificially.
+- Keep the optimizer's existing post-blend normalization, trimming, and portfolio constraints. The VA weight `w` is a signal-space coefficient, not a final capital-allocation percentage.
+- Add the `long_short_l1_v1` signal-blend profile to result-directory names, manifests, and formatted output. Bump the artifact schema to version 3 and reject artifacts produced by the previous blending order.
+- Document the new order and add regression coverage for independent long/short L1 normalization and artifact separation.
+
+Validation:
+
+- `pytest -q tests/test_daily_eval.py`: 8 passed.
+- Re-ran direct daily VA for the residual-label-barra versus dual-label-MOE-vwap30 pair from 20220104 through 20240520 with `093000`, the legacy optimizer profile, and 10 workers.
+- Saved all ten weight result series and detailed per-weight backtest artifacts, including daily PnL, excess PnL, executions, holdings, positions, settlements, and summaries.
+- `runEval read` reproduced the complete VA and IC tables from the saved manifest.
+
+## 1.0.4
+
+Evaluation and runtime:
+
+- Add direct daily value-add evaluation through `runEval myposition.parquet target.parquet [run|read]`.
+- Align the daily evaluator with the backtest path, including long-short adjustment, `093000` execution/label timing, opt1 defaults, a 10-worker default, and the `--long-ratio` CLI option.
+- Report PnL as ZZ500-excess PnL and retain the zero-signal target-only result as the 0.00 benchmark.
+- Add an explicit `--mosek` license-path option with default `/root/mosek/mosek.lic`.
+
+Configuration and packaging:
+
+- Add and validate optimizer `long_ratio`; restore the old optimizer defaults for the normal workflow and expose the simplified profile through `runEval --simple`.
+- The normal defaults retain the pre-1.0.4 values (`maxtvr=0.4`, `max_weight=0.0075`, `min_participation_ratio=0.07`, `parti_penalty=0.0`) and the complete hard/soft universe, risk, and industry-group lists; `config.eg.old.xml` preserves the same legacy sample.
+- Include the daily evaluator in the protected wheel through the existing `comb_eval` package and `runEval` entry point.
+
+Validation:
+
+- `pytest -q`: 132 passed, 12 skipped, 13 warnings.
+- Protected-wheel build and local installation passed.
+- Installed-wheel smoke test passed for the initial MOE/residual-label pair on 20240102--20240105; `read` mode reproduced the saved result.
+- Installed-wheel smoke test with `--long-ratio 0.33` passed; the manifest records the selected ratio.
+- Publication to the remote package registry remains pending.
+
+## 1.0.3
+
+Source cache and training handoff:
+
+- Replace the per-entry source-cache setting with `cacheDays`, which retains each source by trading date and keeps all configured sampling times for a retained date.
+- Separate `load_chunk_days` from source retention. Raw intraday blocks are processed temporarily, while source results outside the active training retention window live only in the current work area.
+- Add fixed training retention windows that protect the earliest `cacheDays` dates needed by the next scheduled training. The handoff uses the completed Dataset's captured source-read metadata and does not prefetch unread future dates.
+- Keep source cache state across checkpoint changes, use the Loader's effective truncated calendar for training-date lookahead, and support requests that cross the retention boundary without missing or reordering rows.
+- Require an active cache scope for bulk prefetch and require `ComboTrainDataset` to own a top-level scope. Invalid scope usage now fails at the interface boundary instead of silently causing repeated reads or incorrect handoff statistics.
+- Update the starter, Torch and LightGBM examples, researcher guide, architecture documentation, and cache-related regression tests for the new configuration and lifecycle contract.
+
+Validation:
+
+- `pytest -q`: 122 passed, 11 conditional skips, 16 warnings.
+- Real Memmap and Dataset handoff tests cover multiple sampling times, delay, rolling source operations, Codec paths, checkpoint save/load, calendar-end lookahead, and exact 20-day-window read counts.
+- A formal-configuration synthetic benchmark with a full 5,642-stock axis, 667 factors, four legal sampling times, default feature/target preprocessing, a rolling source operation, and the real `ComboBase.Train` path measured 349.282 seconds for a cold Dataset and 55.781 seconds after source-cache reuse. The second training took 492.010 seconds after checkpoint reload and cache reuse versus 811.677 seconds from a fresh loader. Independent process peaks were 25,222 MiB for the cold Dataset and 25,430 MiB for cold training; the source cache was about 11.23 GiB.
+- The performance benchmark uses synthetic finite source values and validates framework behavior and memory scale; its timings do not represent production data-source disk throughput. The `1.0.3` protected wheel still requires a separate install verification.
 
 ## 1.0.2
 

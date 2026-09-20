@@ -28,12 +28,22 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
 
+### 默认优化器与 simple 模式
+
+当前默认配置恢复为旧版 optimizer 口径：`maxtvr=0.4`、`max_weight=0.0075`、`min_participation_ratio=0.07`、`parti_penalty=0.0`，并保留完整的 hard/soft universe、risk 和 industry group 列表。
+
+直接 daily VA 评估默认使用上述旧配置；只有显式传入 `runEval ... --simple` 时，才使用简化配置（`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且各 hard/soft 列表为空）。simple 和 old 的评估结果会写入不同目录。
+
+`config.eg.old.xml` 保留了旧版完整 optimizer 样例，供迁移和口径对比使用。它不会被自动加载；使用时请复制其中的 optimizer 属性，并按实际实验修改路径、日期和输出目录。
+
 ## 使用
 
 ```bash
 combo-hello-world -y
 runCombo config.xml
 runEval config.xml
+runEval myposition.parquet target.parquet
+runEval myposition.parquet target.parquet --simple --ti 093000
 ```
 
 在 ResearchLoader.data_requirements 中声明数据与 delay，在 process_source 中对分钟数据按时点降维。通过 model_input_sources、model_target 选择 X、Y；配置 cache_path 时默认交集使用 delay=1 的 BaseUnivMask、NoNewStockMask、LimitMask，model_validity_source 可显式替换默认筛选。Python 数据路径相对研究员文件解析。
@@ -50,6 +60,6 @@ alpha.parquet 使用 (date,time) 索引。runEval 使用研究员原始目标计
 
 ## 内存和监控
 
-<combo><loader compression="fp4" registry_cache_days="64" /></combo> 配置特征编码和源级 LRU 缓存。来源分块处理后释放原始数组，训练数据集一次性保存各时点的特征和标签，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。训练存储不受 registry_cache_days 限制，需按训练天数、时点数、股票数和特征数评估内存；源数据更新后需重建数据集。
+<combo><loader compression="fp4" cacheDays="64" /></combo> 配置特征编码和降维后来源缓存。`cacheDays` 按每个来源保留交易日数，每个日期包含全部配置 ti；`load_chunk_days` 只控制一次读取和处理的原始块大小。来源分块处理后释放原始数组，保留区外的降维结果也在当前工作块结束后释放；训练数据集一次性保存各时点的特征和标签，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。训练存储不受 `cacheDays` 限制，需按训练天数、时点数、股票数、特征数和来源缓存评估内存；源数据更新后需重建数据集。
 
 monitor 可记录读取、训练、预测和回测耗时及内存。长任务须按 cgroup 可用资源评估峰值。
