@@ -105,10 +105,10 @@ def test_daily_eval_profile_switches_optimizer_defaults():
     old = _strategy_config(20240102, 20240105)
     simple = _strategy_config(20240102, 20240105, simple=True)
 
-    assert old["optimizer"]["maxtvr"] == 0.4
-    assert old["optimizer"]["max_weight"] == 0.0075
-    assert old["optimizer"]["min_participation_ratio"] == 0.07
-    assert old["optimizer"]["parti_penalty"] == 0.0
+    assert old["optimizer"]["maxtvr"] == 0.08
+    assert old["optimizer"]["max_weight"] == 0.008
+    assert old["optimizer"]["min_participation_ratio"] == 0.1
+    assert old["optimizer"]["parti_penalty"] == 0.05
     assert old["optimizer"]["univ_list"]
     assert old["optimizer"]["risk_list"]
     assert simple["optimizer"]["maxtvr"] == 0.08

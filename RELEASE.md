@@ -5,10 +5,10 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.7`
-- Version date: `2026-09-20`
+- Version: `1.0.8`
+- Version date: `2026-09-21`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.7-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
 - Status: source release prepared; protected-wheel build and publication are pending.
 
@@ -16,12 +16,19 @@ Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.7-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.0.8
+
+Configuration and documentation:
+
+- Update the default optimizer profile to the daily-VA values (maxtvr=0.08, max_weight=0.008, min_participation_ratio=0.1, parti_penalty=0.05) and synchronize the configuration, examples, documentation, and regression expectations.
+- Add the reproducible profiling report in docs/PROFILING.md, including the KF commands, environment, timing breakdown, and limitations.
 
 ## 1.0.7
 

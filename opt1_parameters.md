@@ -24,15 +24,15 @@
 | `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数。 |
 | `benchmark_delay` | `1` | 基准指数权重的交易日延迟。 |
 | `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元。 |
-| `maxtvr` | `0.4` | 全天累计换手额度。 |
-| `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
+| `maxtvr` | `0.08` | 全天累计换手额度。 |
+| `max_weight` | `0.008` | 可买股票的单票权重上限。 |
 | `maxtrd` | `0.0` | 单票交易额约束；为 0 时不添加。 |
 | `maxpos` | `0.0` | 单票持仓额约束；为 0 时不添加。 |
 | `liquidity_delay` | `1` | 流动性约束使用的交易日延迟。 |
 | `lambda_slp` | `0.0` | 滑点成本惩罚系数；为 0 时不添加。 |
 | `slippage_delay` | `1` | 滑点和对应收盘价的交易日延迟。 |
-| `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
-| `parti_penalty` | `0.0` | 持仓集中度惩罚系数；为 0 时不添加。 |
+| `min_participation_ratio` | `0.1` | 有效持股数相对候选股票数的最低比例。 |
+| `parti_penalty` | `0.05` | 持仓集中度惩罚系数；为 0 时不添加。 |
 | `trim_threshold` | `0.00001` | 求解前后的小仓位裁剪阈值。 |
 | `long_ratio` | `0.5` | 当前截面保留为正 alpha 的做多比例。 |
 | `min_valid_instruments` | `200` | 启动求解所需的最少候选股票数。 |
@@ -73,10 +73,10 @@ soft_group_list="WindIndustry.sw1:-0.05:0.05,1|WindIndustry.sw3:-0.012:0.012,1"
 
 | 参数 | 完整默认值 | simple 值 |
 |---|---:|---:|
-| `maxtvr` | `0.4` | `0.08` |
-| `max_weight` | `0.0075` | `0.008` |
-| `min_participation_ratio` | `0.07` | `0.1` |
-| `parti_penalty` | `0.0` | `0.05` |
+| `maxtvr` | `0.08` | `0.08` |
+| `max_weight` | `0.008` | `0.008` |
+| `min_participation_ratio` | `0.1` | `0.1` |
+| `parti_penalty` | `0.05` | `0.05` |
 | `univ_list` | 完整列表 | 空 |
 | `soft_univ_list` | 完整列表 | 空 |
 | `risk_list` | 完整列表 | 空 |

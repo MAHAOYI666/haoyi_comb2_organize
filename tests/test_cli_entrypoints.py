@@ -403,10 +403,10 @@ def test_config_loads_researcher_optimizer_parameters(tmp_path):
     assert DEFAULT_OPTIMIZER_CONFIG["type"] == "opt1"
     assert DEFAULT_OPTIMIZER_CONFIG["maxtrd"] == 0.0
     assert DEFAULT_OPTIMIZER_CONFIG["maxpos"] == 0.0
-    assert DEFAULT_OPTIMIZER_CONFIG["maxtvr"] == 0.4
-    assert DEFAULT_OPTIMIZER_CONFIG["max_weight"] == 0.0075
-    assert DEFAULT_OPTIMIZER_CONFIG["min_participation_ratio"] == 0.07
-    assert DEFAULT_OPTIMIZER_CONFIG["parti_penalty"] == 0.0
+    assert DEFAULT_OPTIMIZER_CONFIG["maxtvr"] == 0.08
+    assert DEFAULT_OPTIMIZER_CONFIG["max_weight"] == 0.008
+    assert DEFAULT_OPTIMIZER_CONFIG["min_participation_ratio"] == 0.1
+    assert DEFAULT_OPTIMIZER_CONFIG["parti_penalty"] == 0.05
     assert DEFAULT_OPTIMIZER_CONFIG["long_ratio"] == 0.5
     assert DEFAULT_OPTIMIZER_CONFIG["risk_list"].startswith(
         "cap:-0.40:0.30,1,4|cap:-0.20:0.21,1,2|"
