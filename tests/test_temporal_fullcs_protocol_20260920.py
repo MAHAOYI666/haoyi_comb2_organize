@@ -107,6 +107,69 @@ def test_six_item_samples_fit_predict_and_checkpoint(m):
     torch.testing.assert_close(pred, restored.predict(samples[0][3], di=1, ti=100000))
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_prefetch_preserves_training_order_and_updates(m, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA runtime required")
+    torch.manual_seed(19)
+    samples = [(i, 20200102 + i, 100000, {"1d": torch.randn(3, 9, 5)},
+                torch.randn(9), torch.ones(9, dtype=torch.bool)) for i in range(7)]
+    class Dataset:
+        numValidinsts = 9
+        def __len__(self): return len(samples)
+        def __getitem__(self, i): return samples[i]
+    config = dict(device=device, num_features=5, tsDays=3, hiddenSize=8, fcSize=8,
+                  temporal_width=8, numAttnHeads=2, epochs=2, batchSize=3, dropout=.4)
+    plain = m.ResearchModel(dict(config, cuda_prefetch=False)).fit(Dataset())
+    prefetched = m.ResearchModel(dict(config, cuda_prefetch=True)).fit(Dataset())
+    for key, value in plain.model.state_dict().items():
+        torch.testing.assert_close(value, prefetched.model.state_dict()[key], rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA runtime required")
+def test_prefetch_propagates_errors_and_closes_on_early_exit(m):
+    import threading
+    from contextlib import closing
+    sample = (0, 20200102, 100000, torch.randn(1, 3, 9, 5),
+              torch.randn(1, 9), torch.ones(1, 9))
+    model = m.ResearchModel(dict(device="cuda", cuda_prefetch=True))
+    def broken():
+        yield sample
+        raise ValueError("source failed")
+    with pytest.raises(ValueError, match="source failed"):
+        with closing(model._training_batches(broken())) as batches:
+            for _ in batches:
+                pass
+    with closing(model._training_batches([sample] * 4)) as batches:
+        next(batches)
+    assert not any(t.name.startswith("fullcs-prefetch") for t in threading.enumerate())
+
+
+@pytest.mark.parametrize("prior", [None, 20191129])
+def test_replay_first_checkpoint_is_used_only_after_prediction(prior):
+    path = ROOT / "haoyi_models/temporal_fullcs_protocol_20260920/replay_combo.py"
+    spec = importlib.util.spec_from_file_location("replay_combo", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    state = SimpleNamespace(model=None, modelDir="checkpoints")
+    state._train_target_ds = lambda ds: 20191231
+    state._prev_date = lambda ds: 20191230
+    calls = []
+    def load(folder, dt):
+        calls.append(("load", dt))
+        state.model = 20191231 if dt == 20191231 else prior
+    def predict(ds, ti):
+        calls.append(("predict", state.model))
+        return state.model
+    def need_train(ds):
+        load(state.modelDir, 20191231)
+        return False
+    state.LoadCheckpointModel, state.GenComboPos, state.needTrain = load, predict, need_train
+    assert module.ComboBase.CombineHist(state, 20200103, 100000) == prior
+    assert calls == [("load", 20191230), ("predict", prior), ("load", 20191231)]
+    assert state.model == 20191231
+
+
 def test_split_data_interfaces_preserve_original_factor_order_and_label():
     folder = ROOT / "haoyi_models/temporal_fullcs_protocol_20260920"
     cfg = ET.parse(folder / "config.xml")
