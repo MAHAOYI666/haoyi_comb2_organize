@@ -32,9 +32,9 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 默认 opt1 参数的逐项说明见 [opt1_parameters.md](opt1_parameters.md)。
 
-当前默认配置恢复为旧版 optimizer 口径：`maxtvr=0.4`、`max_weight=0.0075`、`min_participation_ratio=0.07`、`parti_penalty=0.0`，并保留完整的 hard/soft universe、risk 和 industry group 列表。
+当前默认配置使用简化 daily-VA optimizer 参数：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，并保留完整的 hard/soft universe、risk 和 industry group 列表。
 
-直接 daily VA 评估默认使用上述旧配置；只有显式传入 `runEval ... --simple` 时，才使用简化配置（`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且各 hard/soft 列表为空）。simple 和 old 的评估结果会写入不同目录。
+直接 daily VA 评估默认使用上述参数；显式传入 `runEval ... --simple` 时，保留上述四项数值并清空各 hard/soft 列表。默认和 simple 的评估结果会写入不同目录。
 
 `config.eg.old.xml` 保留了旧版完整 optimizer 样例，供迁移和口径对比使用。它不会被自动加载；使用时请复制其中的 optimizer 属性，并按实际实验修改路径、日期和输出目录。
 

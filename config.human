@@ -219,7 +219,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。
 
-研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值。当前默认值恢复为旧配置：`maxtvr=0.4`、`max_weight=0.0075`、`min_participation_ratio=0.07`、`parti_penalty=0.0`、`long_ratio=0.5`，并保留完整的 hard/soft universe、risk 和 industry group 列表。直接 daily VA 评估传入 `runEval ... --simple` 时，才切换到简化配置：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且上述列表为空。旧版完整样例见仓库根目录 `config.eg.old.xml`。
+研究员可在 `<strategy>` 下覆盖任意优化器参数；未写的属性继承默认值。当前默认值使用简化优化参数：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`、`long_ratio=0.5`，并保留完整的 hard/soft universe、risk 和 industry group 列表。直接 daily VA 评估传入 `runEval ... --simple` 时，保留上述四项数值并清空上述列表：`maxtvr=0.08`、`max_weight=0.008`、`min_participation_ratio=0.1`、`parti_penalty=0.05`，且上述列表为空。旧版完整样例见仓库根目录 `config.eg.old.xml`。
 
 ```xml
 <strategy start_ds="20200101" end_ds="20240628">
@@ -227,8 +227,8 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
     type="opt1"
     lambda0="0.5"
     benchmark="000905.SH"
-    maxtvr="0.2"
-    max_weight="0.0075"
+    maxtvr="0.08"
+    max_weight="0.008"
     long_ratio="0.5"
     num_mosek_threads="1"
     risk_list="returns120:-0.14:0.14,1|BarraCNE5.BETA:-0.20:0.30,1"
@@ -247,15 +247,15 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数代码；对应读取 `1d_IndexWeight/IndexWeight.<benchmark>`。不改变回测收益报告的评价基准。 |
 | `benchmark_delay` | `1` | 目标风险暴露使用的基准指数权重延迟。 |
 | `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元；opt2 的金额约束不使用该换算参数。 |
-| `maxtvr` | `0.2` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
-| `max_weight` | `0.0075` | 可买股票的单票权重上限。 |
+| `maxtvr` | `0.08` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
+| `max_weight` | `0.008` | 可买股票的单票权重上限。 |
 | `maxtrd` | `0.0` | 单票交易额相对 delay-1 全日成交额的上限。opt1 先用 `target_size` 换算成权重；opt2 直接约束人民币金额。`0` 表示不添加，hard `0:0` universe 强退可突破卖出上限。 |
 | `maxpos` | `0.0` | 单票持仓额相对 delay-1 全日成交额的上限。opt1 先换算成权重，opt2 直接约束人民币金额；`0` 表示不添加，历史持仓超限不强制一次性卖回。 |
 | `liquidity_delay` | `1` | `maxtrd` 和 `maxpos` 使用的 `DailyKline.amount` 交易日延迟。 |
 | `lambda_slp` | `0.0` | 逐股滑点成本在目标函数中的惩罚系数；成本率为 delay-1 `spread_slippage_new / close`。 |
 | `slippage_delay` | `1` | 滑点和对应收盘价的交易日延迟。缺失 spread 的股票不可交易。 |
-| `min_participation_ratio` | `0.07` | 有效持股数相对候选股票数的最低比例。 |
-| `parti_penalty` | `0.0` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
+| `min_participation_ratio` | `0.1` | 有效持股数相对候选股票数的最低比例。 |
+| `parti_penalty` | `0.05` | 对持仓集中度 `sum(weight^2)` 的目标函数惩罚系数；`0` 表示不添加该惩罚。 |
 | `trim_threshold` | `0.00001` | 正 alpha 归一化前的迭代裁剪阈值，也是求解后的绝对小仓位裁剪阈值。 |
 | `long_ratio` | `0.5` | 当前有效截面上保留为正 alpha 的目标做多比例；阈值为 `1 - long_ratio` 分位数。范围 `[0, 1]`。 |
 | `min_valid_instruments` | `200` | 允许启动求解的最少候选股票数。 |
