@@ -10,7 +10,7 @@ version. This file records release notes, published artifacts, and install targe
 - Package name: `combo2`
 - Protected wheel build target: `dist_protected/combo2-1.1.0-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: protected wheel built (KF `7714de2a-f83d-5143-a362-78632d0cde7a`, conda-forge gcc 15.2.0 from `~/local-gcc`); publication is pending.
+- Status: protected wheel built (KF `d1e04467-0bbb-5175-9aa9-4e7bdc1b4513`, conda-forge gcc 15.2.0 from `~/local-gcc`); publication is pending.
 
 Build and install this version:
 

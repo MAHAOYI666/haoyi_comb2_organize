@@ -220,10 +220,10 @@ def print_progress(stage: str, current: int, total: int, start_time: float, deta
 
 
 def format_seconds(seconds: float) -> str:
-    seconds = int(round(seconds))
-    hours, rest = divmod(seconds, 3600)
-    minutes, seconds = divmod(rest, 60)
-    return f"{hours}h{minutes:02d}m{seconds:02d}s" if hours else f"{minutes}m{seconds:02d}s"
+    total = int(round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}h{minutes:02d}m{secs:02d}s" if hours else f"{minutes}m{secs:02d}s"
 
 
 def print_stage(message: str, start_time: float | None = None):
