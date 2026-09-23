@@ -157,7 +157,6 @@ class PerfMonitor:
         if self._writer is None or self._file is None:
             return
         self._writer.writerow(row)
-        self._file.flush()
 
     def _init_gpu(self):
         if not self.config.collect_gpu:
@@ -218,3 +217,16 @@ def progress_line(stage: str, current: int, total: int, start_time: float, detai
 
 def print_progress(stage: str, current: int, total: int, start_time: float, details: str = "", final: bool = False):
     print(progress_line(stage, current, total, start_time, details), end="\n" if final else "\r", flush=True)
+
+
+def format_seconds(seconds: float) -> str:
+    seconds = int(round(seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours}h{minutes:02d}m{seconds:02d}s" if hours else f"{minutes}m{seconds:02d}s"
+
+
+def print_stage(message: str, start_time: float | None = None):
+    """Print one stage line with wall-clock time and, optionally, elapsed time."""
+    elapsed = "" if start_time is None else f" [{format_seconds(time.perf_counter() - start_time)}]"
+    print(f"[STAGE|{time.strftime('%H:%M:%S', time.localtime())}] {message}{elapsed}", flush=True)

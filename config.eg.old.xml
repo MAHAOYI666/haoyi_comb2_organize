@@ -87,7 +87,6 @@
       compression="none"
       data_start_ds="20160101"
       data_offset="1024"
-      cacheDays="64"
     />
   </combo>
   <backtest

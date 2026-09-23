@@ -278,7 +278,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert "output_dir" not in root.find("./combo/paths").attrib
     assert "checkpoint_root" not in root.find("./combo/paths").attrib
     assert set(root.find("./combo/output").attrib) == {"enable_alpha_analysis"}
-    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds", "cacheDays"}
+    assert set(root.find("./combo/loader").attrib) == {"dtype", "compression", "data_start_ds"}
     assert "output_path" not in root.find("./backtest").attrib
     assert root.find("./combo/defaults") is None
 
@@ -301,7 +301,6 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
         "compression",
         "data_start_ds",
         "data_offset",
-        "cacheDays",
     }
     assert parsed["combo"]["runtime"]["sample_times"] == (100000,)
 

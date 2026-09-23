@@ -11,6 +11,7 @@ MODEL_TEMPLATE = r'''
 from __future__ import annotations
 
 import random
+import time
 from typing import Any
 
 import numpy as np
@@ -213,8 +214,10 @@ class ResearchModel:
         best_loss = float("inf")
         best_state_dict = None
         stale_epochs = 0
+        fit_start = time.perf_counter()
 
         for epoch in range(self.epochs):
+            epoch_start = time.perf_counter()
             total_loss = 0.0
             batches = 0
             iterator = iter(dataloader)
@@ -233,9 +236,15 @@ class ResearchModel:
                 self._optimizer_step(optimizer)
                 total_loss += self._loss_to_float(loss)
                 batches += 1
+            lr = scheduler.get_last_lr()[0]
             scheduler.step()
             avg_loss = total_loss / max(batches, 1)
-            print(f"[FIT] epoch={epoch + 1}/{self.epochs} loss={avg_loss:.6f}")
+            now = time.perf_counter()
+            print(
+                f"[FIT] epoch={epoch + 1}/{self.epochs} loss={avg_loss:.6f} "
+                f"best={min(best_loss, avg_loss):.6f} lr={lr:.2e} batches={batches} "
+                f"epoch_s={now - epoch_start:.1f} elapsed_s={now - fit_start:.1f}"
+            )
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 best_state_dict = {key: value.detach().cpu().clone() for key, value in self.model.state_dict().items()}
@@ -404,7 +413,7 @@ CONFIG_TEMPLATE = '''
       early_stopping_patience="5"
     />
 
-    <loader dtype="float16" compression="none" data_start_ds="20160101" cacheDays="64" />
+    <loader dtype="float16" compression="none" data_start_ds="20160101" />
 
   </combo>
 

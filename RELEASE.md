@@ -5,23 +5,60 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.8`
-- Version date: `2026-09-21`
+- Version: `1.1.0`
+- Version date: `2026-09-24`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.0-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: source release prepared; protected-wheel build and publication are pending.
+- Status: protected wheel built (KF `7714de2a-f83d-5143-a362-78632d0cde7a`, conda-forge gcc 15.2.0 from `~/local-gcc`); publication is pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.0-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.0
+
+Configuration (incompatible):
+
+- Remove `<loader cacheDays>`. Configurations that still set it fail with `unsupported config key 'cacheDays' in <loader>`; delete the attribute.
+
+Training data and caching:
+
+- Remove the cross-scope processed source cache, training retention windows, read-access bookkeeping and next-training cache warming. Source data lives only in the current loading scope and is released when the scope ends.
+- When the training window reaches `max_train_days`, the training Dataset is kept across trainings and rolled forward in place, reading only the new tail dates. Otherwise the previous Dataset is released before a full rebuild, so two full training sets never coexist.
+- X/Y/W reserve `ComboTrainDataset.column_slack` (default 10%) spare instrument columns. With the default instrument selection, a changed selection is shifted and reordered in place: removed instruments are dropped, and added instruments get encoded-zero features, zero targets and False weights on retained dates. A selection larger than the reserved capacity, or a Dataset with a custom instrument selection, rebuilds. This relies on features being zero and targets invalid outside the base universe.
+- On the default monthly training calendar every transition changes the selected instruments; in-place remapping replaces a 45-57 s rebuild with a 2.1-2.7 s roll on the 500-day research window, with X and W identical to a cold build.
+- Retraining keeps the previous model object for smoothing instead of copying it through save/load, and keeps prediction feature buffers.
+
+Performance:
+
+- Vectorize `rank` and `zscore` in torch; `rank` generates positions as integers before casting, so float16 long axes match exactly.
+- Read single-day sources without stacking (`DataRegistry.get_day_many`, `ComboDataLoader.source_field_day`) and batch base-universe prefetching.
+- Return a direct memmap slice for single-block reads.
+- The backtest loads close prices once and reuses the benchmark frame.
+- The performance monitor flushes its output file on close instead of after every row.
+
+Evaluation:
+
+- `runEval.py` implements only the two-parquet `run/read` workflow; config overall, `--sim`, `--pnl`, `--va`, `--corr` and `--exposure` are implemented in `evals/comb_eval/run_eval_other.py` with the same CLI.
+
+Runtime output:
+
+- `runCombo` prints `[STAGE|HH:MM:SS]` lines for setup, loop start, the last trading day of each month (completed/total days), each training start and finish (Dataset mode, Dataset and fit time), backtest finalize, alpha analysis and run end, each with its elapsed time.
+- The starter and `eg-torch` models print, per epoch, loss, best loss, learning rate, batch count, epoch time and cumulative fit time.
+
+Validation:
+
+- Full suite 123 passed, 11 skipped (KF `13cb1db7-f703-5ea4-9346-cd8a87c708dd`).
+- End-to-end `runCombo` on the research model, 2020-05-21 to 2020-06-30 (KF `8c5cae75-8002-553d-aa62-cd109c894a0d`).
+- Details and run IDs are in `docs/PERFORMANCE_RESULTS_20260923.md`.
 
 ## 1.0.8
 
