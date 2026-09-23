@@ -150,5 +150,7 @@ part of this configuration.
 ## Not measured
 
 A production-scale multi-training run (2000-day window, 15 epochs, several
-monthly trainings) and the remaining microbenchmarks and edge-case tests in
-`docs/PERFORMANCE_TEST_PLAN.md` were not run.
+monthly trainings) was not run. Edge-case tests and microbenchmarks for
+`DataRegistry.get_day_many`, `ComboBuffer` wraps, model rotation, cleanup
+after training failures, and output parity of every `runEval` route were not
+run beyond the existing test suite.
