@@ -78,11 +78,10 @@ faster because the previous implementation round-tripped through CPU. CPU
 zscore was 1.90-3.80x faster and GPU zscore 1.82-1.88x faster. These are
 operator microbenchmarks, not whole-training speedups.
 
-An optional verbose diagnostic of the slow suite run
+An optional verbose diagnostic of the slow 854.93-second suite run
 (`baaef07b-5ef4-5e6f-b173-8cb2a7687942`) failed after its 900-second
-limit; the Job Gateway returned HTTP 503 for its log, so it provides no
-actionable test failure. The completed 124-pass suite above is the definitive
-correctness result for the current worktree.
+limit with a Job Gateway HTTP 503 for its log. The slowdown did not recur:
+the current 123-pass suite finished in 54.31 seconds.
 
 ## Default isTrainDay rolling and instrument remapping
 
@@ -125,12 +124,31 @@ last 62 training days). Simulating capacity over those 61 transitions,
 A training run takes roughly 21 minutes (15 epochs at the measured 85.6 s per
 epoch), so the saved 45-55 s per monthly training is about 4% of it.
 
-Still required before closing the performance plan:
+## Backtest A/B on saved alpha
 
-1. Run representative backtest A/B on identical data, configuration,
-   CPU/GPU allocation, and saved alpha; record steady and peak aggregate RSS.
-2. Complete the remaining microbenchmarks and focused edge-case tests listed
-   in `docs/PERFORMANCE_TEST_PLAN.md`.
+`tools/benchmark_backtest_ab.py` replays one saved alpha and one set of
+execution prices through `DailyBacktest` built from each source tree. The
+alpha came from the current code on the research model, 2020-05-21 to
+2020-06-30 (27 trading days, 18 with positions after the first training;
+`d138ab82-f43b-5dad-ad89-3c720b640863`). Baseline is `82c62b8` (1.0.8);
+candidate is the current master. Both ran in one 8 CPU, 16 GiB worker
+(`4493e430-a346-58f5-8ef6-95f452379a90`).
 
-The projected Job Gateway identity token was temporarily unreadable, then
-recovered; `kf-submit` worker testing has resumed.
+| Tree | Init | 27 steps | Finalize | Peak RSS |
+| --- | --- | --- | --- | --- |
+| 1.0.8 | 0.29 s | 21.57 s | 0.73 s | 0.827 GiB |
+| current | 0.26 s | 20.25 s | 0.71 s | 0.830 GiB |
+
+All nine output files are byte-identical: holdings, position, yield,
+`daily_pnl.csv`, `executions.csv`, `pnl_summary.csv` and three plots. The
+backtest changes (single close load, cached benchmark) do not change results;
+their time saving is within run-to-run variance because the daily optimizer
+dominates. No delisting settlement occurred in this window, so
+`settlements.csv` was not exercised, and parallel backtest processes were not
+part of this configuration.
+
+## Not measured
+
+A production-scale multi-training run (2000-day window, 15 epochs, several
+monthly trainings) and the remaining microbenchmarks and edge-case tests in
+`docs/PERFORMANCE_TEST_PLAN.md` were not run.
