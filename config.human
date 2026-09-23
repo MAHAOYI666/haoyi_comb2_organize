@@ -159,6 +159,16 @@ starter 的 gen_raw_target 把 D 日样本映射到 label[D-1]。VWAP 100000 表
 
 框架 training_end = D-trainDelay。日期和目标的额外偏移在研究代码中明确实现，框架不从名称推断。CombineHist 先预测，再按现有 isTrainDay 规则判断训练，每天最多检查一次。研究员可以通过现有 combo_base_path 覆盖 isTrainDay。保存、加载和模型平滑使用现有流程。
 
+### 通用训练与验证规则
+
+后续新实验应在研究代码中明确实现以下规则；文档规范不会自动修改公共框架或现有模型的行为：
+
+- 在各实验声明的监督历史范围内，按训练发生时点筛选完整成熟的目标样本，再从候选末尾固定留出最新 21 个不同逻辑交易日验证，同一天的全部采样时点归于同一侧。其余较早样本用于训练，并根据完整目标依赖执行 purge，要求训练目标在首个验证决策时点之前完整可知，不用固定自然日偏移代替依赖检查。
+- 训练前固定验证日期和可评估股票集合。验证不参与梯度更新；每个 epoch 结束后切换到 `eval/no_grad`，计算最终 Alpha 与未预处理五日加权 Reference 目标的有效股票 Pearson。目标权重为 `[5,4,3,2,1]`，不除以 15；先按日内时点等权，再按日期等权汇总为 `val_ic_raw5w`，下一轮训练恢复训练模式。
+- 最多训练 25 个 epoch。以 `val_ic_raw5w` 为早停监控值，只有严格大于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止（`patience=5`）。早停控制训练时长，最终 checkpoint 的选择遵循各实验明确声明的规则。
+
+完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-validation)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。新规范适用于后续新实验；现有代码不会因文档更新自动改变，运行中或已经冻结的旧实验保留原规则。本次仅调整本地文档，不部署、不启动新任务，也不改变现有任务及巡检。
+
 ## 成交回测与输出
 
 `backtest.fee_rate` 默认 `0.00075`，即买入、卖出分别按成交额固定扣除 7.5bp，不随日期变化。

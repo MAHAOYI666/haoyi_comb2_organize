@@ -54,6 +54,14 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 
 完整配置、索引示例、扩展接口及优化器参数见 [config.human](config.human)。示例见 [eg-torch](eg-torch) 和 [eg-lgbm](eg-lgbm)。
 
+### 通用训练与验证规则
+
+后续新实验在各自声明的监督历史范围内，先按训练发生时点筛选完整成熟的目标样本，再从候选末尾固定留出最新 21 个不同逻辑交易日作为验证段；同一天的全部采样时点归于同一侧。其余较早样本用于梯度训练，并根据完整目标依赖执行 purge：训练目标必须在首个验证决策时点之前完整可知。验证日期和可评估股票集合在训练前固定，验证不参与梯度更新。
+
+每个 epoch 结束后，以 `eval/no_grad` 计算 `val_ic_raw5w`：最终 Alpha 与未预处理的五日加权 Reference 目标（权重 `[5,4,3,2,1]`，不除以 15）在有效股票上的 Pearson，先按日内时点等权，再按日期等权汇总。监控值严格大于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止，最多训练 25 轮。早停只控制训练时长，最终 checkpoint 遵循各实验明确声明的选择规则。完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-validation)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。
+
+这项规范适用于后续新实验；现有代码不会因文档更新自动改变，运行中或已经冻结的旧实验保留原规则。本次仅调整本地文档，不部署、不启动新任务，也不改变现有任务及巡检。
+
 ## 回测和评估
 
 execution_price 显式指定 source:column。日内使用 opt2，执行层保留 T+1 锁定、真实持仓和累计换手，每天结算一次。原始成交价、涨跌停和停牌状态共同决定可交易池；不可交易旧持仓冻结，策略若返回池外订单会立即失败。`StockMask2.StockListedDays` 从有效变为缺失时，已有持仓在优化前按零值核销并写入 `settlements.csv`；临时停牌仍沿用最后估值。默认策略的风险、行业和相对方差使用可配置 benchmark，默认 000905.SH；ZZ500 股票池约束和回测报告评价基准独立。
