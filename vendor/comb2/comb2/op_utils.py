@@ -42,24 +42,21 @@ def purify(x: torch.Tensor) -> torch.Tensor:
 
 def rank(x: torch.Tensor, dim: int = 0, pct: bool = False, axis: int | None = None) -> torch.Tensor:
     rank_axis = _resolve_axis(dim, axis, ndim=x.ndim, default=0)
-    moved = np.moveaxis(x.detach().cpu().numpy(), rank_axis, -1)
+    moved = torch.movedim(x, rank_axis, -1)
     flat = moved.reshape(-1, moved.shape[-1])
-    ranked = np.full_like(flat, np.nan, dtype=np.float64)
-    for idx, row in enumerate(flat):
-        valid = np.isfinite(row)
-        count = int(valid.sum())
-        if count == 0:
-            continue
-        order = np.argsort(row[valid], kind="mergesort")
-        values = np.arange(1, count + 1, dtype=np.float64)
-        if pct:
-            values /= count
-        row_rank = np.empty(count, dtype=np.float64)
-        row_rank[order] = values
-        ranked[idx, valid] = row_rank
-    ranked = ranked.reshape(moved.shape)
-    ranked = np.moveaxis(ranked, -1, rank_axis)
-    return torch.as_tensor(ranked, dtype=x.dtype, device=x.device)
+    valid = torch.isfinite(flat)
+    sortable = torch.where(valid, flat, torch.full_like(flat, torch.inf))
+    order = torch.argsort(sortable, dim=-1, stable=True)
+    positions = torch.arange(
+        1, flat.shape[-1] + 1, dtype=torch.int64, device=x.device
+    ).to(x.dtype).expand_as(flat)
+    ranked = torch.empty_like(flat)
+    ranked.scatter_(dim=-1, index=order, src=positions)
+    if pct:
+        counts = valid.sum(dim=-1, keepdim=True).clamp_min(1).to(x.dtype)
+        ranked = ranked / counts
+    ranked = torch.where(valid, ranked, torch.full_like(ranked, torch.nan))
+    return torch.movedim(ranked.reshape(moved.shape), -1, rank_axis)
 
 
 def perc_long(x: torch.Tensor, percentile: float = 0.5, axis: int = -1) -> torch.Tensor:
@@ -152,8 +149,13 @@ def zscore(x: torch.Tensor, eps: float | None = None, dim: int | None = None, ax
     eps = _default_eps(x.dtype) if eps is None else eps
     reduce_axis = _resolve_axis(dim, axis, ndim=x.ndim)
     keepdim = reduce_axis is not None
-    mean = nanmean(x, dim=reduce_axis, keepdim=keepdim)
-    std = nanstd(x, dim=reduce_axis, keepdim=keepdim)
+    safe_x, mask = _nan_masked(x)
+    count = mask.sum(dim=reduce_axis, keepdim=keepdim)
+    denom = torch.clamp(count, min=1).to(dtype=x.dtype)
+    mean = safe_x.sum(dim=reduce_axis, keepdim=keepdim) / denom
+    diff = torch.where(mask, x - mean, torch.zeros_like(x))
+    var = diff.pow(2).sum(dim=reduce_axis, keepdim=keepdim) / denom
+    std = torch.sqrt(torch.clamp(var, min=0.0))
     std = torch.where(torch.isfinite(std) & (std > 0), std, torch.zeros_like(std))
     return (x - mean) / (std + eps)
 

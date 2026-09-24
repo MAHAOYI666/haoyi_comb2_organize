@@ -5,23 +5,76 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.0.8`
-- Version date: `2026-09-21`
+- Version: `1.1.2`
+- Version date: `2026-09-24`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: source release prepared; protected-wheel build and publication are pending.
+- Status: build pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.0.8-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.2
+
+Evaluation:
+
+- Direct daily VA (`runEval p1 p2 run/read`) now starts on the first date on which both signals have a finite non-zero value. Earlier dates, where one file only carries all-zero rows because its model has not started yet, are dropped.
+  - Before this change, such a run built the day-one portfolio from the target alone. It then switched to the blend the next day through a forced rebalance under `maxtvr`.
+  - When the blend added many positive-alpha names, opt1's hard participation limit (Σw² ≤ 1/(min_participation_ratio × candidate count)) became unreachable within the turnover limit. MOSEK then returned no solution, the day had zero orders, and the portfolio froze for the rest of the run.
+- Blended signals (0 < w < 1) are shifted to `long_ratio` again after blending. Each input is shifted before blending, but their weighted sum is not balanced: on the 2021-2023 sweep signals its positive share averaged 0.52-0.55 (up to 0.59), and the daily change in the number of positive names was about 4x that of either input. The participation limit follows that count. Weights 0 and 1 are unchanged, so the target-only column and the pure-signal column match earlier versions.
+- The signal-blend profile is now `long_short_l1_readjust_v2`. Result directories and manifests from `long_short_l1_v1` are not reused.
+
+## 1.1.1
+
+Prediction:
+
+- Model smoothing (`model_smooth_rate < 1`) no longer turns an instrument into NaN when only the old model lacks a prediction for it. Such instruments (e.g. listed after the old model's training) now take the new model's prediction alone. Before, a newly listed stock had no alpha until the next retrain: up to one quarter on a quarterly calendar, up to one year on an annual one. Instruments that only the old model scores stay NaN.
+
+## 1.1.0
+
+Configuration (incompatible):
+
+- Remove `<loader cacheDays>`. Configurations that still set it fail with `unsupported config key 'cacheDays' in <loader>`; delete the attribute.
+
+Training data and caching:
+
+- Remove the cross-scope processed source cache, training retention windows, read-access bookkeeping and next-training cache warming. Source data lives only in the current loading scope and is released when the scope ends.
+- When the training window reaches `max_train_days`, the training Dataset is kept across trainings and rolled forward in place, reading only the new tail dates. Otherwise the previous Dataset is released before a full rebuild, so two full training sets never coexist.
+- X/Y/W reserve `ComboTrainDataset.column_slack` (default 10%) spare instrument columns. With the default instrument selection, a changed selection is shifted and reordered in place: removed instruments are dropped, and added instruments get encoded-zero features, zero targets and False weights on retained dates. A selection larger than the reserved capacity, or a Dataset with a custom instrument selection, rebuilds. This relies on features being zero and targets invalid outside the base universe.
+- On the default monthly training calendar every transition changes the selected instruments; in-place remapping replaces a 45-57 s rebuild with a 2.1-2.7 s roll on the 500-day research window, with X and W identical to a cold build.
+- Retraining keeps the previous model object for smoothing instead of copying it through save/load, and keeps prediction feature buffers.
+
+Performance:
+
+- Vectorize `rank` and `zscore` in torch; `rank` generates positions as integers before casting, so float16 long axes match exactly.
+- Read single-day sources without stacking (`DataRegistry.get_day_many`, `ComboDataLoader.source_field_day`) and batch base-universe prefetching.
+- Return a direct memmap slice for single-block reads.
+- The backtest loads close prices once and reuses the benchmark frame.
+- The performance monitor flushes its output file on close instead of after every row.
+
+Evaluation:
+
+- `runEval.py` implements only the two-parquet `run/read` workflow; config overall, `--sim`, `--pnl`, `--va`, `--corr` and `--exposure` are implemented in `evals/comb_eval/run_eval_other.py` with the same CLI.
+
+Runtime output:
+
+- `runCombo` prints `[STAGE|HH:MM:SS]` lines for setup, loop start, the last trading day of each month (completed/total days), each training start and finish (Dataset mode, Dataset and fit time), backtest finalize, alpha analysis and run end, each with its elapsed time.
+- The starter and `eg-torch` models print, per epoch, loss, best loss, learning rate, batch count, epoch time and cumulative fit time.
+
+Validation:
+
+- Full suite 123 passed, 11 skipped (KF `13cb1db7-f703-5ea4-9346-cd8a87c708dd`).
+- End-to-end `runCombo` on the research model, 2020-05-21 to 2020-06-30 (KF `8c5cae75-8002-553d-aa62-cd109c894a0d`).
+- Details and run IDs are in `docs/PERFORMANCE_RESULTS_20260923.md`.
 
 ## 1.0.8
 

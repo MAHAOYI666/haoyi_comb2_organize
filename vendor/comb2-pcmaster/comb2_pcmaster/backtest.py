@@ -101,6 +101,7 @@ class DailyBacktest:
         self.strategy = self._init_strategy()
         self._init_universe()
         self._load_market_data()
+        self._benchmark_data = None
         self.initialize()
 
     def _init_strategy(self):
@@ -125,8 +126,9 @@ class DailyBacktest:
 
     def _load_market_data(self):
         self.preclose_data = self.dataloader.get_preclose(self.node.start_ds, self.node.end_ds)
+        close = self.dataloader.get_close(self.node.start_ds, self.node.end_ds)
         if self.node.execution_price == "provided":
-            self.vwap_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds)
+            self.vwap_data = close
         elif self.node.execution_price == "vwap30":
             self.vwap_data = self.dataloader.get_vwap(
                 self.node.start_ds,
@@ -137,7 +139,7 @@ class DailyBacktest:
             self.vwap_data = self.dataloader.get_open(self.node.start_ds, self.node.end_ds)
         else:
             raise ValueError(f"Unknown execution_price: {self.node.execution_price}")
-        self.close_data = self.dataloader.get_close(self.node.start_ds, self.node.end_ds).ffill()
+        self.close_data = close.ffill()
         self.market_cap = self.dataloader.get_market_cap(self.node.start_ds, self.node.end_ds).ffill()
         self.suspend = self.dataloader.get_suspend(self.node.start_ds, self.node.end_ds)
         self.limit = self.dataloader.get_limit(self.node.start_ds, self.node.end_ds)
@@ -289,12 +291,14 @@ class DailyBacktest:
             print(message)
 
     def _fetch_benchmark_data(self) -> pd.DataFrame:
-        return load_index_benchmark(
-            self.node.cache_path,
-            start_ds=self.node.start_ds,
-            end_ds=self.node.end_ds,
-            ts_code="000905.SH",
-        )
+        if self._benchmark_data is None:
+            self._benchmark_data = load_index_benchmark(
+                self.node.cache_path,
+                start_ds=self.node.start_ds,
+                end_ds=self.node.end_ds,
+                ts_code="000905.SH",
+            )
+        return self._benchmark_data
 
     def step(
         self,

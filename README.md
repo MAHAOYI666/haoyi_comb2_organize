@@ -66,10 +66,10 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 
 execution_price 显式指定 source:column。日内使用 opt2，执行层保留 T+1 锁定、真实持仓和累计换手，每天结算一次。原始成交价、涨跌停和停牌状态共同决定可交易池；不可交易旧持仓冻结，策略若返回池外订单会立即失败。`StockMask2.StockListedDays` 从有效变为缺失时，已有持仓在优化前按零值核销并写入 `settlements.csv`；临时停牌仍沿用最后估值。默认策略的风险、行业和相对方差使用可配置 benchmark，默认 000905.SH；ZZ500 股票池约束和回测报告评价基准独立。
 
-alpha.parquet 使用 (date,time) 索引。runEval 使用研究员原始目标计算 IC，并读取实际成交日报计算 PnL。--skip-exposure 和 --skip-deciles 控制额外分析。独立的 --sim/--pnl/--corr/--va/--exposure 模式继续接受本地表格。
+alpha.parquet 使用 (date,time) 索引。`runEval` 分为两部分：`runEval alpha1.parquet alpha2.parquet run/read` 的双 parquet 日频分组回测与 PnL/VA 是主流程，实现在 `runEval.py`；其余 config overall、`--sim`、`--pnl`、`--va`、`--corr`、`--exposure` 模式实现在 `evals/comb_eval/run_eval_other.py`，保留原 CLI 兼容。`--skip-exposure` 和 `--skip-deciles` 只影响 overall。overall 中的十档统计是原始 target 的分组均值，不是各档实际成交 PnL。
 
 ## 内存和监控
 
-<combo><loader compression="fp4" cacheDays="64" /></combo> 配置特征编码和降维后来源缓存。`cacheDays` 按每个来源保留交易日数，每个日期包含全部配置 ti；`load_chunk_days` 只控制一次读取和处理的原始块大小。来源分块处理后释放原始数组，保留区外的降维结果也在当前工作块结束后释放；训练数据集一次性保存各时点的特征和标签，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。训练存储不受 `cacheDays` 限制，需按训练天数、时点数、股票数、特征数和来源缓存评估内存；源数据更新后需重建数据集。
+<combo><loader compression="fp4" /></combo> 配置训练特征和预测缓冲区的编码。来源数据仅在当前读取块中复用，作用域结束后释放；训练数据集保存滚动窗口各时点的 X/Y/W，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。需按训练天数、时点数、股票数、特征数、模型和临时读取块评估内存；源数据更新后需重建数据集。
 
-monitor 可记录读取、训练、预测和回测耗时及内存。长任务须按 cgroup 可用资源评估峰值。
+monitor 可记录读取、训练、预测和回测耗时及内存。runCombo 在各主要阶段、回测循环每月末和每次训练开始/结束输出一行 `[STAGE|时刻]`，附累计耗时。长任务须按 cgroup 可用资源评估峰值。

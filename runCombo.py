@@ -63,7 +63,7 @@ from comb2 import ComboBase, ComboDataLoader, ComboTrainDataset, LoaderConfig
 from comb2_simbase import IndexMask, Memmaper2, load_snap_vwap_labels
 from comb2_simbase.cache_layout import daily_label_path
 from comb_eval.report import align_and_mask_evaluation_inputs, calculate_daily_ic_from_signal, load_evaluation_mask
-from vendor.perf_monitor import PerfMonitor, print_progress
+from vendor.perf_monitor import PerfMonitor, print_progress, print_stage
 
 
 def _load_organize_config_module():
@@ -489,10 +489,15 @@ def run_loaded_config(organize_config: dict, config_path: str) -> int:
     if monitor.enabled:
         install_perf_decorators(monitor)
     try:
+        run_start = time.perf_counter()
+        print_stage("setup started")
         runner = ExperimentRunner(organize_config, monitor, config_path=config_path)
         runner.setup()
+        print_stage("setup finished", run_start)
 
         dates = runner.dates()
+        loop_name = "live loop" if runner.live_mode else "backtest loop"
+        print_stage(f"{loop_name} started: {len(dates)} trading days {dates[0]}-{dates[-1]}")
         loop_start = time.perf_counter()
         combine_time = 0.0
         alpha_time = 0.0
@@ -501,7 +506,7 @@ def run_loaded_config(organize_config: dict, config_path: str) -> int:
         verbose = bool(monitor.config.verbose)
         total_updates = len(dates) * len(runner.target_times())
         update_idx = 0
-        for date in dates:
+        for day_idx, date in enumerate(dates, 1):
             date_int = int(date)
             for ti in runner.target_times():
                 update_idx += 1
@@ -528,10 +533,17 @@ def run_loaded_config(organize_config: dict, config_path: str) -> int:
                         f"combine {combine_time:.2f}, alpha {alpha_time:.2f}, output {live_output_time:.2f}",
                         final=update_idx == total_updates,
                     )
+            if day_idx == len(dates) or int(dates[day_idx]) // 100 != date_int // 100:
+                print_stage(f"{loop_name} {date_int}: {day_idx}/{len(dates)} days", loop_start)
 
         if not runner.live_mode:
+            stage_start = time.perf_counter()
             runner.backtest_finalize()
+            print_stage("backtest finalize finished", stage_start)
+            stage_start = time.perf_counter()
             runner.alpha_analysis()
+            print_stage("alpha analysis finished", stage_start)
+        print_stage("run finished", run_start)
     finally:
         monitor.close()
     return 0

@@ -17,6 +17,8 @@ from evals.comb_eval.daily_eval import (
     build_va_table,
     format_daily_evaluation,
     _strategy_config,
+    trim_to_common_active_start,
+    blend_signal,
 )
 
 
@@ -95,10 +97,10 @@ def test_daily_eval_directory_separates_long_ratio_variants(tmp_path):
     )
 
     assert ratio_33 != ratio_50
-    assert ratio_33.name.endswith("_old_long_short_l1_v1_lr0.330000")
-    assert ratio_50.name.endswith("_old_long_short_l1_v1_lr0.500000")
+    assert ratio_33.name.endswith("_old_long_short_l1_readjust_v2_lr0.330000")
+    assert ratio_50.name.endswith("_old_long_short_l1_readjust_v2_lr0.500000")
     assert simple_50 != ratio_50
-    assert simple_50.name.endswith("_simple_long_short_l1_v1_lr0.500000")
+    assert simple_50.name.endswith("_simple_long_short_l1_readjust_v2_lr0.500000")
 
 
 def test_daily_eval_profile_switches_optimizer_defaults():
@@ -187,3 +189,45 @@ def test_excess_returns_match_li_ret_and_preserve_va_deltas():
     np.testing.assert_allclose(excess[0.0].daily_returns.to_numpy(), [0.02, 0.02])
     np.testing.assert_allclose(excess[0.2].daily_returns.to_numpy(), [0.021, 0.021])
     np.testing.assert_allclose(excess[1.0].daily_returns.to_numpy(), [0.04, 0.04])
+
+
+def test_va_starts_on_the_first_day_both_signals_are_active():
+    index = pd.Index([20240102, 20240103, 20240104, 20240105], name="date")
+    columns = pd.Index(["000001", "000002"], name="code")
+    # target active from day 2, myposition (all-zero / NaN before its model starts) from day 3
+    target = pd.DataFrame([[0.0, 0.0], [1.0, -1.0], [2.0, -2.0], [3.0, -3.0]], index=index, columns=columns)
+    myposition = pd.DataFrame([[0.0, np.nan], [0.0, 0.0], [0.5, -0.5], [0.7, -0.7]], index=index, columns=columns)
+
+    my_trimmed, target_trimmed = trim_to_common_active_start(myposition, target)
+
+    assert list(my_trimmed.index) == [20240104, 20240105]
+    assert list(target_trimmed.index) == [20240104, 20240105]
+    pd.testing.assert_frame_equal(target_trimmed, target.loc[[20240104, 20240105]])
+
+
+def test_va_start_trim_rejects_an_all_zero_signal():
+    index = pd.Index([20240102, 20240103], name="date")
+    columns = pd.Index(["000001"], name="code")
+    target = pd.DataFrame([[1.0], [2.0]], index=index, columns=columns)
+    myposition = pd.DataFrame([[0.0], [np.nan]], index=index, columns=columns)
+
+    with pytest.raises(ValueError, match="no finite non-zero alpha"):
+        trim_to_common_active_start(myposition, target)
+
+
+def test_blend_signal_restores_the_long_ratio_after_blending():
+    rng = np.random.default_rng(0)
+    index = pd.Index([20240102, 20240103], name="date")
+    columns = pd.Index([f"{i:06d}" for i in range(400)], name="code")
+    eligible = pd.DataFrame(1.0, index=index, columns=columns)
+    # two side-normalized signals with a median of zero each, but skewed so that their blend is not balanced
+    target = normalize_position_sides(pd.DataFrame(rng.standard_normal((2, 400)) ** 3, index=index, columns=columns))
+    myposition = normalize_position_sides(pd.DataFrame(-rng.standard_exponential((2, 400)) + np.log(2), index=index, columns=columns))
+
+    raw = blend_positions(target, myposition, 0.2)
+    shifted = blend_signal(target, myposition, 0.2, eligible, long_ratio=0.5)
+
+    assert ((raw > 0).sum(axis=1) != 200).any()
+    assert ((shifted > 0).sum(axis=1) == 200).all()
+    pd.testing.assert_frame_equal(blend_signal(target, myposition, 0.0, eligible), target)
+    pd.testing.assert_frame_equal(blend_signal(target, myposition, 1.0, eligible), myposition)

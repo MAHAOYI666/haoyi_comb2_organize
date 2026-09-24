@@ -60,6 +60,8 @@ class MemmapArray:
             res = []
             start_block, start_idx = self._get_block_idx(start)
             end_block, end_idx = self._get_block_idx(stop - 1)
+            if start_block == end_block and step == 1:
+                return self._memmaps[start_block][start_idx : end_idx + 1]
             start_index, end_index = 0, None
             count = 0
             for block_idx in range(start_block, end_block + 1):

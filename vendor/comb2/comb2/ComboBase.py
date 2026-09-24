@@ -12,7 +12,6 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from io import BytesIO
 from typing import Any
 
 import torch
@@ -23,7 +22,7 @@ from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset
 ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
 if str(ORGANIZE_ROOT) not in sys.path:
     sys.path.insert(0, str(ORGANIZE_ROOT))
-from vendor.perf_monitor import print_progress
+from vendor.perf_monitor import format_seconds, print_stage
 
 
 class ComboBase:
@@ -70,6 +69,7 @@ class ComboBase:
         self.buffer_end_didx = {}
         self._predict_feature_window = {}
         self._predict_model_windows = {}
+        self._train_dataset = None
         self.model = None
         self.oldModel = None
         self.model_dt = -1
@@ -299,17 +299,25 @@ class ComboBase:
         pred = self._predict_with_refill(self.model, window, di=ds, ti=ti)
         if self.oldModel is not None and self.model_smooth_rate < 1:
             old = self._predict_with_refill(self.oldModel, window, di=ds, ti=ti)
-            pred = pred * self.model_smooth_rate + old * (1 - self.model_smooth_rate)
+            # Instruments the old model never scored (e.g. listed after its training) take the new
+            # prediction alone instead of becoming NaN until the next retrain.
+            blended = pred * self.model_smooth_rate + old * (1 - self.model_smooth_rate)
+            pred = torch.where(torch.isfinite(old), blended, pred)
         self.node.alpha[:] = pred
         self._set_invalid_alpha(self.loader.gen_valid_mask(ds, ti))
         self._record_alpha(ds, ti)
         self._log_alpha(ds, ti, "predict")
         return self.node.alpha
 
+    def _release_train_dataset(self):
+        dataset = self._train_dataset
+        self._train_dataset = None
+        if dataset is not None:
+            dataset.release_storage()
+
     def Train(self, ds: int):
-        self.buffer.clear()
-        self.buffer_end_didx.clear()
-        self._predict_feature_window.clear()
+        # Feature buffers are independent of model parameters and remain valid
+        # across retraining. Only model-specific projected windows are stale.
         self._predict_model_windows.clear()
         target_ds = self._train_target_ds(ds)
         target_didx = self.loader.date2didx(target_ds)
@@ -319,65 +327,76 @@ class ComboBase:
         if ndays < self.tsDays + self.retDays - 1:
             raise ValueError(f"not enough training window for ds={ds}")
 
-        self.loader.set_training_retention(target_didx, ndays)
+        incremental = ndays == self.max_train_days
 
         if self.model is not None:
-            model_data_in_memory = BytesIO()
-            self.model.save(model_data_in_memory)
-            model_data_in_memory.seek(0)
+            previous_model = self.model
+            self.model = None
             self.oldModel = None
-            self._release_torch_cache("before_old_model_replace")
-            self.oldModel = self.research_model_cls(self._model_config())
-            self.oldModel.load(model_data_in_memory)
-            self._release_torch_cache("after_old_model_replace")
+            if self.model_smooth_rate < 1:
+                self.oldModel = previous_model
+            del previous_model
+            self._release_torch_cache("after_model_rotation")
 
-        print(
-            f"[TRAIN] ds={ds} target_ds={target_ds} "
+        print_stage(
+            f"train started ds={ds} target_ds={target_ds} "
             f"loading_days={loading_days} raw_ndays={raw_ndays} "
             f"ndays={ndays} tsDays={self.tsDays}"
         )
         train_start = time.perf_counter()
         dataset_start = time.perf_counter()
-        dataset = self.research_dataset_cls(
-            self.loader,
-            end_ds=target_ds,
-            ndays=ndays,
-            x_delay=self.retDays,
-            ts_days=self.tsDays,
-            load_chunk_days=self.load_chunk_days,
-            codec=self.loader.codec,
-        )
+        dataset_mode = "full"
+        dataset = self._train_dataset if incremental else None
+        if not incremental and self._train_dataset is not None:
+            self._release_train_dataset()
+            self._release_torch_cache("after_train_dataset_release")
+        if dataset is not None:
+            try:
+                reused = dataset.roll_forward(target_ds, ndays)
+            except Exception:
+                self._release_train_dataset()
+                raise
+            if reused:
+                dataset_mode = "incremental"
+            else:
+                self._release_train_dataset()
+                self._release_torch_cache("before_incremental_dataset_rebuild")
+                dataset = None
+        if dataset is None:
+            dataset = self.research_dataset_cls(
+                self.loader, end_ds=target_ds, ndays=ndays, x_delay=self.retDays,
+                ts_days=self.tsDays, load_chunk_days=self.load_chunk_days,
+                codec=self.loader.codec,
+            )
+            if incremental:
+                self._train_dataset = dataset
+                dataset_mode = "incremental_initial"
         dataset_time = time.perf_counter() - dataset_start
-        print(f"[TRAIN] dataset_len={len(dataset)} valid_instruments={dataset.numValidinsts}")
-        cache_reads = {name: set(keys) for name, keys in dataset.cache_reads.items()}
-        self.model = None
+        print(
+            f"[TRAIN] dataset_len={len(dataset)} "
+            f"valid_instruments={dataset.numValidinsts} "
+            f"dataset_mode={dataset_mode} "
+            f"storage_mb={dataset.storage_nbytes() / 1024 / 1024:.2f} "
+            f"dataset_s={dataset_time:.1f}"
+        )
         self._release_torch_cache("before_new_model_fit")
         self.model = self.research_model_cls(self._model_config())
         fit_start = time.perf_counter()
-        self.model.fit(dataset)
+        try:
+            self.model.fit(dataset)
+        except Exception:
+            if incremental:
+                self._release_train_dataset()
+            raise
         fit_time = time.perf_counter() - fit_start
-        dataset = None
+        if not incremental:
+            dataset = None
         self._release_torch_cache("after_fit_dataset_release")
-        next_target_ds = self._next_training_target_ds(ds)
-        if next_target_ds is not None:
-            transition = self.loader.warm_next_training_cache(
-                self.loader.date2didx(next_target_ds), self.max_train_days,
-                reads=cache_reads,
-            )
-            print(
-                f"[TRAIN_CACHE] next_target_ds={next_target_ds} "
-                f"raw_chunks={transition.raw_chunks} raw_points={transition.raw_points}"
-            )
-        if getattr(self.loader, "verbose", False):
-            print_progress(
-                f"Stage:Train ds={ds}",
-                1,
-                1,
-                train_start,
-                f"dataset {dataset_time:.2f}, fit {fit_time:.2f}",
-                final=True,
-            )
-        print(f"[TRAIN] finished ds={ds} target_ds={target_ds}")
+        print_stage(
+            f"train finished ds={ds} target_ds={target_ds} dataset={dataset_mode} "
+            f"dataset {format_seconds(dataset_time)}, fit {format_seconds(fit_time)}",
+            train_start,
+        )
 
     def needTrain(self, ds: int) -> bool:
         if self._last_train_check_ds == int(ds):
@@ -390,25 +409,6 @@ class ComboBase:
             return True
         model_day = self.LoadCheckpointModel(self.modelDir, target_ds)
         return model_day != target_ds
-
-    def _checkpoint_exists(self, dt: int) -> bool:
-        if not self.modelDir:
-            return False
-        return (Path(self.modelDir) / str(int(dt)) / "model").is_file()
-
-    def _next_training_target_ds(self, ds: int) -> int | None:
-        current_idx = self.loader.date2didx(ds)
-        for candidate_idx in range(current_idx + 1, len(self.loader.universe.dates)):
-            if candidate_idx - self.trainDelay < self.loader.data_start_didx:
-                continue
-            candidate_ds = self.loader.didx2date(candidate_idx)
-            target_ds = self._train_target_ds(candidate_ds)
-            if not self.isTrainDay(target_ds):
-                continue
-            if self._checkpoint_exists(target_ds):
-                continue
-            return target_ds
-        return None
 
     def isTrainDay(self, ds: int) -> bool:
         didx = self.loader.date2didx(ds)

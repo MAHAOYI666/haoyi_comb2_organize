@@ -39,9 +39,11 @@ runEval /path/to/myposition.parquet /path/to/target.parquet run --simple --ti 09
 
 `--simple` 仅影响 direct daily VA 的 optimizer profile：它使用较宽松的简化参数，且不加载默认的 hard/soft universe、risk 和 industry-group 列表。未传 `--simple` 时使用 `config.py` 的旧版默认配置。`--long-ratio`、`--worker`、`--mosek` 和 `--eval-dir` 分别控制做多比例、并行 worker、MOSEK license 和结果目录。
 
-Direct daily VA 的信号混合顺序固定为：对 target 和 myposition 分别做 `long_ratio` 调整；再按天分别对正值多头侧和负值空头侧做 L1 归一化；然后按 `signal=(1-w)*target+w*myposition` 混合；最后把混合信号交给 opt。这里的 `w` 是信号空间的混合系数，不是最终组合资本占比。新口径的结果目录和 manifest 会标记为 `long_short_l1_v1`，不能复用旧混合口径生成的 artifact。
+Direct daily VA 的信号混合顺序固定为：对 target 和 myposition 分别做 `long_ratio` 调整；再按天分别对正值多头侧和负值空头侧做 L1 归一化；然后按 `signal=(1-w)*target+w*myposition` 混合；对 0 < w < 1 的混合信号再做一次同样的 `long_ratio` 调整（两份信号各自正负各半，但加权和的正值比例会漂移到约 0.51–0.59，而 opt1 的硬性参与度约束随正值候选数变化）；最后把混合信号交给 opt。这里的 `w` 是信号空间的混合系数，不是最终组合资本占比。新口径的结果目录和 manifest 会标记为 `long_short_l1_readjust_v2`，不能复用旧混合口径生成的 artifact。
 
 输入 parquet 可以是 `date x code` 的二维表，也可以是 combo dump 的 `(date,time) x code` 表。`--ti` 按 HHMMSS 指定要抽取的时点，例如 `93000` 表示 `09:30:00`；如果两个输入只有一个共同时点，可以省略；存在多个时点时必须显式传入。没有时间维度的纯日频表使用 `093000` 作为执行/label 时点标识。
+
+评估区间从两份信号**都首次出现非零有限值**的那一天开始（在 `--start` 之后），此前模型尚未开始预测、全为 0 的日子会被裁掉。这样第一天的组合就按真实的混合信号建仓，而不是先按 target 建仓、第二天再在换手上限下被迫调仓。
 
 `run` 会执行回测并写入带 profile、TI 和 long_ratio 信息的 manifest；`read` 只读取对应结果，并拒绝复用另一个 profile 或时点的 artifact。VA 的 `0.00` 列是 target-only 基准，中间权重报告相对该基准的 value-add，PnL 使用 ZZ500 excess 口径。
 

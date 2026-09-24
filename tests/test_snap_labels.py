@@ -109,7 +109,7 @@ def test_evaluation_prefetches_snapshot_labels_and_reuses_inputs(tmp_path):
             return "label", "label"
 
     loader = ResearchLoader(LoaderConfig(cache_path=str(tmp_path), data_start_ds=int(dates[1]),
-                                        sample_times=(100000, 110000), cacheDays=64))
+                                        sample_times=(100000, 110000)))
     alpha = pd.DataFrame(np.tile(np.arange(len(loader.mask.code)), (144, 1)),
                          index=pd.MultiIndex.from_product([dates[1:73], loader.sample_times], names=["date", "time"]))
     sample_inputs = {}

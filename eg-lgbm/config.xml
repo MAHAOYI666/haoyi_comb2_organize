@@ -5,7 +5,7 @@
     <paths model_path="model.py" research_loader_path="model.py" />
     <runtime snaptime="example_lgbm" sample_times="100000" seed="42" livetrading="false" trainDelay="2" retDays="5" tsDays="3" model_smooth_rate="0.7" model_keep_num="0" max_train_days="400" verbose="true" />
     <model device="cpu" hiddenSize="16" lr="0.05" epochs="100" num_leaves="31" feature_fraction="0.8" bagging_fraction="0.8" bagging_freq="1" min_data_in_leaf="100" num_threads="-1" />
-    <loader dtype="float16" compression="none" data_start_ds="20160101" data_offset="1024" cacheDays="64" />
+    <loader dtype="float16" compression="none" data_start_ds="20160101" data_offset="1024" />
   </combo>
   <backtest execution_price="execution:execution" daily_metrics_file="daily_pnl.csv" cash="10000000" fee_rate="0.00075" reserve_cash="0.95" verbose="false" universe="base" />
   <monitor enabled="true" output_path="output/perf_metrics.csv" collect_gpu="true" sync_cuda="false" />

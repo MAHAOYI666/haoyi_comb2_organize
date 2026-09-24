@@ -94,7 +94,7 @@ def test_memmap_delay_reduction_same_time_window_and_target(sources):
     root, dates, codes, times, daily, bars, returns = sources
     loader = ResearchLoader(LoaderConfig(
         cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
-        sample_times=(100000, 110000), cacheDays=4,
+        sample_times=(100000, 110000),
     ))
     dataset = ComboTrainDataset(loader, end_ds=dates[-2], ndays=6, ts_days=3)
     _, ds, ti, x, y, w = dataset[0]
@@ -109,7 +109,7 @@ def test_memmap_delay_reduction_same_time_window_and_target(sources):
     assert ds2 == ds and ti2 == 110000
     np.testing.assert_allclose(x2[:, :, 1], bars[row-2:row+1, :5].mean(1), atol=1.e-5)
     torch.testing.assert_close(loader.load_feature_window(ds, 3, ti2), x2)
-    assert all(len({key[0] for key in cache}) <= 4 for cache in loader.registry.processed_cache.values())
+    assert not any(loader.registry.working_cache.values())
 
 
 def test_real_update_refreshes_only_new_snapshot_and_keeps_source_precision(sources):
@@ -240,7 +240,7 @@ class ResearchLoader(ComboDataLoader):
                          "max_train_days": "6", "load_chunk_days": "3"}.items():
         xml.find("combo/runtime").set(attr, value)
     for attr, value in {"dtype": "float32", "data_start_ds": str(dates[1]),
-                        "cacheDays": "5", "compression": "none"}.items():
+                        "compression": "none"}.items():
         xml.find("combo/loader").set(attr, value)
     for attr, value in {"device": "cpu", "epochs": "1", "hiddenSize": "8",
                         "fcSize": "8", "batchSize": "2", "dropout": "0"}.items():
@@ -261,11 +261,9 @@ class ResearchLoader(ComboDataLoader):
     assert combo.GenComboPos(dates[-3], 100000) is not None
     combo.Train(dates[-2])
     assert combo.model is not None
-    assert combo.loader.registry.retention_start_idx == combo.loader.date2didx(dates[3])
-    assert all(
-        len({key[0] for key in cache}) <= 5
-        for cache in combo.loader.registry.processed_cache.values()
-    )
+    assert combo._train_dataset is not None
+    assert combo._train_dataset.storage_nbytes() > 0
+    assert not any(combo.loader.registry.working_cache.values())
 
 
 def test_reduced_source_ops_and_dependency_delay_use_logical_dates(sources):
@@ -279,7 +277,7 @@ def test_reduced_source_ops_and_dependency_delay_use_logical_dates(sources):
             return tuple(values)
     loader = WithOps(LoaderConfig(
         cache_path=str(root), data_start_ds=dates[1],
-        cacheDays=8, dtype=torch.float32,
+        dtype=torch.float32,
     ))
     ds = dates[6]
     values = loader.gen_feature(ds, 100000)
@@ -354,85 +352,103 @@ def test_default_masks_and_infinite_features_use_real_sources(sources):
     assert features[1:, 0].unique().numel() > 100
 
 
-def test_registry_reads_only_missing_ranges_and_keeps_date_retention(sources):
+def test_registry_reads_only_missing_ranges_within_scope(sources):
     root, dates, *_ = sources
-    loader = ResearchLoader(LoaderConfig(cache_path=str(root), data_start_ds=dates[1], cacheDays=8))
+    loader = ResearchLoader(LoaderConfig(cache_path=str(root), data_start_ds=dates[1]))
     registry = loader.registry
-    registry.set_retention_window(loader.date2didx(dates[1]), loader.date2didx(dates[8]))
-    registry.get_data("daily", dates[2], dates[7])
-    stats = registry._ensure_range(("daily",), dates[1], dates[8])
-    assert stats.raw_points == 2 and stats.raw_chunks == 2
-    cache = registry.processed_cache["daily"]
-    assert len({key[0] for key in cache}) == 8
-    assert all(v.untyped_storage().nbytes() == v.numel() * v.element_size() for v in cache.values())
-    assert all(v.dtype == torch.float64 for v in cache.values())
-    registry.set_retention_window(loader.date2didx(dates[2]), loader.date2didx(dates[4]))
-    for ti in loader.sample_times:
-        loader.set_current_ti(ti)
-        registry.get_data("daily", dates[2], dates[4])
-    assert len({key[0] for key in cache}) == 3
-    assert {key[1] for key in cache} == set(loader.sample_times)
-    assert all(
-        key[0] in range(loader.date2didx(dates[2]), loader.date2didx(dates[4]) + 1)
-        for key in cache
-    )
+    with loader.cache_scope():
+        registry.get_data("daily", dates[2], dates[7])
+        stats = registry._ensure_range(("daily",), dates[1], dates[8])
+        assert stats.raw_points == 2 and stats.raw_chunks == 2
+        cache = registry.working_cache["daily"]
+        assert len(cache) == 8
+        assert all(v.untyped_storage().nbytes() == v.numel() * v.element_size() for v in cache.values())
+        assert all(v.dtype == torch.float64 for v in cache.values())
+    assert not any(registry.working_cache.values())
 
 
-def test_training_cache_handoff_preserves_all_times_and_matches_cold_load(sources):
+def test_training_dataset_roll_preserves_all_times_and_matches_cold_load(sources):
     root, dates, codes, times, daily, bars, returns = sources
     loader = ResearchLoader(
         LoaderConfig(
             cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
-            sample_times=(100000, 110000), cacheDays=5, load_chunk_days=3,
+            sample_times=(100000, 110000), load_chunk_days=3,
         )
     )
-    first_end = loader.date2didx(dates[-3])
-    second_end = loader.date2didx(dates[-2])
     first = ComboTrainDataset(loader, dates[-3], ndays=6, ts_days=3)
-    first_start = first.start_didx
-    assert (loader.registry.retention_start_idx, loader.registry.retention_end_idx) == (
-        first_start, first_start + 4,
-    )
-    assert {key[0] for key in loader.registry.processed_cache["bars"]} == set(
-        range(first_start, first_start + 5)
-    )
-    assert {key[1] for key in loader.registry.processed_cache["bars"]} == {100000, 110000}
-    assert all((first_end, ti) in first.cache_reads["bars"] for ti in (100000, 110000))
-
-    loader.source_history("daily", dates[-2], dates[-2])
-    transition = loader.warm_next_training_cache(second_end, 6, reads=first.cache_reads)
-    assert transition.raw_points > 0
-    second_start = second_end - 5
-    assert (loader.registry.retention_start_idx, loader.registry.retention_end_idx) == (
-        second_start, second_start + 4,
-    )
-    assert {key[0] for key in loader.registry.processed_cache["bars"]} == set(
-        range(second_start, second_start + 5)
-    )
-    assert {key[1] for key in loader.registry.processed_cache["bars"]} == {100000, 110000}
-    boundary_row = dates.index(dates[-3])
-    for ti, known_bars in ((100000, 3), (110000, 5)):
-        actual = loader.registry.processed_cache["bars"][(first_end, ti)]
-        expected = torch.as_tensor(bars[boundary_row, :known_bars].mean(0), dtype=torch.float64)
-        torch.testing.assert_close(actual[:, 0], expected)
-
-    second = ComboTrainDataset(loader, dates[-2], ndays=6, ts_days=3)
+    storage_ptrs = {ti: value.data_ptr() for ti, value in first.X.items()}
+    storage_bytes = first.storage_nbytes()
+    assert first.roll_forward(dates[-2], 6)
+    assert first.storage_nbytes() == storage_bytes
+    assert {ti: value.data_ptr() for ti, value in first.X.items()} == storage_ptrs
+    assert not any(loader.registry.working_cache.values())
     cold_loader = ResearchLoader(
         LoaderConfig(
             cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
-            sample_times=(100000, 110000), cacheDays=5, load_chunk_days=3,
+            sample_times=(100000, 110000), load_chunk_days=3,
         )
     )
     cold = ComboTrainDataset(cold_loader, dates[-2], ndays=6, ts_days=3)
-    for idx in (0, len(second) // 2, len(second) - 1):
-        actual = second[idx]
+    for idx in (0, len(first) // 2, len(first) - 1):
+        actual = first[idx]
         expected = cold[idx]
         assert actual[:3] == expected[:3]
         for left, right in zip(actual[3:], expected[3:]):
             torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
-def test_training_handoff_reports_exact_reloads_for_20_day_window(tmp_path):
+@pytest.mark.parametrize("compression", ["none", "fp4"])
+def test_training_dataset_roll_remaps_changed_instruments_like_cold_load(sources, compression):
+    root, dates, codes, times, daily, bars, returns = sources
+    added, removed = 0, 1
+    daily, bars = daily.copy(), bars.copy()
+    daily[:6, added] = np.nan
+    bars[:6, :, added] = np.nan
+    write_source(root / "daily", daily, dates, codes)
+    write_source(root / "bars", bars, dates, codes, times)
+    base = np.ones_like(daily)
+    base[:6, added] = 0
+    base[3:, removed] = 0
+    write_source(stock_mask_path(root, BASE_UNIVERSE_MASK_NAME), base, dates, codes)
+
+    class StandardLoader(ResearchLoader):
+        def preprocess_features(self, values, ds, ti):
+            return ComboDataLoader.preprocess_features(self, values, ds, ti)
+
+        def preprocess_target(self, values, valid_mask, ds, ti):
+            return ComboDataLoader.preprocess_target(self, values, valid_mask, ds, ti)
+
+    def make_loader():
+        return StandardLoader(LoaderConfig(
+            cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
+            compression=compression, sample_times=(100000, 110000), load_chunk_days=3,
+        ))
+
+    loader = make_loader()
+    rolled = ComboTrainDataset(loader, dates[-4], ndays=5, ts_days=2, codec=loader.codec)
+    assert removed in rolled.validinsts and added not in rolled.validinsts
+    storage_ptrs = {ti: value.data_ptr() for ti, value in rolled.X.items()}
+    storage_bytes = rolled.storage_nbytes()
+    assert rolled.roll_forward(dates[-2], 5)
+    assert added in rolled.validinsts and removed not in rolled.validinsts
+    assert rolled.storage_nbytes() == storage_bytes
+    assert {ti: value.data_ptr() for ti, value in rolled.X.items()} == storage_ptrs
+
+    cold_loader = make_loader()
+    cold = ComboTrainDataset(cold_loader, dates[-2], ndays=5, ts_days=2, codec=cold_loader.codec)
+    assert torch.equal(rolled.validinsts, cold.validinsts)
+    for ti in loader.sample_times:
+        assert torch.equal(rolled.X[ti], cold.X[ti])
+    assert torch.equal(rolled.Y, cold.Y)
+    assert torch.equal(rolled.W, cold.W)
+    for idx in range(len(cold)):
+        actual, expected = rolled[idx], cold[idx]
+        assert actual[:3] == expected[:3]
+        for left, right in zip(actual[3:], expected[3:]):
+            torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+
+def test_source_working_cache_does_not_persist_between_training_scopes(tmp_path):
     from comb2_simbase import IndexMask
 
     mask = IndexMask()
@@ -460,55 +476,31 @@ def test_training_handoff_reports_exact_reloads_for_20_day_window(tmp_path):
     loader = FeatureOnlyLoader(
         LoaderConfig(
             data_start_ds=dates[0], dtype=torch.float32, sample_times=(100000,),
-            cacheDays=5, load_chunk_days=7,
+            load_chunk_days=7,
         )
     )
-    first_end = loader.date2didx(dates[19])
-    first_start = first_end - 19
-    with loader.cache_scope(retention=(first_start, first_start + 4)):
-        loader.prefetch_features(dates[:20])
-        loader.release_working_cache()
-    reads = loader.registry.last_scope_reads
-
-    transition = loader.warm_next_training_cache(first_end + 2, 20, reads=reads)
-    assert transition.raw_points == 2
-    assert transition.raw_chunks == 1
-
-    next_start = first_start + 2
-    assert (loader.registry.retention_start_idx, loader.registry.retention_end_idx) == (
-        next_start, next_start + 4,
-    )
-    with loader.cache_scope(retention=(next_start, next_start + 4)):
+    with loader.cache_scope():
+        first_stats = loader.prefetch_features(dates[:20])
+        assert loader.registry.working_cache["bars"]
+    assert first_stats.raw_points == 20
+    assert not any(loader.registry.working_cache.values())
+    with loader.cache_scope():
         next_stats = loader.prefetch_features(dates[2:22])
-        loader.release_working_cache()
-    assert next_stats.raw_points == 15
-    assert next_stats.raw_chunks == 3
+    assert next_stats.raw_points == 20
+    assert not any(loader.registry.working_cache.values())
 
 
-def test_next_training_target_uses_sliced_loader_calendar(sources):
-    from comb2 import ComboBase
-
-    root, dates, *_ = sources
-    loader = ResearchLoader(LoaderConfig(cache_path=str(root), data_start_ds=dates[1]))
-    combo = ComboBase.__new__(ComboBase)
-    combo.loader = loader
-    combo.trainDelay = 0
-    combo.modelDir = None
-    current = loader.universe.dates[-2]
-    assert combo._next_training_target_ds(current) == loader.universe.dates[-1]
-
-
-def test_large_load_chunk_crosses_retention_boundary_without_missing_rows(sources):
+def test_large_load_chunk_without_missing_rows(sources):
     root, dates, *_ = sources
     loader = ResearchLoader(
         LoaderConfig(
             cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
-            sample_times=(100000, 110000), cacheDays=2, load_chunk_days=8,
+            sample_times=(100000, 110000), load_chunk_days=8,
         )
     )
     start = loader.date2didx(dates[2])
     end = loader.date2didx(dates[-2])
-    with loader.cache_scope(retention=(start, start + 1)):
+    with loader.cache_scope():
         loader.set_current_ti(110000)
         loader.prefetch_features([loader.didx2date(i) for i in range(start - 1, end + 1)])
         values = loader.source_history("bars", dates[1], dates[-2])
@@ -523,7 +515,7 @@ def test_bulk_prefetch_requires_scope_and_dataset_owns_scope(sources):
     loader = ResearchLoader(LoaderConfig(cache_path=str(root), data_start_ds=dates[1]))
     with pytest.raises(AssertionError, match="active cache scope"):
         loader.prefetch_features([dates[1]])
-    with loader.cache_scope(retention=(loader.date2didx(dates[1]), loader.date2didx(dates[2]))):
+    with loader.cache_scope():
         with pytest.raises(AssertionError, match="constructed outside"):
             ComboTrainDataset(loader, dates[3], ndays=3, ts_days=2)
 
@@ -540,8 +532,8 @@ def test_daily_array_reader_aligns_reordered_and_missing_stocks(tmp_path):
                                                    [11., float("nan"), 31.]], dtype=torch.float64), equal_nan=True)
 
 
-@pytest.mark.parametrize("cache_days,compression", [(1, "none"), (4, "none"), (4, "fp4"), (4, "fp8")])
-def test_real_prediction_reuses_windows_and_refreshes_live_source(sources, tmp_path, cache_days, compression):
+@pytest.mark.parametrize("compression", ["none", "fp4", "fp8"])
+def test_real_prediction_reuses_windows_and_refreshes_live_source(sources, tmp_path, compression):
     import cProfile
     import pstats
     import xml.etree.ElementTree as ET
@@ -589,7 +581,7 @@ class ResearchLoader(ComboDataLoader):
     for attr, value in {"sample_times": "100000,110000", "tsDays": "2"}.items():
         xml.find("combo/runtime").set(attr, value)
     for attr, value in {"dtype": "float32", "data_start_ds": str(dates[1]),
-                        "cacheDays": str(cache_days), "compression": compression}.items():
+                        "compression": compression}.items():
         xml.find("combo/loader").set(attr, value)
     for attr, value in {"device": "cpu", "epochs": "1", "hiddenSize": "8", "fcSize": "8", "batchSize": "2", "dropout": "0"}.items():
         xml.find("combo/model").set(attr, value)
@@ -615,6 +607,9 @@ class ResearchLoader(ComboDataLoader):
     mixed = combo.GenComboPos(ds, ti)
     torch.testing.assert_close(mixed[10:20], expected[10:20] * combo.model_smooth_rate
                                + old_expected[:10] * (1 - combo.model_smooth_rate))
+    # Only the new model scores 0:10 -> new prediction alone; only the old model scores 20:30 -> NaN.
+    torch.testing.assert_close(mixed[:10], expected[:10])
+    assert torch.isnan(mixed[20:]).all()
     combo.oldModel = None
     before = combo._predict_feature_window[ti].clone()
     block = np.memmap(root / "bars" / "0.ares", dtype=np.float64, mode="r+",
@@ -651,7 +646,7 @@ def test_preloaded_dataset_matches_windows_and_survives_source_removal(sources, 
 
     loader = WindowLoader(LoaderConfig(
         cache_path=str(root), data_start_ds=dates[1], dtype=torch.float32,
-        sample_times=(100000, 110000), cacheDays=2, compression=compression,
+        sample_times=(100000, 110000), compression=compression,
     ))
     stocks = torch.tensor([7, 2, 19])
     data = ComboTrainDataset(
@@ -673,8 +668,7 @@ def test_preloaded_dataset_matches_windows_and_survives_source_removal(sources, 
             x = x.to(torch.float8_e4m3fn).to(loader.dtype)
         y, w = loader.gen_target(ds, ti, ret_days=2)
         expected.append((x, y[stocks], w[stocks]))
-    for cache in loader.registry.processed_cache.values():
-        cache.clear()
+    assert not any(loader.registry.working_cache.values())
     loader.registry.module_cache.clear()
     for name in ("daily", "bars", "returns"):
         (root / name).rename(root / (name + "_unavailable"))
