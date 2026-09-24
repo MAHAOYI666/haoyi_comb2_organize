@@ -39,7 +39,7 @@ DEFAULT_WORKERS = 10
 DEFAULT_LONG_RATIO = 0.5
 TRADING_DAYS = 250
 LABEL_PERIODS = (1, 2, 5, 10, 20)
-SIGNAL_BLEND_PROFILE = "long_short_l1_v1"
+SIGNAL_BLEND_PROFILE = "long_short_l1_readjust_v2"
 ZZ500_TS_CODE = "000905.SH"
 PNL_MODE = "excess_zz500"
 VA_WEIGHTS = (0.00, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20, 1.00)
@@ -510,6 +510,30 @@ def align_positions(myposition: pd.DataFrame, target: pd.DataFrame) -> tuple[pd.
     return left, right
 
 
+def trim_to_common_active_start(
+    myposition: pd.DataFrame, target: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Drop leading dates until both signals have at least one finite non-zero value.
+
+    Alpha files usually carry all-zero rows before a model's first prediction. Starting the VA there
+    builds the day-one portfolio from the target alone and only switches to the blend on the next day,
+    so every weight is first measured through a forced rebalance under the turnover limit.
+    """
+
+    def first_active(frame: pd.DataFrame):
+        values = frame.to_numpy(dtype=np.float64)
+        active = (np.isfinite(values) & (values != 0.0)).any(axis=1)
+        if not active.any():
+            return None
+        return frame.index[int(np.argmax(active))]
+
+    starts = [first_active(myposition), first_active(target)]
+    if any(start is None for start in starts):
+        raise ValueError("myposition or target has no finite non-zero alpha in the selected range")
+    start = max(starts)
+    return myposition.loc[myposition.index >= start], target.loc[target.index >= start]
+
+
 def resolve_cache_path(cache_path: str | Path | None = None) -> Path:
     candidates: list[Path] = []
     if cache_path:
@@ -665,6 +689,26 @@ def _build_backtest_node(
     )
 
 
+def blend_signal(
+    target: pd.DataFrame,
+    myposition: pd.DataFrame,
+    weight: float,
+    eligible: pd.DataFrame | None = None,
+    long_ratio: float = DEFAULT_LONG_RATIO,
+) -> pd.DataFrame:
+    """Blend the two side-normalized signals and, for 0 < weight < 1, re-apply the long_ratio shift.
+
+    Each input is shifted to long_ratio positives before blending, but their weighted sum is not: the positive
+    share of a blend drifts (about 0.51-0.59 for weakly correlated signals) and varies day to day. opt1's hard
+    participation limit scales with the number of positive-alpha candidates, so that drift could make it
+    unreachable under maxtvr. The endpoints (weight 0 and 1) are already shifted and are returned unchanged.
+    """
+    signal = blend_positions(target, myposition, weight)
+    if eligible is None or float(weight) in (0.0, 1.0):
+        return signal
+    return adjust_position(signal, eligible, long_ratio=long_ratio)
+
+
 def _run_weight(
     weight: float,
     target: pd.DataFrame,
@@ -674,9 +718,11 @@ def _run_weight(
     output_root: Path,
     ti: int,
     simple: bool,
+    eligible: pd.DataFrame | None = None,
+    long_ratio: float = DEFAULT_LONG_RATIO,
 ) -> WeightResult:
     ti = _coerce_ti(ti)
-    signal = blend_positions(target, myposition, weight)
+    signal = blend_signal(target, myposition, weight, eligible, long_ratio)
     node = _build_backtest_node(
         cache_path,
         output_root / f"weight_{weight:.2f}",
@@ -750,18 +796,20 @@ def _init_process_worker(
     output_root: Path,
     ti: int,
     simple: bool,
+    eligible: pd.DataFrame | None = None,
+    long_ratio: float = DEFAULT_LONG_RATIO,
 ) -> None:
     global _PROCESS_CONTEXT
     _configure_process_worker()
-    _PROCESS_CONTEXT = (target, myposition, dates, cache_path, output_root, ti, simple)
+    _PROCESS_CONTEXT = (target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio)
 
 
 def _run_weight_in_process(weight: float) -> WeightResult:
     if _PROCESS_CONTEXT is None:
         raise RuntimeError("backtest process worker was not initialized")
-    target, myposition, dates, cache_path, output_root, ti, simple = _PROCESS_CONTEXT
+    target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio = _PROCESS_CONTEXT
     return _run_weight(
-        weight, target, myposition, dates, cache_path, output_root, ti, simple
+        weight, target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio
     )
 
 
@@ -776,7 +824,10 @@ def run_weight_backtests(
     output_root: Path | None = None,
     ti: int = SNAP_TI,
     simple: bool = False,
+    eligible: pd.DataFrame | None = None,
+    long_ratio: float = DEFAULT_LONG_RATIO,
 ) -> dict[float, WeightResult]:
+    """eligible: the base-universe mask used for the long_ratio shift; when given, blends are re-shifted."""
     ti = _coerce_ti(ti)
     simple = bool(simple)
     # evaluate_daily applies long_ratio adjustment first. Normalize each
@@ -795,7 +846,7 @@ def run_weight_backtests(
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_process_worker,
-            initargs=(target, myposition, dates, cache_path, root, ti, simple),
+            initargs=(target, myposition, dates, cache_path, root, ti, simple, eligible, long_ratio),
         ) as executor:
             futures = {
                 executor.submit(_run_weight_in_process, weight): weight
@@ -986,6 +1037,7 @@ def evaluate_daily(
         ti=ti,
     )
     myposition, target = align_positions(myposition, target)
+    myposition, target = trim_to_common_active_start(myposition, target)
     start_ds = max(int(myposition.index.min()), int(target.index.min()))
     end_ds = min(int(myposition.index.max()), int(target.index.max()))
     cache = resolve_cache_path(cache_path)
@@ -1019,6 +1071,8 @@ def evaluate_daily(
         output_root=resolved_eval_dir / "backtest",
         ti=selected_ti,
         simple=simple,
+        eligible=base,
+        long_ratio=long_ratio,
     )
     benchmark_returns = _benchmark_returns_for_index(cache, raw_results[0.0].daily_returns.index)
     results = _apply_excess_returns(raw_results, benchmark_returns)
@@ -1127,6 +1181,7 @@ def read_daily_evaluation(
         (target.index >= requested_start) & (target.index <= requested_end)
     ]
     myposition, target = align_positions(myposition, target)
+    myposition, target = trim_to_common_active_start(myposition, target)
     start_ds = max(int(myposition.index.min()), int(target.index.min()))
     end_ds = min(int(myposition.index.max()), int(target.index.max()))
     base, _ = _load_base_and_limit(cache, start_ds, end_ds, myposition.columns)

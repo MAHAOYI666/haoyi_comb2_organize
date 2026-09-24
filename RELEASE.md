@@ -5,23 +5,39 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.1.0`
+- Version: `1.1.2`
 - Version date: `2026-09-24`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.1.0-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: protected wheel built (KF `d1e04467-0bbb-5175-9aa9-4e7bdc1b4513`, conda-forge gcc 15.2.0 from `~/local-gcc`); publication is pending.
+- Status: build pending.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.1.0-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.2
+
+Evaluation:
+
+- Direct daily VA (`runEval p1 p2 run/read`) now starts on the first date on which both signals have a finite non-zero value. Earlier dates, where one file only carries all-zero rows because its model has not started yet, are dropped.
+  - Before this change, such a run built the day-one portfolio from the target alone. It then switched to the blend the next day through a forced rebalance under `maxtvr`.
+  - When the blend added many positive-alpha names, opt1's hard participation limit (Σw² ≤ 1/(min_participation_ratio × candidate count)) became unreachable within the turnover limit. MOSEK then returned no solution, the day had zero orders, and the portfolio froze for the rest of the run.
+- Blended signals (0 < w < 1) are shifted to `long_ratio` again after blending. Each input is shifted before blending, but their weighted sum is not balanced: on the 2021-2023 sweep signals its positive share averaged 0.52-0.55 (up to 0.59), and the daily change in the number of positive names was about 4x that of either input. The participation limit follows that count. Weights 0 and 1 are unchanged, so the target-only column and the pure-signal column match earlier versions.
+- The signal-blend profile is now `long_short_l1_readjust_v2`. Result directories and manifests from `long_short_l1_v1` are not reused.
+
+## 1.1.1
+
+Prediction:
+
+- Model smoothing (`model_smooth_rate < 1`) no longer turns an instrument into NaN when only the old model lacks a prediction for it. Such instruments (e.g. listed after the old model's training) now take the new model's prediction alone. Before, a newly listed stock had no alpha until the next retrain: up to one quarter on a quarterly calendar, up to one year on an annual one. Instruments that only the old model scores stay NaN.
 
 ## 1.1.0
 
