@@ -299,7 +299,10 @@ class ComboBase:
         pred = self._predict_with_refill(self.model, window, di=ds, ti=ti)
         if self.oldModel is not None and self.model_smooth_rate < 1:
             old = self._predict_with_refill(self.oldModel, window, di=ds, ti=ti)
-            pred = pred * self.model_smooth_rate + old * (1 - self.model_smooth_rate)
+            # Instruments the old model never scored (e.g. listed after its training) take the new
+            # prediction alone instead of becoming NaN until the next retrain.
+            blended = pred * self.model_smooth_rate + old * (1 - self.model_smooth_rate)
+            pred = torch.where(torch.isfinite(old), blended, pred)
         self.node.alpha[:] = pred
         self._set_invalid_alpha(self.loader.gen_valid_mask(ds, ti))
         self._record_alpha(ds, ti)

@@ -607,6 +607,9 @@ class ResearchLoader(ComboDataLoader):
     mixed = combo.GenComboPos(ds, ti)
     torch.testing.assert_close(mixed[10:20], expected[10:20] * combo.model_smooth_rate
                                + old_expected[:10] * (1 - combo.model_smooth_rate))
+    # Only the new model scores 0:10 -> new prediction alone; only the old model scores 20:30 -> NaN.
+    torch.testing.assert_close(mixed[:10], expected[:10])
+    assert torch.isnan(mixed[20:]).all()
     combo.oldModel = None
     before = combo._predict_feature_window[ti].clone()
     block = np.memmap(root / "bars" / "0.ares", dtype=np.float64, mode="r+",
