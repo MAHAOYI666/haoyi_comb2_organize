@@ -510,28 +510,76 @@ def align_positions(myposition: pd.DataFrame, target: pd.DataFrame) -> tuple[pd.
     return left, right
 
 
+# With an explicit --start the window is kept as requested; a few inactive leading days (e.g. one failed
+# prediction) are tolerated, a longer gap means the window starts before the signal exists.
+MAX_LEADING_INACTIVE_DAYS = 5
+
+
+def _first_active(frame: pd.DataFrame):
+    values = frame.to_numpy(dtype=np.float64)
+    active = (np.isfinite(values) & (values != 0.0)).any(axis=1)
+    if not active.any():
+        return None
+    return frame.index[int(np.argmax(active))]
+
+
 def trim_to_common_active_start(
-    myposition: pd.DataFrame, target: pd.DataFrame
+    myposition: pd.DataFrame, target: pd.DataFrame, *, fixed_start: bool = False
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Drop leading dates until both signals have at least one finite non-zero value.
 
     Alpha files usually carry all-zero rows before a model's first prediction. Starting the VA there
     builds the day-one portfolio from the target alone and only switches to the blend on the next day,
     so every weight is first measured through a forced rebalance under the turnover limit.
+
+    With ``fixed_start`` (an explicit start date) nothing is dropped, so every VA run over the same window
+    follows the same PnL path dates; on an inactive leading day the blend is the target alone. More than
+    MAX_LEADING_INACTIVE_DAYS inactive leading days raise instead.
     """
-
-    def first_active(frame: pd.DataFrame):
-        values = frame.to_numpy(dtype=np.float64)
-        active = (np.isfinite(values) & (values != 0.0)).any(axis=1)
-        if not active.any():
-            return None
-        return frame.index[int(np.argmax(active))]
-
-    starts = [first_active(myposition), first_active(target)]
+    starts = [_first_active(myposition), _first_active(target)]
     if any(start is None for start in starts):
         raise ValueError("myposition or target has no finite non-zero alpha in the selected range")
+    if fixed_start:
+        for name, frame, first in (("myposition", myposition, starts[0]), ("target", target, starts[1])):
+            leading = int((frame.index < first).sum())
+            if leading > MAX_LEADING_INACTIVE_DAYS:
+                raise ValueError(
+                    f"{name} has no finite non-zero alpha on the first {leading} days of the requested window "
+                    f"(first active {first}); move --start to on or after that date"
+                )
+            if leading:
+                print(f"[daily_eval] {name}: {leading} inactive leading day(s) kept to hold the requested start",
+                      file=sys.stderr, flush=True)
+        return myposition, target
     start = max(starts)
     return myposition.loc[myposition.index >= start], target.loc[target.index >= start]
+
+
+def check_fixed_window(dates: pd.Index, trading_days: pd.Index, start: str | int | None, end: str | int | None) -> None:
+    """With an explicit window, the evaluated dates must be every trading day in it (same path for every run)."""
+    if start is None and end is None:
+        return
+    lo = _date_int(start) if start is not None else int(dates.min())
+    hi = _date_int(end) if end is not None else int(dates.max())
+    expected = pd.Index([d for d in trading_days if lo <= int(d) <= hi])
+    missing = expected.difference(dates)
+    if len(missing):
+        raise ValueError(
+            f"inputs do not cover the requested window {lo}-{hi}: {len(missing)} trading day(s) missing "
+            f"(first {int(missing.min())}, last {int(missing.max())})"
+        )
+
+
+def check_same_path_dates(results: dict) -> None:
+    """Every weight (0.00 base, blends, 1.00 signal) must be measured over exactly the same dates."""
+    reference = results[0.0].daily_returns.index
+    for weight, result in results.items():
+        if not result.daily_returns.index.equals(reference):
+            index = result.daily_returns.index
+            raise ValueError(
+                f"weight {weight:.2f} PnL path covers {len(index)} days ({index.min()}-{index.max()}), "
+                f"weight 0.00 covers {len(reference)} ({reference.min()}-{reference.max()})"
+            )
 
 
 def resolve_cache_path(cache_path: str | Path | None = None) -> Path:
@@ -1037,15 +1085,21 @@ def evaluate_daily(
         ti=ti,
     )
     myposition, target = align_positions(myposition, target)
-    myposition, target = trim_to_common_active_start(myposition, target)
+    myposition, target = trim_to_common_active_start(myposition, target, fixed_start=start is not None)
     start_ds = max(int(myposition.index.min()), int(target.index.min()))
     end_ds = min(int(myposition.index.max()), int(target.index.max()))
+    # an explicit window is checked against the trading calendar over the whole requested range
+    if start is not None:
+        start_ds = _date_int(start)
+    if end is not None:
+        end_ds = _date_int(end)
     cache = resolve_cache_path(cache_path)
 
     base, _ = _load_base_and_limit(cache, start_ds, end_ds, myposition.columns)
     common_dates = myposition.index.intersection(base.index).sort_values()
     if common_dates.empty:
         raise ValueError("alpha and BaseUnivMask have no overlapping dates")
+    check_fixed_window(common_dates, base.index, start, end)
     myposition = myposition.reindex(common_dates)
     target = target.reindex(common_dates)
     base = base.reindex(common_dates, columns=myposition.columns)
@@ -1074,6 +1128,7 @@ def evaluate_daily(
         eligible=base,
         long_ratio=long_ratio,
     )
+    check_same_path_dates(raw_results)
     benchmark_returns = _benchmark_returns_for_index(cache, raw_results[0.0].daily_returns.index)
     results = _apply_excess_returns(raw_results, benchmark_returns)
     va_table = build_va_table(results)
@@ -1181,7 +1236,7 @@ def read_daily_evaluation(
         (target.index >= requested_start) & (target.index <= requested_end)
     ]
     myposition, target = align_positions(myposition, target)
-    myposition, target = trim_to_common_active_start(myposition, target)
+    myposition, target = trim_to_common_active_start(myposition, target, fixed_start=start is not None)
     start_ds = max(int(myposition.index.min()), int(target.index.min()))
     end_ds = min(int(myposition.index.max()), int(target.index.max()))
     base, _ = _load_base_and_limit(cache, start_ds, end_ds, myposition.columns)

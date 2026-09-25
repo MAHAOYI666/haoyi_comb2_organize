@@ -18,6 +18,9 @@ from evals.comb_eval.daily_eval import (
     format_daily_evaluation,
     _strategy_config,
     trim_to_common_active_start,
+    check_fixed_window,
+    check_same_path_dates,
+    MAX_LEADING_INACTIVE_DAYS,
     blend_signal,
 )
 
@@ -213,6 +216,56 @@ def test_va_start_trim_rejects_an_all_zero_signal():
 
     with pytest.raises(ValueError, match="no finite non-zero alpha"):
         trim_to_common_active_start(myposition, target)
+
+
+def test_explicit_start_keeps_the_window_with_a_few_inactive_leading_days():
+    index = pd.Index([20210105, 20210106, 20210107], name="date")
+    columns = pd.Index(["000001", "000002"], name="code")
+    target = pd.DataFrame([[1.0, -1.0], [2.0, -2.0], [3.0, -3.0]], index=index, columns=columns)
+    # one failed prediction on the first day (all zero), as in a seed run
+    myposition = pd.DataFrame([[0.0, 0.0], [0.5, -0.5], [0.7, -0.7]], index=index, columns=columns)
+
+    my_kept, target_kept = trim_to_common_active_start(myposition, target, fixed_start=True)
+
+    assert list(my_kept.index) == list(index)
+    assert list(target_kept.index) == list(index)
+    # without an explicit start the old behaviour (trim to the first common active day) is unchanged
+    my_trimmed, _ = trim_to_common_active_start(myposition, target)
+    assert list(my_trimmed.index) == [20210106, 20210107]
+
+
+def test_explicit_start_rejects_a_signal_that_starts_well_after_the_window():
+    n = MAX_LEADING_INACTIVE_DAYS + 2
+    index = pd.Index(range(20210104, 20210104 + n), name="date")
+    columns = pd.Index(["000001"], name="code")
+    target = pd.DataFrame(np.ones((n, 1)), index=index, columns=columns)
+    values = np.zeros((n, 1))
+    values[-1] = 1.0
+    myposition = pd.DataFrame(values, index=index, columns=columns)
+
+    with pytest.raises(ValueError, match="move --start"):
+        trim_to_common_active_start(myposition, target, fixed_start=True)
+
+
+def test_fixed_window_requires_every_trading_day_in_the_window():
+    trading = pd.Index([20231227, 20231228, 20231229, 20240102])
+    check_fixed_window(pd.Index([20231227, 20231228, 20231229]), trading, "20231227", "20231229")
+    check_fixed_window(pd.Index([20231227, 20231228]), trading, None, None)
+    with pytest.raises(ValueError, match="1 trading day"):
+        # a signal that stops one day early would shorten the path
+        check_fixed_window(pd.Index([20231227, 20231228]), trading, "20231227", "20231229")
+
+
+def test_every_weight_must_share_the_same_path_dates():
+    dates = pd.Index([20240102, 20240103, 20240104], name="date")
+
+    def result(weight, idx):
+        return WeightResult(weight=weight, daily_returns=pd.Series(0.0, index=idx))
+
+    same = {0.0: result(0.0, dates), 0.2: result(0.2, dates), 1.0: result(1.0, dates)}
+    check_same_path_dates(same)
+    with pytest.raises(ValueError, match="weight 1.00"):
+        check_same_path_dates({0.0: result(0.0, dates), 1.0: result(1.0, dates[1:])})
 
 
 def test_blend_signal_restores_the_long_ratio_after_blending():

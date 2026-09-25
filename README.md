@@ -60,6 +60,8 @@ execution_price 显式指定 source:column。日内使用 opt2，执行层保留
 
 alpha.parquet 使用 (date,time) 索引。`runEval` 分为两部分：`runEval alpha1.parquet alpha2.parquet run/read` 的双 parquet 日频分组回测与 PnL/VA 是主流程，实现在 `runEval.py`；其余 config overall、`--sim`、`--pnl`、`--va`、`--corr`、`--exposure` 模式实现在 `evals/comb_eval/run_eval_other.py`，保留原 CLI 兼容。`--skip-exposure` 和 `--skip-deciles` 只影响 overall。overall 中的十档统计是原始 target 的分组均值，不是各档实际成交 PnL。
 
+双 parquet VA 的所有 PnL 路径（0.00 target、各混合权重、1.00 信号）使用同一组日期，不一致时报错。未传 `--start` 时，起点是两个信号都有非零值的第一个共同日；传入 `--start`/`--end` 时严格使用该窗口，便于不同种子或变体在同一路径上比较：信号开头最多允许 5 个全零日（当天只用另一个信号），超过即报错；窗口内缺少任一交易日也报错，不会悄悄缩短路径。
+
 ## 内存和监控
 
 <combo><loader compression="fp4" /></combo> 配置训练特征和预测缓冲区的编码。来源数据仅在当前读取块中复用，作用域结束后释放；训练数据集保存滚动窗口各时点的 X/Y/W，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。需按训练天数、时点数、股票数、特征数、模型和临时读取块评估内存；源数据更新后需重建数据集。
