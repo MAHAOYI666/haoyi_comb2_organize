@@ -5,10 +5,10 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.1.2`
-- Version date: `2026-09-24`
+- Version: `1.1.3`
+- Version date: `2026-09-25`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.3-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
 - Status: build pending.
 
@@ -16,12 +16,28 @@ Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.1.2-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.3-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.3
+
+Evaluation:
+
+- All PnL paths of a direct daily VA share the same dates. Every weight (0.00 target, the blends, 1.00 signal) is backtested over one date set; `runEval` now checks this and raises if any weight's path covers different dates.
+- Default (no `--start`): unchanged from 1.1.2. The window starts on the first date on which both signals have a finite non-zero value.
+- With an explicit `--start` / `--end` the window is used exactly as requested, so runs that should be compared (seeds, variants) follow the same path dates:
+  - No leading dates are dropped. On a leading day where one signal is all zero (e.g. one failed prediction), the blend is the other signal alone and the pure-signal column holds its previous position. Up to 5 such days are allowed; more raise, because the window starts before the signal exists.
+  - Every trading day in the window must be present in both inputs; a signal that starts late or stops early raises instead of silently shortening the path.
+  - Why: a transformerdifftime seed with an all-zero first prediction started its 2021-2023 VA one day later than the other seeds. That one-day shift changed the target-only column from 10.01% to 9.03% a year, so the seeds were not comparable.
+
+Validation:
+
+- `pytest -q tests/test_daily_eval.py`: 15 passed (4 new).
+- `pytest -q --ignore=output --ignore=build --ignore=dist_protected --ignore=0714.search.bad.performance --ignore=optuna_runs`: 142 passed, 11 skipped, 16 warnings (run on KF; `output/` holds old source copies whose test modules clash with `tests/`).
 
 ## 1.1.2
 
