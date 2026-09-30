@@ -22,3 +22,6 @@ runFactorCorr.py
 
 /artifacts/
 /spectral_shrinkwhite_factor_mapping.md
+/data_audits/
+/docs/
+/mosek.lic
