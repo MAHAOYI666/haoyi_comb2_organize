@@ -4,6 +4,23 @@ combo2 将研究员的 Memmap 数据、源级降维、数组模型、训练、�
 
 发布包名为 combo2，版本由 VERSION 管理；发布记录见 RELEASE.md。
 
+## Notebook 运行环境
+
+项目位于 `/home/mahaoyi/projects/haoyi_comb2_organize`，相关模型位于相邻的 `combo26q4`。
+
+```bash
+source /home/mahaoyi/.local/bin/haoyi-env.sh
+cd /home/mahaoyi/projects/haoyi_comb2_organize
+runCombo --help
+runEval --help
+```
+
+激活后项目 `bin/` 中的命令使用当前源码。实验显式导入的已安装 combo2 保持独立，冻结实验仍按其包版本与哈希验证。Python 解释器为 `/home/mahaoyi/.venvs/haoyi_comb2_py313/bin/python`。
+
+行情缓存默认 `/mnt/cache`，因子位于 `/mnt/factors/QsimPool` 和 `/mnt/factors/ZsimPool`；这些输入只读。运行输出使用各配置声明的项目内目录。`cache_path` 指向 AshareCache 的父目录，XML 路径支持 `~` 和环境变量展开；相对路径以 XML 所在目录为基准。
+
+许可证由 `MOSEKLM_LICENSE_FILE` 指定，默认 `/home/mahaoyi/mosek/mosek.lic`；`runEval --mosek` 可显式覆盖。GPU 训练须在获得 GPU 的 Notebook 或作业中执行，CUDA 依赖已安装不代表当前有 GPU。
+
 ## 安装方式
 
 下载这个仓库即可。当前仓库已经临时内置所需源码：
@@ -21,7 +38,7 @@ vendor/
 默认持仓策略依赖 `Mosek==11.0.25`。受保护 wheel 已声明该依赖；直接从源码运行时需在当前 Python 环境安装 MOSEK，并通过环境变量提供有效许可证：
 
 ```bash
-export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+export MOSEKLM_LICENSE_FILE="$HOME/mosek/mosek.lic"
 ```
 
 源码仓库根目录包含已脱敏的 `mosek.lic`。受保护 wheel 不内嵌许可证；wheel 部署环境仍需通过 `MOSEKLM_LICENSE_FILE` 指向获准使用的副本。
@@ -61,6 +78,8 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 每个 epoch 结束后，以 `eval/no_grad` 计算 `val_ic_raw5w`：最终 Alpha 与未预处理的五日加权 Reference 目标（权重 `[5,4,3,2,1]`，不除以 15）在有效股票上的 Pearson，先按日内时点等权，再按日期等权汇总。监控值严格大于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止，最多训练 25 轮。早停只控制训练时长，最终 checkpoint 遵循各实验明确声明的选择规则。完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-validation)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。
 
 这项规范适用于后续新实验；现有代码不会因文档更新自动改变，运行中或已经冻结的旧实验保留原规则。本次仅调整本地文档，不部署、不启动新任务，也不改变现有任务及巡检。
+
+haoyi_models 后续新实验默认显式配置 `model_keep_num="0"`，不要求保存正式 checkpoints；epoch 候选权重仅为选模临时保留，续训状态按需启用。预测、回测、指标、日志和其他正常 output 继续完整生成并保留，`alpha_history.pt` 等预测文件不属于可省略的模型权重。需要独立推理、teacher 权重或恢复能力时，在实验中声明必要的保留范围；运行中及既有实验不自动迁移。完整规则见[基础规范第 3.6 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#36-模型文件与正常-output-的保留)。
 
 ## 回测和评估
 

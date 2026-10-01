@@ -45,13 +45,13 @@ def main():
     torch.set_num_threads(8)
     torch.set_num_interop_threads(1)
     assert torch.cuda.is_available(), "GPU worker required"
-    model_path = Path("/home/mengkang/autodl/0919.virtual.combo/mlpresiduallabelcp/Model.py")
+    model_path = Path("/home/mahaoyi/projects/combo26q4/mlp_residual/Model.py")
     spec = importlib.util.spec_from_file_location("comb2_fit_memory_model", model_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     loader = module.ResearchLoader(LoaderConfig(
-        cache_path="/home/data/CacheData",
+        cache_path="/mnt/cache",
         data_start_ds=20170101,
         dtype=torch.float16,
         compression="fp4",

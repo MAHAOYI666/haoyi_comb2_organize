@@ -9,7 +9,7 @@
   remains valid with the current parser.
 -->
 <config>
-  <constants cache_path="data/Cache" output_root="output-old" />
+  <constants cache_path="/mnt/cache" output_root="output-old" />
   <strategy start_ds="20160111" end_ds="20200101">
     <optimizer
       type="opt1"

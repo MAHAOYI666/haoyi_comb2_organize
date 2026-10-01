@@ -21,9 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT_DIR = REPO_ROOT / "optuna_framework" / "diagnostic_results" / "model_output_compare"
 
 # Original pasted defaults. They can be overridden by CLI arguments.
-BASE = "/root/autodl-tmp/haoyi_comb2_organize/eg-torch/output-torch"
+BASE = "/home/mahaoyi/projects/haoyi_comb2_organize/eg-torch/output-torch"
 CANDIDATES = [
-    "/root/autodl-tmp/haoyi_comb2_organize/eg-torch/output-torch-tcn-only-ablation",
+    "/home/mahaoyi/projects/haoyi_comb2_organize/eg-torch/output-torch-tcn-only-ablation",
 ]
 
 

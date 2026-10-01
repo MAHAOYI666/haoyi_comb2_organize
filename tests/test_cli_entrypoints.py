@@ -295,7 +295,7 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
     assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
     assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
-    assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
+    assert parsed["constants"]["cache_path"] == "/mnt/cache"
     assert set(parsed["combo"]["loader"]) == {
         "dtype",
         "compression",

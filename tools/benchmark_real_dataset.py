@@ -63,13 +63,13 @@ def main():
     parser.add_argument("--no-rebuild", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(8)
-    model_path = Path("/home/mengkang/autodl/0919.virtual.combo/mlpresiduallabelcp/Model.py")
+    model_path = Path("/home/mahaoyi/projects/combo26q4/mlp_residual/Model.py")
     spec = importlib.util.spec_from_file_location("comb2_real_benchmark_model", model_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     loader = module.ResearchLoader(LoaderConfig(
-        cache_path="/home/data/CacheData",
+        cache_path="/mnt/cache",
         data_start_ds=20170101,
         dtype=torch.float16,
         compression="fp4",

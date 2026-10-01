@@ -307,7 +307,7 @@ class ResearchLoader(ComboDataLoader):
     def data_requirements(self):
         root = ashare_cache_path(self.config.cache_path)
         return (
-            DataItem("factor", path="factors/example", delay=1),
+            DataItem("factor", path="/mnt/factors/QsimPool/qsim_ext_20260826_001", delay=1),
             DataItem("label", module="builtin.snap_label", delay=1),
             DataItem("execution", path=str(root / "1d_IntraVwap" / "IntraVwap.Vwap30.{ti:06d}")),
         )
@@ -325,7 +325,7 @@ class ResearchLoader(ComboDataLoader):
 CONFIG_TEMPLATE = '''
 <config>
   <constants
-    cache_path="data/Cache"
+    cache_path="/mnt/cache"
     output_root="output"
 
   />

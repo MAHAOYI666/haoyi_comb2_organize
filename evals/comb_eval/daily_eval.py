@@ -438,6 +438,22 @@ def _write_daily_eval_artifacts(
     temporary_manifest.replace(eval_dir / "manifest.json")
 
 
+def _artifact_input_matches(recorded: str, current: Path) -> bool:
+    """Identify an input by its stable project-relative location after moving a checkout."""
+    saved = Path(recorded).expanduser()
+    current = current.resolve()
+    try:
+        if saved.resolve() == current:
+            return True
+    except OSError:
+        pass
+    for root in (ORGANIZE_ROOT, ORGANIZE_ROOT.with_name("combo26q4")):
+        if current.is_relative_to(root):
+            suffix = (root.name, *current.relative_to(root).parts)
+            return saved.is_absolute() and saved.parts[-len(suffix):] == suffix
+    return False
+
+
 def _read_daily_eval_artifacts(
     eval_dir: Path,
     *,
@@ -452,9 +468,9 @@ def _read_daily_eval_artifacts(
             f"daily evaluation artifacts not found: {manifest_path}; run the evaluation first"
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if Path(manifest["myposition_path"]).resolve() != myposition_path.resolve():
+    if not _artifact_input_matches(manifest["myposition_path"], myposition_path):
         raise ValueError("read artifacts belong to a different myposition parquet")
-    if Path(manifest["target_path"]).resolve() != target_path.resolve():
+    if not _artifact_input_matches(manifest["target_path"], target_path):
         raise ValueError("read artifacts belong to a different target parquet")
     artifact_ti = _coerce_ti(manifest.get("ti", SNAP_TI))
     if artifact_ti != _coerce_ti(ti):
@@ -583,34 +599,37 @@ def check_same_path_dates(results: dict) -> None:
 
 
 def resolve_cache_path(cache_path: str | Path | None = None) -> Path:
-    candidates: list[Path] = []
     if cache_path:
-        candidates.append(Path(cache_path).expanduser())
-    for env_name in ("COMB2_CACHE_PATH", "FACTORSIM_CACHE_PATH"):
-        value = os.environ.get(env_name)
-        if value:
-            candidates.append(Path(value).expanduser())
-    configured = Path(DEFAULT_CONFIG["constants"]["cache_path"]).expanduser()
-    candidates.append(configured if configured.is_absolute() else ORGANIZE_ROOT / configured)
-    candidates.extend(
-        [
-            Path("/root/ml-data1-pvc/factorsim_data/Cache"),
-            Path("/root/autodl/data/Cache"),
+        candidates = [Path(os.path.expandvars(str(cache_path))).expanduser()]
+    else:
+        candidates = [
+            Path(os.path.expandvars(value)).expanduser()
+            for name in ("COMB2_CACHE_PATH", "FACTORSIM_CACHE_PATH")
+            if (value := os.environ.get(name))
         ]
-    )
+        configured = Path(DEFAULT_CONFIG["constants"]["cache_path"]).expanduser()
+        candidates.extend([
+            configured if configured.is_absolute() else ORGANIZE_ROOT / configured,
+            Path("/mnt/cache"),
+            ORGANIZE_ROOT / "data" / "Cache",
+        ])
     seen: set[Path] = set()
+    inaccessible: list[str] = []
     for candidate in candidates:
-        candidate = candidate.resolve()
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        if candidate.name == "AshareCache" and candidate.is_dir():
-            candidate = candidate.parent
-        if (candidate / "AshareCache").is_dir():
-            return candidate
+        try:
+            candidate = candidate.resolve()
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.name == "AshareCache" and candidate.is_dir():
+                candidate = candidate.parent
+            if (candidate / "AshareCache").is_dir():
+                return candidate
+        except OSError as exc:
+            inaccessible.append(f"{candidate}: {exc.strerror or type(exc).__name__}")
     searched = ", ".join(str(path) for path in candidates)
-    raise FileNotFoundError(f"AshareCache not found; searched: {searched}")
-
+    detail = "; inaccessible: " + "; ".join(inaccessible) if inaccessible else ""
+    raise FileNotFoundError(f"AshareCache not found; searched: {searched}{detail}")
 
 def _load_base_and_limit(cache_path: Path, start_ds: int, end_ds: int, columns: pd.Index) -> tuple[pd.DataFrame, pd.DataFrame]:
     loader = DataLoader(cache_path=str(cache_path))
@@ -1217,7 +1236,7 @@ def read_daily_evaluation(
             f"read artifacts use long_ratio={artifact_long_ratio:g}, "
             f"but requested long_ratio={long_ratio:g}"
         )
-    cache = resolve_cache_path(cache_path or manifest.get("cache_path"))
+    cache = resolve_cache_path(cache_path)
     if manifest.get("pnl_mode") != PNL_MODE:
         benchmark_returns = _benchmark_returns_for_index(
             cache, results[0.0].daily_returns.index

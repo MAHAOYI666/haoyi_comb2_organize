@@ -24,9 +24,8 @@ def _find_repo_root(start: Path, explicit: str | None = None) -> Path:
     env_root = os.environ.get("COMB2_ORGANIZE_ROOT")
     if env_root:
         candidates.append(Path(env_root).expanduser())
-    candidates.extend([start, *start.parents])
     for parent in [start, *start.parents]:
-        candidates.append(parent / "comb2_organize")
+        candidates.extend([parent, parent / "haoyi_comb2_organize", parent / "comb2_organize"])
 
     for candidate in candidates:
         root = candidate.resolve()

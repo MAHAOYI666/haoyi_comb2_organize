@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import importlib.util
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -131,8 +132,8 @@ SIMPLE_OPTIMIZER_CONFIG = {
 
 DEFAULT_CONFIG = {
     "constants": {
-        "cache_path": "data/Cache",
-        "output_root": str(COMB2_ROOT / "output"),
+        "cache_path": os.environ.get("COMB2_CACHE_PATH") or os.environ.get("FACTORSIM_CACHE_PATH") or "/mnt/cache",
+        "output_root": str(ORGANIZE_ROOT / "output"),
     },
     "strategy": {
         "start_ds": 20160111,
@@ -292,7 +293,7 @@ def _parse_section_attributes(element: ET.Element | None, default_section: dict,
 def _resolve_path(value: str | None, base_dir: Path) -> str | None:
     if value is None:
         return None
-    path = Path(value).expanduser()
+    path = Path(os.path.expandvars(value)).expanduser()
     if not path.is_absolute():
         path = base_dir / path
     return str(path.resolve())

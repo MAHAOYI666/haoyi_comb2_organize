@@ -14,7 +14,7 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
 
 ```xml
 <config>
-  <constants cache_path="/data/Cache" output_root="output" />
+  <constants cache_path="/mnt/cache" output_root="output" />
   <strategy start_ds="20241028" end_ds="20241029">
     <optimizer type="opt2" />
   </strategy>
@@ -183,7 +183,8 @@ opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计�
 
 输出：
 
-- train.log、checkpoints/：运行日志和模型。
+- train.log：运行日志，正常生成并保留。
+- checkpoints/：可选的持久模型，由 `model_keep_num` 和实验声明决定；不保存模型不影响其余正常输出要求。
 - alpha.parquet、alpha_history.pt：以 (date,time) 为样本索引。
 - daily_ic、ic_by_time.csv：原始研究目标的 IC。
 - backtest/daily_pnl.csv、pnl_summary.csv：实际成交日终资产及汇总。
@@ -192,6 +193,8 @@ opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计�
 - eval_report/：按时点评估 target IC、分层目标均值、Barra/CAP 暴露，以及实际成交 PnL。
 
 runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层输出是各层原始 target 均值，不把任意研究目标当作成交收益。需要 alpha.parquet 和成交日报。--skip-exposure 可跳过暴露，--skip-deciles 可跳过分层。--sim/--pnl/--corr/--va/--exposure 继续支持独立的本地表格分析。
+
+haoyi_models 后续新实验默认显式使用 `model_keep_num="0"` 禁用框架正式 checkpoint 保存；模型自行写出的 epoch 候选与 optimizer/scheduler/RNG 续训状态需另行管理，不默认长期积累。训练仍须恢复选中权重并完成上述正常 output，不能按 `.pt` 后缀批量禁用或删除预测文件。确需持久模型时声明用途、保留范围及处理方式；本规则不改变既有实验。详见[基础规范第 3.6 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#36-模型文件与正常-output-的保留)。
 
 ## 监控与运行参数
 
@@ -226,7 +229,7 @@ monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sy
 默认优化器要求安装 `Mosek==11.0.25`，并在运行前指向有效许可证：
 
 ```bash
-export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
+export MOSEKLM_LICENSE_FILE="$HOME/mosek/mosek.lic"
 ```
 
 源码仓库根目录提供已脱敏的 `mosek.lic`；受保护 wheel 不内嵌许可证，部署时需单独提供该文件。

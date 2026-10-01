@@ -39,24 +39,24 @@ CONFIG = {
     # 候选模型输出目录，可以填多个
     # key 是你给它起的名字，value 是模型输出目录
     "CANDIDATE_DIRS": {
-        # "best_trial": "/root/autodl-tmp/haoyi_comb2_organize/eg-torch/output-torch-xxx",
+        # "best_trial": "/home/mahaoyi/projects/haoyi_comb2_organize/eg-torch/output-torch-xxx",
     },
 
     # baseline 不同平滑参数 / banding 参数下的回测输出目录
     # 注意：这些目录必须已经跑好回测。本脚本不会重跑。
     # 用于做“换手率 vs 净 Sharpe”的 baseline 前沿曲线
     "BASELINE_FRONTIER_DIRS": {
-        # "baseline_smooth_0.00": "/root/.../output-baseline-smooth-0.00",
-        # "baseline_smooth_0.05": "/root/.../output-baseline-smooth-0.05",
-        # "baseline_smooth_0.10": "/root/.../output-baseline-smooth-0.10",
+        # "baseline_smooth_0.00": "/path/to/output-baseline-smooth-0.00",
+        # "baseline_smooth_0.05": "/path/to/output-baseline-smooth-0.05",
+        # "baseline_smooth_0.10": "/path/to/output-baseline-smooth-0.10",
     },
 
     # 所有 Optuna trial 的输出目录。
     # 用于 Reality Check / DSR。
     # 如果你现在只有 best trial，可以先不填。
     "TRIAL_DIRS": {
-        # "trial_000": "/root/.../output-trial-000",
-        # "trial_001": "/root/.../output-trial-001",
+        # "trial_000": "/path/to/output-trial-000",
+        # "trial_001": "/path/to/output-trial-001",
     },
 
     # Optuna trials dataframe，可选。
@@ -68,9 +68,9 @@ CONFIG = {
     # 如果你 Phase B 对 best config 跑了多个 seed，把这些 seed 输出目录填进来。
     # 用于检查 best-baseline 是否落在 2 * sigma_seed 训练噪声内。
     "PHASEB_SEED_DIRS": {
-        # "seed_0": "/root/.../output-best-seed-0",
-        # "seed_1": "/root/.../output-best-seed-1",
-        # "seed_2": "/root/.../output-best-seed-2",
+        # "seed_0": "/path/to/output-best-seed-0",
+        # "seed_1": "/path/to/output-best-seed-1",
+        # "seed_2": "/path/to/output-best-seed-2",
     },
 
     # fee sweep 倍数。

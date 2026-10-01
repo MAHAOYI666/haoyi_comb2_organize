@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-pct", type=float, default=10.0, help="For --corr, long-holding overlap top percentage; default 10")
     parser.add_argument("--cache-path", help="For --exposure, parent directory containing AshareCache")
     parser.add_argument("--eval-dir", help="For direct daily VA, persistent result directory used by run/read")
-    parser.add_argument("--mosek", default="/root/mosek/mosek.lic", help="MOSEK license file for direct daily evaluation; default: /root/mosek/mosek.lic")
+    parser.add_argument("--mosek", default=os.environ.get("MOSEKLM_LICENSE_FILE") or str(Path.home() / "mosek" / "mosek.lic"), help="MOSEK license for direct daily evaluation; defaults to MOSEKLM_LICENSE_FILE or ~/mosek/mosek.lic")
     parser.add_argument("--worker", type=int, default=10, help="For direct daily VA, concurrent weight backtests; default 10")
     parser.add_argument("--long-ratio", type=float, default=DEFAULT_LONG_RATIO, help="For direct daily VA, long bucket ratio used by long-short adjustment; default 0.5")
     parser.add_argument("--ti", type=int, help="For direct daily VA, execution and label time in HHMMSS; omitted when both inputs have one common intraday time")
