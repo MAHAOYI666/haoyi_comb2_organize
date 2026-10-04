@@ -30,6 +30,7 @@ MODULE_SOURCES = {
     "config": REPO_ROOT / "config.py",
     "runCombo": REPO_ROOT / "runCombo.py",
     "runEval": REPO_ROOT / "runEval.py",
+    "comboOpt1": REPO_ROOT / "comboOpt1.py",
     "comboRunner": REPO_ROOT / "comboRunner.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "comboHelloWorld": REPO_ROOT / "comboHelloWorld.py",

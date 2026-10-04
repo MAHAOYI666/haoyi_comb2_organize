@@ -182,6 +182,7 @@ DEFAULT_CONFIG = {
         "execution_price": "execution:execution",
         "drawdown_stop": 0.0,
         "cooldown_days": 0,
+        "fixbs": False,
     },
     "monitor": {
         "enabled": False,

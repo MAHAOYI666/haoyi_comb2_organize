@@ -262,6 +262,7 @@ def build_backtest_node(strategy_path: Path, organize_config: dict):
         execution_price="provided",
         drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest_config.get("cooldown_days", 0)),
+        fixbs=bool(backtest_config.get("fixbs", False)),
     )
 
 

@@ -20,6 +20,7 @@ dev = ["pytest>=8,<10"]
 [project.scripts]
 runCombo = "combo2.cli.run_combo:main"
 runEval = "runEval:main"
+comboOpt1 = "comboOpt1:main"
 comb-run = "combo2.cli.run_combo:main"
 comb-combo-runner = "comboRunner:main"
 comb-pos-corr = "runPosCorr:main"
@@ -28,7 +29,7 @@ combo-hello-world = "comboHelloWorld:main"
 
 [tool.setuptools]
 include-package-data = false
-py-modules = ["config", "runCombo", "runEval", "comboRunner", "runPosCorr", "comboHelloWorld"]
+py-modules = ["config", "runCombo", "runEval", "comboOpt1", "comboRunner", "runPosCorr", "comboHelloWorld"]
 packages = ["combo2", "combo2.cli", "comb2_templates", "comb2_simbase", "comb_eval", "comb2", "comb2.codec", "comb2_pcmaster", "comb2_metrics", "vendor"]
 
 [tool.setuptools.package-dir]

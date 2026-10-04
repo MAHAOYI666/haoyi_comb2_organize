@@ -8,6 +8,7 @@ combo2 使用 Python 声明数据，Memmap 分块读取，源级处理后把普�
 combo-hello-world -y
 runCombo config.xml
 runEval config.xml
+comboOpt1 signal.parquet [--config config.xml]
 ```
 
 starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 ResearchLoader 和 ResearchModel。先修改 data_requirements 中的因子路径再运行。XML 中的相对路径相对 XML 所在目录；Python 声明的相对数据路径相对 ResearchLoader 所在文件目录。
@@ -198,6 +199,15 @@ execution_price 使用 source:column，引用研究员 loader 中普通来源的
 
 退市状态只读取 factorsim 的 `StockMask2.StockListedDays`。已持仓股票从前一交易日有限值切换为当日缺失时，在当日优化前按零值核销；核销不计换手或手续费，其损失进入当日 PNL。普通停牌不会触发核销，继续沿用最后有效收盘估值；恢复行情后重新使用真实价格。
 
+book 与成交口径由 `<backtest fixbs=...>` 选择，默认 `false`：
+
+| fixbs | 每日 book（target_stock_amount） | 成交 | 收益 |
+|---|---|---|---|
+| `false`（默认） | 当日第一次优化前 `总资产 * reserve_cash`，盈亏滚入下一日 | 整手；买入按金额向下取整到整手且受现金约束；复权零股折成现金 | PnL / 初始 cash |
+| `true` | 固定为 `cash`，不预留现金，盈亏不滚入，仿照 pysim CalcSimple | 零碎股数，不受现金约束（可为负，即借入）；复权不取整 | PnL / cash |
+
+两种口径的卖出规则：目标权重为 0 时卖出全部可卖股数；否则 `fixbs=false` 按四舍五入到整手卖出，卖后剩余不足半手时全部卖出，`fixbs=true` 按金额卖出零碎股数。`fixbs=true` 时持仓市值每天偏离固定 book，把持仓调回 book 的交易不计入 maxtvr。
+
 opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计实际换手。买入增加锁仓，卖出受可卖股数约束；仅换日时解除锁定并重置每日累计状态。日终按收盘价结算，每天一行日报。
 
 输出：
@@ -209,6 +219,8 @@ opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计�
 - backtest/executions.csv、settlements.csv：实际成交明细和 factorsim 退市零值核销明细。
 - backtest/*_position.csv：以 (date,time) 索引的目标持仓。
 - eval_report/：按时点评估 target IC、分层目标均值、Barra/CAP 暴露，以及实际成交 PnL。
+
+comboOpt1 signal.parquet 用 opt1 回测单个信号：信号先在 base 股票池内按 long_ratio 调整多空并按多空两侧归一化，与 runEval 双 parquet VA 的端点处理相同；不传 --config 时使用默认配置，传入时使用该 XML 的 strategy、backtest、constants（优化器类型固定为 opt1）。输出逐年和全期的 ZZ500 超额与原始收益年化、超额 IR、日均换手、冻结日数，结果目录含 daily_returns.csv、summary.csv 和 backtest/。对同一信号，结果与 runEval 中该信号作为 1.00 列时逐日相同（日期与股票范围一致的前提下）。
 
 runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层输出是各层原始 target 均值，不把任意研究目标当作成交收益。需要 alpha.parquet 和成交日报。--skip-exposure 可跳过暴露，--skip-deciles 可跳过分层。--sim/--pnl/--corr/--va/--exposure 继续支持独立的本地表格分析。
 
@@ -278,7 +290,7 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 | `benchmark` | `000905.SH` | 风险、行业和相对方差使用的基准指数代码；对应读取 `1d_IndexWeight/IndexWeight.<benchmark>`。不改变回测收益报告的评价基准。 |
 | `benchmark_delay` | `1` | 目标风险暴露使用的基准指数权重延迟。 |
 | `target_size` | `100000000` | opt1 容量约束使用的目标股票 book，单位为元；opt2 的金额约束不使用该换算参数。 |
-| `maxtvr` | `0.08` | 全天累计换手额度。基准金额是当日第一次优化前的 `总资产 * reserve_cash`；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
+| `maxtvr` | `0.08` | 全天累计换手额度。基准金额是当日 book（target_stock_amount，见"成交回测与输出"）；`fixbs=true` 时调回固定 book 的交易不计入；首日无实际持仓时不加该约束，hard `0:0` universe 强退可突破剩余额度。 |
 | `max_weight` | `0.008` | 可买股票的单票权重上限。 |
 | `maxtrd` | `0.0` | 单票交易额相对 delay-1 全日成交额的上限。opt1 先用 `target_size` 换算成权重；opt2 直接约束人民币金额。`0` 表示不添加，hard `0:0` universe 强退可突破卖出上限。 |
 | `maxpos` | `0.0` | 单票持仓额相对 delay-1 全日成交额的上限。opt1 先换算成权重，opt2 直接约束人民币金额；`0` 表示不添加，历史持仓超限不强制一次性卖回。 |
@@ -349,6 +361,6 @@ class AlphaStrategy(StrategyBase):
 | `locked_amount` | 当日买入且受 T+1 限制的持仓金额，单位为元。 |
 | `buyable_mask` | 当前原始成交价、涨跌停、停牌和 base 状态均有效的股票布尔掩码。 |
 | `market_sellable_mask` | 当前原始成交价、涨跌停和停牌状态均有效的股票布尔掩码；不要求属于 base。 |
-| `target_stock_amount` | backtest 内部按当日第一次优化前 `总资产 * reserve_cash` 计算的固定金额。 |
+| `target_stock_amount` | 当日 book：`fixbs=false` 为当日第一次优化前 `总资产 * reserve_cash`，`fixbs=true` 为 `cash`。 |
 | `executed_turnover_today` | 当日已经实际成交的累计金额。 |
 | 返回值 | 与股票轴对齐、列为 `buy_amount` 和 `sell_amount` 的非负 pandas DataFrame。 |

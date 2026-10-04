@@ -682,12 +682,13 @@ def blend_positions(target: pd.DataFrame, myposition: pd.DataFrame, weight: floa
 
 
 def _strategy_config(
-    start_ds: int, end_ds: int, *, simple: bool = False
+    start_ds: int, end_ds: int, *, simple: bool = False, config: dict | None = None
 ) -> dict:
-    strategy = deepcopy(DEFAULT_CONFIG["strategy"])
+    config = DEFAULT_CONFIG if config is None else config
+    strategy = deepcopy(config["strategy"])
     strategy["start_ds"] = int(start_ds)
     strategy["end_ds"] = int(end_ds)
-    optimizer = SIMPLE_OPTIMIZER_CONFIG if simple else DEFAULT_CONFIG["strategy"]["optimizer"]
+    optimizer = SIMPLE_OPTIMIZER_CONFIG if simple else config["strategy"]["optimizer"]
     strategy["optimizer"] = deepcopy(optimizer)
     strategy["optimizer"]["type"] = "opt1"
     return strategy
@@ -701,10 +702,11 @@ def _build_backtest_node(
     ti: int = SNAP_TI,
     *,
     simple: bool = False,
+    config: dict | None = None,
 ) -> BacktestNode:
     ti = _coerce_ti(ti)
-    strategy = _strategy_config(start_ds, end_ds, simple=simple)
-    backtest = deepcopy(DEFAULT_CONFIG["backtest"])
+    strategy = _strategy_config(start_ds, end_ds, simple=simple, config=config)
+    backtest = deepcopy((DEFAULT_CONFIG if config is None else config)["backtest"])
     output_path.mkdir(parents=True, exist_ok=True)
     return BacktestNode(
         start_ds=int(start_ds),
@@ -724,6 +726,7 @@ def _build_backtest_node(
         snap_ti=ti,
         drawdown_stop=float(backtest.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest.get("cooldown_days", 0)),
+        fixbs=bool(backtest.get("fixbs", False)),
         draw_output=False,
     )
 
@@ -1280,3 +1283,138 @@ def format_daily_evaluation(
         ]
     )
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class SignalBacktestResult:
+    signal_path: Path
+    output_dir: Path
+    start_ds: int
+    end_ds: int
+    ti: int
+    fixbs: bool
+    daily: pd.DataFrame
+    table: pd.DataFrame
+
+
+def backtest_signal(
+    signal_path: str | Path,
+    *,
+    config: dict | None = None,
+    cache_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    ti: int | None = None,
+    long_ratio: float = DEFAULT_LONG_RATIO,
+) -> SignalBacktestResult:
+    """Backtest one signal with opt1, using the same preprocessing as a runEval VA endpoint.
+
+    The signal is shifted to ``long_ratio`` positives inside the base universe, side-normalized and
+    traded by DailyBacktest with the ``strategy``/``backtest`` sections of ``config`` (DEFAULT_CONFIG when
+    omitted; the optimizer type is forced to opt1). Returns are PnL over the configured cash, and excess
+    returns subtract ZZ500 exactly as runEval does.
+    """
+    long_ratio = float(long_ratio)
+    if not np.isfinite(long_ratio) or not 0.0 <= long_ratio <= 1.0:
+        raise ValueError("long_ratio must be between 0 and 1")
+    config = DEFAULT_CONFIG if config is None else config
+    signal_file, raw = _read_position_frame(signal_path)
+    selected_ti = _resolve_daily_ti(((signal_file, raw),), ti)
+    position = _filter_position_frame(raw, signal_file, start=start, end=end, ti=selected_ti)
+    first = _first_active(position)
+    if first is None:
+        raise ValueError(f"{signal_file} has no finite non-zero alpha in the selected range")
+    if start is None:
+        position = position.loc[position.index >= first]
+    start_ds = _date_int(start) if start is not None else int(position.index.min())
+    end_ds = _date_int(end) if end is not None else int(position.index.max())
+    if cache_path is None and config is not DEFAULT_CONFIG:
+        cache_path = config["constants"].get("cache_path")
+    cache = resolve_cache_path(cache_path)
+
+    base, _ = _load_base_and_limit(cache, start_ds, end_ds, position.columns)
+    common_dates = position.index.intersection(base.index).sort_values()
+    if common_dates.empty:
+        raise ValueError("signal and BaseUnivMask have no overlapping dates")
+    check_fixed_window(common_dates, base.index, start, end)
+    position = position.reindex(common_dates)
+    base = base.reindex(common_dates, columns=position.columns)
+    signal = normalize_position_sides(adjust_position(position, base, long_ratio=long_ratio))
+
+    if output_dir is None:
+        output_dir = signal_file.parent / f"comboOpt1_{signal_file.stem}"
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dates = tuple(int(date) for date in common_dates)
+    node = _build_backtest_node(cache, output_dir / "backtest", dates[0], dates[-1], selected_ti, config=config)
+    backtest = DailyBacktest(node)
+    available = set(int(date) for date in backtest.vwap_data.index)
+    missing = [date for date in dates if date not in available]
+    if missing:
+        raise ValueError(f"{selected_ti:06d} execution data is missing dates, first missing={missing[0]}")
+    for date in dates:
+        backtest.step(date, signal.loc[date], ti=selected_ti, last=True, alpha_already_adjusted=True)
+    backtest.finalize()
+
+    history = backtest.asset_history
+    assets = history["total_asset"].astype(float)
+    pnl = assets.diff()
+    pnl.iloc[0] = assets.iloc[0] - float(node.cash)
+    raw_returns = pnl / float(node.cash)
+    raw_returns.index = pd.to_datetime(raw_returns.index.astype(str), format="%Y%m%d")
+    benchmark = _benchmark_returns_for_index(cache, raw_returns.index)
+    excess = _apply_excess_returns({1.0: WeightResult(1.0, raw_returns)}, benchmark)[1.0].daily_returns
+    daily = pd.DataFrame({
+        "return": raw_returns,
+        "zz500_return": benchmark.reindex(raw_returns.index).to_numpy(dtype=float),
+        "excess_return": excess,
+        "tvr": history["tvr"].astype(float).to_numpy(),
+        "total_asset": assets.to_numpy(),
+    })
+    daily.index.name = "date"
+
+    rows = []
+    years = sorted(daily.index.year.unique())
+    groups = [(str(year), daily.loc[daily.index.year == year]) for year in years]
+    if years and len(groups[0][1]) < 20:
+        groups = groups[1:]
+    groups.append(("full", daily))
+    for period, group in groups:
+        std = float(group["excess_return"].std(ddof=1))
+        rows.append({
+            "period": period,
+            "excess": _annualized_percent(group["excess_return"]),
+            "return": _annualized_percent(group["return"]),
+            "excess_ir": float(group["excess_return"].mean() / std * np.sqrt(TRADING_DAYS)) if std > 0 else np.nan,
+            "tvr": float(group["tvr"].mean()),
+            "frozen_days": int((group["tvr"] == 0).sum()),
+            "days": int(len(group)),
+        })
+    table = pd.DataFrame(rows).set_index("period")
+    daily.to_csv(output_dir / "daily_returns.csv", date_format="%Y-%m-%d")
+    table.to_csv(output_dir / "summary.csv")
+    return SignalBacktestResult(
+        signal_path=signal_file,
+        output_dir=output_dir,
+        start_ds=dates[0],
+        end_ds=dates[-1],
+        ti=selected_ti,
+        fixbs=bool(node.fixbs),
+        daily=daily,
+        table=table,
+    )
+
+
+def format_signal_backtest(result: SignalBacktestResult) -> str:
+    table = result.table.copy()
+    for column in ("excess", "return", "excess_ir"):
+        table[column] = table[column].map(lambda value: f"{value:.2f}")
+    table["tvr"] = table["tvr"].map(lambda value: f"{value:.4f}")
+    return "\n".join([
+        f"[comboOpt1] {result.signal_path}",
+        f"execution={result.ti:06d} fixbs={str(result.fixbs).lower()} {result.start_ds}-{result.end_ds} "
+        f"output={result.output_dir}",
+        "excess/return: annualized %, ZZ500 excess as in runEval",
+        table.to_string(),
+    ])

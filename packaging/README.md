@@ -54,7 +54,7 @@ Python 3.13 environment.
 
 The build compiles:
 
-- `config`, `runCombo`, `runEval`, `comboRunner`, `runPosCorr`
+- `config`, `runCombo`, `runEval`, `comboOpt1`, `comboRunner`, `runPosCorr`
 - `vendor/comb2-simbase` (`comb2_simbase` import package)
 - `combo2` application services, configuration, paths, CLI and monitoring
 - `comb_eval`
@@ -76,6 +76,7 @@ Installed commands include:
 - `combo-hello-world`
 - `runCombo`
 - `runEval`
+- `comboOpt1`
 - `comb-run`
 - `comb-eval`
 - `comb-combo-runner`
