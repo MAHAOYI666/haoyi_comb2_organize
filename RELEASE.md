@@ -5,10 +5,10 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.1.3`
-- Version date: `2026-09-25`
+- Version: `1.1.4`
+- Version date: `2026-10-04`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.1.3-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.4-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
 - Status: build pending.
 
@@ -16,12 +16,41 @@ Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.1.3-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.4-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.4
+
+Packaging:
+
+- The code is packaged as `combo2` (config, runtime, monitoring, paths, CLI). Top-level `config.py`, `runCombo.py` and `vendor/perf_monitor.py` are compatibility imports, and import paths come from `combo2.bootstrap` / `pyproject.toml`.
+- The XML root `Name` attribute isolates experiment outputs under `output/<Name>/`.
+
+Backtest:
+
+- New `<backtest fixbs>` switch, default `false`.
+  - `false` keeps the compounding book (`total asset * reserve_cash`) with whole lots.
+  - `true` uses a fixed book equal to `cash` with fractional shares and no cash cap, as pysim CalcSimple does. Under `true`, the trade that brings holdings back to the book is exempt from `maxtvr`.
+- Sell rounding fix, applying to both modes.
+  - The old rule always sold one extra lot. That over-sold small resize orders: under a fixed book it caused sell waves and opt1 participation freezes, and at a 1e7 book it inflated fast-signal results (improveattn VA 12.30, or 10.05 at a 1e8 book).
+  - Sells now round to the nearest lot and exit fully when the target weight is zero or less than half a lot would remain.
+- Apart from the sell rule, `fixbs=false` output is byte-identical to 1.1.3.
+
+Evaluation:
+
+- New `comboOpt1 SIGNAL.parquet [--config X.xml]`: a single-signal opt1 backtest with the same preprocessing as a runEval VA endpoint. It reports yearly ZZ500 excess, IR, turnover and frozen days, and matches runEval's 1.00 column day for day.
+- runEval reads backtest settings, including `fixbs`, from the configuration.
+
+Validation (KF):
+
+- Byte-identical outputs for `fixbs=false` versus 1.1.3 plus only the sell fix, for lgbm_ridgeinit and mlp_residual_improveattn.
+- The execution-model refactor reproduces the pre-refactor outputs byte for byte in both modes.
+- `comboOpt1` matches the runEval 1.00 column on all 1210 days (lgbm_ridgeinit).
+- tests: the 5 failures are the same as on 1.1.3 (MOSEK Unknown/Undefined in 3 real-data tests, cache missing 20260410); no new failures.
 
 ## 1.1.3
 
