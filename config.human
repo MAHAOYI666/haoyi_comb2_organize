@@ -13,7 +13,7 @@ runEval config.xml
 starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 ResearchLoader 和 ResearchModel。先修改 data_requirements 中的因子路径再运行。XML 中的相对路径相对 XML 所在目录；Python 声明的相对数据路径相对 ResearchLoader 所在文件目录。
 
 ```xml
-<config>
+<config Name="experiment">
   <constants cache_path="/data/Cache" output_root="output" />
   <strategy start_ds="20241028" end_ds="20241029">
     <optimizer type="opt2" />
@@ -33,6 +33,37 @@ starter 生成 Model.py、config.xml、config.human。Model.py 同时包含 Rese
 ```
 
 sample_times 是按 HHMMSS 书写、逗号分隔、严格递增的时点列表。每天一个时点和多个时点使用同一流程。source 不声明角色或频率。sample_times 不决定 target 的期限或公式。当前 `config.py` 默认使用旧配置的 `100000`；上面的 `100000,110000` 仅是多时点配置示例。
+
+## 实验名称与输出隔离
+
+新实验在 XML 根节点设置 `Name`（大小写敏感）：
+
+```xml
+<config Name="experiment_a">
+  <constants cache_path="/data/Cache" output_root="output" />
+  <!-- strategy、combo、backtest 等配置保持原接口 -->
+</config>
+```
+
+`output_root` 是实验集合目录，加载配置后得到的有效输出目录为 `output/experiment_a/`：
+
+```text
+output/experiment_a/
+  experiment_a.parquet
+  experiment_a.alpha_history.pt
+  experiment_a.train.log
+  experiment_a.daily_ic.csv
+  experiment_a.ic_by_time.csv
+  experiment_a.perf_metrics.csv   # 启用监控时
+  checkpoints/<snaptime>/<date>/
+  backtest/
+  eval_report/
+  live/experiment_a_<date>_<time>.csv
+```
+
+`Name` 必须以字母或数字开头，最多 128 字符，只允许字母、数字、下划线、点和短横线，不能以点结尾。不同 Name 隔离实验输出；同一输出根目录和 Name 表示同一实验，重跑可能覆盖结果或复用检查点，新的参数实验应使用新 Name。Name 不替代 sample_times；snaptime 继续用于检查点子目录。
+
+未设置 Name 的旧 XML 保留原输出目录和 `alpha.parquet` 等文件名。显式设置空 Name 会报错。配置驱动评估只读取当前配置指定的信号文件，不再递归选择其他目录中最新的 alpha。显式指定 monitor.output_path、--report-dir、--plot-output 或 --eval-dir 时使用该路径，调用方需保证其唯一性。
 
 ## 声明与选择数据
 

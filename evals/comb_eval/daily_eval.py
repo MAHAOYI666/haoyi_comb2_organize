@@ -15,21 +15,12 @@ import numpy as np
 import pandas as pd
 
 
-ORGANIZE_ROOT = Path(__file__).resolve().parents[2]
-for local_path in (
-    ORGANIZE_ROOT,
-    ORGANIZE_ROOT / "vendor" / "comb2-pcmaster",
-    ORGANIZE_ROOT / "vendor" / "comb2-simbase",
-):
-    text_path = str(local_path)
-    if text_path not in sys.path:
-        sys.path.insert(0, text_path)
-
 from comb2_pcmaster import BacktestNode, DataLoader, DailyBacktest
 from comb2_pcmaster.backtest import _adjust_alpha_by_long_ratio
 from comb2_simbase import load_snap_vwap_labels
 from comb2_simbase.benchmark import benchmark_returns_from_cache
-from config import DEFAULT_CONFIG, SIMPLE_OPTIMIZER_CONFIG
+from combo2.config import DEFAULT_CONFIG, SIMPLE_OPTIMIZER_CONFIG
+from combo2.bootstrap import SOURCE_ROOT as ORGANIZE_ROOT
 
 from .exposure import compute_cap_corr
 

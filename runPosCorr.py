@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "vendor" / "comb2-metrics"))
+from combo2.bootstrap import bootstrap_source_tree
+bootstrap_source_tree()
 
 from comb2_metrics import pos_corr
 

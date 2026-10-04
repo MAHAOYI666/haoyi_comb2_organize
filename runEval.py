@@ -10,11 +10,9 @@ from pathlib import Path
 import pandas as pd
 
 
-ORGANIZE_ROOT = Path(__file__).resolve().parent
-for local_path in (ORGANIZE_ROOT, ORGANIZE_ROOT / "evals", ORGANIZE_ROOT / "vendor" / "comb2-simbase"):
-    text_path = str(local_path)
-    if text_path not in sys.path:
-        sys.path.insert(0, text_path)
+from combo2.bootstrap import bootstrap_source_tree
+
+bootstrap_source_tree()
 
 from comb_eval.daily_eval import DEFAULT_LONG_RATIO, evaluate_daily, format_daily_evaluation, read_daily_evaluation
 from comb_eval.run_eval_other import (

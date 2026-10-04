@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import importlib
 import json
 import math
 import warnings
-import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +19,9 @@ from comb2_simbase.cache_layout import (
 from comb2_simbase.snap_labels import load_snap_vwap_labels, snap_vwap_price_name
 
 warnings.filterwarnings("ignore", category=pd.errors.ChainedAssignmentError)
+
+from combo2.config import load_config
+from combo2.paths import alpha_path as experiment_alpha_path
 
 from .exposure import compute_barra_style_exposure, compute_cap_corr, summarize_cap_corr
 from .formatting import output_frame_to_text
@@ -134,7 +135,7 @@ def run_config_evaluation(
 ) -> ConfigEvalResult:
     assert label_path is None and label_5d_path is None, "define evaluation targets in ResearchLoader"
     import torch
-    import runCombo
+    from combo2 import runtime
     import matplotlib.pyplot as plt
 
     config = _load_organize_config(config_path)
@@ -152,10 +153,10 @@ def run_config_evaluation(
     hi = int(str(end).replace("-", "")) if end else config["strategy"]["end_ds"]
     alpha = alpha.loc[(dates >= lo) & (dates <= hi)].sort_index()
     assert not alpha.empty, "no alpha samples in evaluation range"
-    node = runCombo.Node(config)
-    combo = runCombo.load_combo_base_class(config["combo"])(node)
+    node = runtime.Node(config)
+    combo = runtime.load_combo_base_class(config["combo"])(node)
     sample_inputs = {} if not skip_deciles else None
-    ic = runCombo.calculate_alpha_ic(alpha, combo, sample_inputs=sample_inputs)
+    ic = runtime.calculate_alpha_ic(alpha, combo, sample_inputs=sample_inputs)
     ic_summary = ic.groupby(level="time")["ic"].agg(["mean", "std", "count"])
     ic.to_csv(artifacts.report_dir / "daily_ic.csv")
     daily_path = Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]
@@ -228,9 +229,9 @@ def check_config_outputs(config_path: str | Path) -> ConfigOutputCheck:
     resolved_config_path = Path(config_path).expanduser().resolve()
     config = _load_organize_config(resolved_config_path)
     output_root = Path(config["constants"]["output_root"]).expanduser().resolve()
-    alpha_path = _find_existing_alpha_path(output_root) or output_root / "alpha.parquet"
+    alpha_path = experiment_alpha_path(config)
     files = (
-        _file_status("alpha.parquet", alpha_path),
+        _file_status(alpha_path.name, alpha_path),
         _file_status("daily execution metrics", Path(config["backtest"]["output_path"]) / config["backtest"]["daily_metrics_file"]),
     )
     return ConfigOutputCheck(
@@ -475,28 +476,7 @@ def plot_signal_analysis(
 
 
 def _load_organize_config(config_path: str | Path) -> dict[str, Any]:
-    try:
-        config_module_path = _find_organize_config_module()
-    except FileNotFoundError:
-        config_module = importlib.import_module("config")
-        return config_module.load_config(str(config_path))
-
-    config_spec = importlib.util.spec_from_file_location("comb2_organize_config", config_module_path)
-    if config_spec is None or config_spec.loader is None:
-        raise ImportError(f"unable to load config module: {config_module_path}")
-    config_module = importlib.util.module_from_spec(config_spec)
-    config_spec.loader.exec_module(config_module)
-    load_config = config_module.load_config
-
     return load_config(str(config_path))
-
-
-def _find_organize_config_module() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "config.py"
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError("unable to find comb2-organize config.py")
 
 
 def _resolve_artifacts(
@@ -514,7 +494,9 @@ def _resolve_artifacts(
     tradecost_ratio: float | None,
 ) -> ConfigEvalArtifacts:
     output_root = Path(config["constants"]["output_root"]).expanduser().resolve()
-    alpha_path = _find_alpha_path(output_root)
+    alpha_path = experiment_alpha_path(config)
+    if not alpha_path.is_file():
+        raise FileNotFoundError(f"experiment alpha not found: {alpha_path}")
     resolved_report_dir = Path(report_dir).expanduser().resolve() if report_dir else output_root / "eval_report"
     resolved_plot_path = Path(plot_path).expanduser().resolve() if plot_path else resolved_report_dir / "signal_analysis.png"
     snap_ti = None
@@ -543,23 +525,6 @@ def _resolve_artifacts(
         tradecost_ratio=resolved_tradecost_ratio,
         cache_path=cache_path,
     )
-
-
-def _find_alpha_path(output_root: Path) -> Path:
-    path = _find_existing_alpha_path(output_root)
-    if path is None:
-        raise FileNotFoundError(f"config output_root must contain at least one alpha.parquet: {output_root}")
-    return path
-
-
-def _find_existing_alpha_path(output_root: Path) -> Path | None:
-    direct = output_root / "alpha.parquet"
-    if direct.exists() and direct.is_file():
-        return direct
-    if not output_root.exists():
-        return None
-    candidates = sorted(output_root.rglob("alpha.parquet"), key=lambda path: path.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
 
 
 def _file_status(name: str, path: Path) -> OutputFileStatus:

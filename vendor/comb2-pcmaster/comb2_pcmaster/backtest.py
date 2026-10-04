@@ -11,10 +11,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-SIMBASE_ROOT = Path(__file__).resolve().parents[3] / "vendor" / "comb2-simbase"
-if str(SIMBASE_ROOT) not in sys.path:
-    sys.path.insert(0, str(SIMBASE_ROOT))
-
 from comb2_simbase import IndexMask
 from comb2_simbase.benchmark import load_index_benchmark
 from .dataloader import DataLoader

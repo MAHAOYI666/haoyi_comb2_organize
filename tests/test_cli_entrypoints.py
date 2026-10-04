@@ -292,9 +292,10 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
     assert parsed["combo"]["paths"]["combo_base_path"] is None
     assert parsed["combo"]["runtime"]["trainDelay"] == 2
     assert parsed["combo"]["runtime"]["retDays"] == 1
-    assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/checkpoints").resolve())
-    assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/train.log").resolve())
-    assert parsed["backtest"]["output_path"] == str((tmp_path / "output/backtest").resolve())
+    assert parsed["Name"] == "experiment"
+    assert parsed["combo"]["paths"]["checkpoint_root"] == str((tmp_path / "output/experiment/checkpoints").resolve())
+    assert parsed["combo"]["output"]["log_path"] == str((tmp_path / "output/experiment/experiment.train.log").resolve())
+    assert parsed["backtest"]["output_path"] == str((tmp_path / "output/experiment/backtest").resolve())
     assert parsed["constants"]["cache_path"] == str((tmp_path / "data/Cache").resolve())
     assert set(parsed["combo"]["loader"]) == {
         "dtype",

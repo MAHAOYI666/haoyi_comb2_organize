@@ -19,10 +19,7 @@ import numpy as np
 
 from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset
 
-ORGANIZE_ROOT = Path(__file__).resolve().parents[3]
-if str(ORGANIZE_ROOT) not in sys.path:
-    sys.path.insert(0, str(ORGANIZE_ROOT))
-from vendor.perf_monitor import format_seconds, print_stage
+from combo2.monitoring import format_seconds, print_stage
 
 
 class ComboBase:

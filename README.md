@@ -6,7 +6,15 @@ combo2 将研究员的 Memmap 数据、源级降维、数组模型、训练、�
 
 ## 安装方式
 
-下载这个仓库即可。当前仓库已经临时内置所需源码：
+源码开发使用 Python 3.13，在仓库根目录安装：
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+项目依赖、命令和包映射由 `pyproject.toml` 管理；受保护 wheel 构建使用同一份依赖和命令定义。发布包不包含 Optuna 框架及其依赖；`optuna_framework/` 仅保留为源码研究工具。
+
+当前仓库内置运行所需源码：
 
 ```text
 vendor/
@@ -38,6 +46,37 @@ export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 
 `config.eg.old.xml` 保留了旧版完整 optimizer 样例，供迁移和口径对比使用。它不会被自动加载；使用时请复制其中的 optimizer 属性，并按实际实验修改路径、日期和输出目录。
 
+## 实验名称与输出隔离
+
+新实验在 XML 根节点设置 `Name`（大小写敏感）：
+
+```xml
+<config Name="experiment_a">
+  <constants cache_path="/data/Cache" output_root="output" />
+  <!-- strategy、combo、backtest 等配置保持原接口 -->
+</config>
+```
+
+`output_root` 是实验集合目录，加载配置后得到的有效输出目录为 `output/experiment_a/`：
+
+```text
+output/experiment_a/
+  experiment_a.parquet
+  experiment_a.alpha_history.pt
+  experiment_a.train.log
+  experiment_a.daily_ic.csv
+  experiment_a.ic_by_time.csv
+  experiment_a.perf_metrics.csv   # 启用监控时
+  checkpoints/<snaptime>/<date>/
+  backtest/
+  eval_report/
+  live/experiment_a_<date>_<time>.csv
+```
+
+`Name` 必须以字母或数字开头，最多 128 字符，只允许字母、数字、下划线、点和短横线，不能以点结尾。不同 Name 隔离实验输出；同一输出根目录和 Name 表示同一实验，重跑可能覆盖结果或复用检查点，新的参数实验应使用新 Name。Name 不替代 sample_times；snaptime 继续用于检查点子目录。
+
+未设置 Name 的旧 XML 保留原输出目录和 `alpha.parquet` 等文件名。显式设置空 Name 会报错。配置驱动评估只读取当前配置指定的信号文件，不再递归选择其他目录中最新的 alpha。显式指定 monitor.output_path、--report-dir、--plot-output 或 --eval-dir 时使用该路径，调用方需保证其唯一性。
+
 ## 使用
 
 ```bash
@@ -58,7 +97,7 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 
 execution_price 显式指定 source:column。日内使用 opt2，执行层保留 T+1 锁定、真实持仓和累计换手，每天结算一次。原始成交价、涨跌停和停牌状态共同决定可交易池；不可交易旧持仓冻结，策略若返回池外订单会立即失败。`StockMask2.StockListedDays` 从有效变为缺失时，已有持仓在优化前按零值核销并写入 `settlements.csv`；临时停牌仍沿用最后估值。默认策略的风险、行业和相对方差使用可配置 benchmark，默认 000905.SH；ZZ500 股票池约束和回测报告评价基准独立。
 
-alpha.parquet 使用 (date,time) 索引。`runEval` 分为两部分：`runEval alpha1.parquet alpha2.parquet run/read` 的双 parquet 日频分组回测与 PnL/VA 是主流程，实现在 `runEval.py`；其余 config overall、`--sim`、`--pnl`、`--va`、`--corr`、`--exposure` 模式实现在 `evals/comb_eval/run_eval_other.py`，保留原 CLI 兼容。`--skip-exposure` 和 `--skip-deciles` 只影响 overall。overall 中的十档统计是原始 target 的分组均值，不是各档实际成交 PnL。
+实验信号 `<Name>.parquet`（旧配置为 `alpha.parquet`）使用 (date,time) 索引。`runEval` 分为两部分：`runEval alpha1.parquet alpha2.parquet run/read` 的双 parquet 日频分组回测与 PnL/VA 是主流程，实现在 `runEval.py`；其余 config overall、`--sim`、`--pnl`、`--va`、`--corr`、`--exposure` 模式实现在 `evals/comb_eval/run_eval_other.py`，保留原 CLI 兼容。`--skip-exposure` 和 `--skip-deciles` 只影响 overall。overall 中的十档统计是原始 target 的分组均值，不是各档实际成交 PnL。
 
 双 parquet VA 的所有 PnL 路径（0.00 target、各混合权重、1.00 信号）使用同一组日期，不一致时报错。未传 `--start` 时，起点是两个信号都有非零值的第一个共同日；传入 `--start`/`--end` 时严格使用该窗口，便于不同种子或变体在同一路径上比较：信号开头最多允许 5 个全零日（当天只用另一个信号），超过即报错；窗口内缺少任一交易日也报错，不会悄悄缩短路径。
 
