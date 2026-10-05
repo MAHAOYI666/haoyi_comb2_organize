@@ -5,23 +5,51 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.1.4`
-- Version date: `2026-10-04`
+- Version: `1.1.5`
+- Version date: `2026-10-05`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.1.4-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.5-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: build pending.
+- Status: pushed to master 2026-10-05 (CI builds and publishes the wheel); the same version was built on KF and is installed in the shared notebook environment.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.1.4-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.5-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.5
+
+Backtest (behaviour change):
+
+- `<backtest fixbs>` now defaults to `true`: a fixed book equal to `cash`, fractional shares, no cash cap, as pysim CalcSimple; the resize back to the book is exempt from `maxtvr`. The default changes in `DEFAULT_CONFIG`, `BacktestNode` and the `runCombo` / `runEval` / `comboOpt1` fallbacks.
+  - Configurations without the attribute now produce fixed-book results. To reproduce 1.1.4 and earlier results (compounding book `total asset * reserve_cash`, whole lots), set `<backtest fixbs="false">` explicitly; `comboOpt1` and the direct daily VA take it through `--config`.
+  - Why: under compounding the long book is about `0.95 x NAV` against a `1 x` ZZ500 benchmark, so yearly excess carries a NAV-dependent beta. See the 1.1.4 notes.
+- New `<backtest onlypnl>` switch, default `false`, and `runEval A B run --onlypnl`. When on, the backtest skips writing `*_position.csv`, `executions.csv` and `*_holdings.csv`; returns, summaries and the manifest are still written.
+
+Training dataset:
+
+- An expanding training window now reuses the previous training's dataset. Before, only a window at its full `max_train_days` length was rolled in place, so every training before that point reread the whole window from disk. In a quarterly 2020-2025 run (window 731 to 2000 days), that was 22 of 24 trainings.
+  - `ComboTrainDataset(capacity_days=N)` reserves storage for a window that grows up to `N` days, plus a column for every instrument of the mask.
+  - `roll_forward` advances the window by sliding, by growing, or both in one step. It reads only the new tail days.
+  - `ComboBase` reserves `min(max_train_days, data start .. strategy end_ds)` days at the first training and keeps the dataset between trainings.
+  - Without `end_ds` on the node, or with a research dataset whose `__init__` does not accept `capacity_days`, an expanding window is rebuilt as before.
+  - The `dataset_mode` log value `incremental_initial` is gone: a fresh build logs `full`, a reuse logs `incremental`.
+- Memory: the reserved storage is allocated at the first training, so the dataset's footprint from the first training equals the final one. Columns cover every mask instrument (5642) instead of the selection plus 10%.
+- The reused dataset equals a cold load. Retained days keep their stored values, and instruments added later get zero features, zero targets and False weights on the retained days, the same data contract as the sliding roll.
+
+Validation (KF):
+
+- Unit tests: new tests for growing, growing with sliding, the capacity limit, and `ComboBase` on an expanding window; each step is compared with a cold load.
+- `pytest -q --ignore=output --ignore=build --ignore=dist_protected --ignore=0714.search.bad.performance --ignore=optuna_runs`: 151 passed, 12 skipped.
+- Real data, `tools/check_dataset_growth.py` with the 1004 factorformer-1d config (JL loader and dataset): X, Y, W and the instrument selection are exactly equal to a cold load. The first step grows 731 to 789 days (+76 instruments) in 7.3 s against a 44.3 s cold load. The second grows and slides 789 to 800 days (+59 / -3 instruments) in 4.6 s against 45.2 s.
+- Installed 1.1.5 wheel, 1004 statenet-10d (JL label) to 2020-07-31: the second and third trainings reuse the dataset (9.0 s and 8.0 s against about 45 s before). The reserved storage is bounded by the strategy end (6.3 GB). alpha.parquet is identical to the 1.1.4 run on all 147 days.
+- Installed 1.1.5 wheel, `comboOpt1 --config` with `<backtest fixbs="false">` on the 1004 lgbm-10d alpha: daily_returns.csv, summary.csv, daily_pnl.csv and pnl_summary.csv are byte-identical to the 1.1.4 default run.
 
 ## 1.1.4
 
