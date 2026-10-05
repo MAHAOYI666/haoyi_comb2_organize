@@ -45,6 +45,28 @@ export MOSEKLM_LICENSE_FILE="$HOME/mosek/mosek.lic"
 
 完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
 
+### 已安装 combo2 1.1.4：单信号回测
+
+Notebook 的 Python 环境已升级为负责人提供的 `combo2==1.1.4` wheel。安装包与仓库源码独立：项目 `bin/runCombo`、`bin/runEval` 仍运行当前源码；新增 `comboOpt1` 来自虚拟环境的安装包。仓库 `VERSION` 记录源码版本，不随 wheel 安装改写。
+
+```bash
+source /home/mahaoyi/.local/bin/haoyi-env.sh
+comboOpt1 signal.parquet --config config.xml
+```
+
+`--config` 可省略，此时使用包内默认参数。信号研究、汇报和讨论建议在所用 XML 的 `<backtest>` 上显式设置 `fixbs="true"`；1.1.4 的默认值仍为 `false`。最小配置示例：
+
+```xml
+<config>
+  <constants cache_path="/mnt/cache" />
+  <backtest fixbs="true" />
+</config>
+```
+
+根据 1.1.4 包内说明，`fixbs=true` 固定每日 book 为 `cash`，盈亏不滚入本金，使用零碎股数且不受现金约束；并非仅修改收益曲线的展示方式。以上配置适用于新版安装包，不代表当前仓库源码已同步支持该参数。
+
+1.1.4 同时修复了回测问题，重跑结果可能与旧版不同；历史结果保留原版本和口径，比较时注明版本及 `fixbs` 设置。依赖 1.1.3 或其二进制哈希的冻结实验，回放前需使用独立的匹配环境，不修改历史校验以适配新包。
+
 ### 默认优化器与 simple 模式
 
 默认 opt1 参数的逐项说明见 [opt1_parameters.md](opt1_parameters.md)。
@@ -71,11 +93,11 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 
 完整配置、索引示例、扩展接口及优化器参数见 [config.human](config.human)。示例见 [eg-torch](eg-torch) 和 [eg-lgbm](eg-lgbm)。
 
-### 通用训练与验证规则
+### 通用训练与早停规则
 
-后续新实验在各自声明的监督历史范围内，先按训练发生时点筛选完整成熟的目标样本，再从候选末尾固定留出最新 21 个不同逻辑交易日作为验证段；同一天的全部采样时点归于同一侧。其余较早样本用于梯度训练，并根据完整目标依赖执行 purge：训练目标必须在首个验证决策时点之前完整可知。验证日期和可评估股票集合在训练前固定，验证不参与梯度更新。
+后续新实验取消验证集，整个 dataset 用于训练，不留出验证尾段。在各实验声明的监督历史范围内，按训练发生时点筛选完整成熟的目标样本，所有满足监督条件的样本均参与梯度训练。不再执行训练/验证边界 purge；目标的全部依赖仍须在本次训练发生前完整可知。训练日期、时点与有效监督股票集合在训练前固定。
 
-每个 epoch 结束后，以 `eval/no_grad` 计算 `val_ic_raw5w`：最终 Alpha 与未预处理的五日加权 Reference 目标（权重 `[5,4,3,2,1]`，不除以 15）在有效股票上的 Pearson，先按日内时点等权，再按日期等权汇总。监控值严格大于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止，最多训练 25 轮。早停只控制训练时长，最终 checkpoint 遵循各实验明确声明的选择规则。完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-validation)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。
+每个完整 epoch 汇总训练模式下含 dropout、实际用于反向传播的训练 loss（`train_loss`），不另做关闭 dropout 的评估来替代该监控量。loss 各项及其权重由实验预先声明；多个时点先在日内等权，再按日期等权汇总。只有严格低于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止（`patience=5`），最多训练 15 轮。早停只控制训练时长，最终 checkpoint 遵循各实验明确声明的选择规则。完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-训练集与监督边界)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。
 
 这项规范适用于后续新实验；现有代码不会因文档更新自动改变，运行中或已经冻结的旧实验保留原规则。本次仅调整本地文档，不部署、不启动新任务，也不改变现有任务及巡检。
 
