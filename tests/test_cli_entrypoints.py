@@ -68,6 +68,7 @@ def test_run_eval_help_and_missing_config():
     assert help_proc.returncode == 0
     assert "--long-ratio" in help_proc.stdout
     assert "--simple" in help_proc.stdout
+    assert "--onlypnl" in help_proc.stdout
     assert "Evaluate comb2 config outputs or local parquet/csv artifacts" in help_proc.stdout
 
     missing_proc = run_cli("runEval.py")
@@ -304,6 +305,28 @@ def test_combo_hello_world_creates_editable_starter_files(tmp_path):
         "data_offset",
     }
     assert parsed["combo"]["runtime"]["sample_times"] == (100000,)
+
+
+def test_backtest_onlypnl_config_reaches_both_node_builders(tmp_path):
+    from combo2.config import load_config
+    from combo2.runtime import build_backtest_node
+    from evals.comb_eval.daily_eval import _build_backtest_node
+
+    config_path = tmp_path / "config.xml"
+    for attribute, expected in [("", False), ('onlypnl="false"', False), ('onlypnl="true"', True)]:
+        config_path.write_text(f"<config><backtest {attribute}/></config>")
+        config = load_config(str(config_path))
+        assert config["backtest"]["onlypnl"] is expected
+        node = build_backtest_node(Path(config["strategy"]["path"]), config)
+        assert node.onlypnl is expected
+        va_node = _build_backtest_node(
+            Path(config["constants"]["cache_path"]),
+            tmp_path / "va",
+            config["strategy"]["start_ds"],
+            config["strategy"]["end_ds"],
+            config=config,
+        )
+        assert va_node.onlypnl is expected
 
 
 def test_config_validates_runtime_values_and_constants_schema(tmp_path):

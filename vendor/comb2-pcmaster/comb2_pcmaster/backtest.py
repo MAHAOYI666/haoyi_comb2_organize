@@ -46,7 +46,7 @@ class BacktestNode:
     cooldown_days: int = 0
     # Selects the execution model: True -> _FixedBookExecution, False ->
     # _CompoundLotExecution (see those classes).
-    fixbs: bool = False
+    fixbs: bool = True
     # Amount needed today to bring the stock book back to target_stock_amount
     # under fixbs; opt2 exempts it from maxtvr.
     resize_turnover_today: float = 0.0
@@ -64,6 +64,7 @@ class BacktestNode:
     daily_metrics_written: bool = False
     prev_total_asset: float | None = None
     draw_output: bool = True
+    onlypnl: bool = False
 
 
 def _adjust_alpha_by_long_ratio(
@@ -543,16 +544,17 @@ class DailyBacktest:
                 sell_shares.loc[stock] = shares_to_sell
 
         self.node.executed_turnover_today += float(tvr_cost)
-        executed = orders.loc[execution_index].copy()
-        executed["buy_shares"] = buy_shares.loc[execution_index]
-        executed["sell_shares"] = sell_shares.loc[execution_index]
-        executed["execution_price"] = vwap_today.loc[execution_index]
-        executed["date"] = date
-        executed["time"] = int(ti)
-        executed.index.name = "code"
-        executed.to_csv(self.execution_path, mode="a" if self.executions_written else "w",
-                        header=not self.executions_written)
-        self.executions_written = True
+        if not self.node.onlypnl:
+            executed = orders.loc[execution_index].copy()
+            executed["buy_shares"] = buy_shares.loc[execution_index]
+            executed["sell_shares"] = sell_shares.loc[execution_index]
+            executed["execution_price"] = vwap_today.loc[execution_index]
+            executed["date"] = date
+            executed["time"] = int(ti)
+            executed.index.name = "code"
+            executed.to_csv(self.execution_path, mode="a" if self.executions_written else "w",
+                            header=not self.executions_written)
+            self.executions_written = True
 
         self.day_trade_cost += float(trade_cost)
         self.last_prices = vwap_today.where(np.isfinite(vwap_today) & (vwap_today > 0), mark_prices)
@@ -622,8 +624,9 @@ class DailyBacktest:
             self.draw()
         prefix = f"{self.node.strategy_class}_{self.node.start_ds}_{self.node.end_ds}"
         self.asset_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_yield.csv"))
-        self.position_data.to_csv(os.path.join(self.node.output_path, f"{prefix}_position.csv"))
-        self.hold_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_holdings.csv"))
+        if not self.node.onlypnl:
+            self.position_data.to_csv(os.path.join(self.node.output_path, f"{prefix}_position.csv"))
+            self.hold_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_holdings.csv"))
         return summary
 
     def setup_plot(self, title, xlabel, ylabel):

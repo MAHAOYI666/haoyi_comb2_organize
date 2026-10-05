@@ -100,12 +100,12 @@ execution_price 显式指定 source:column。日内使用 opt2，执行层保留
 
 实验信号 `<Name>.parquet`（旧配置为 `alpha.parquet`）使用 (date,time) 索引。`runEval` 分为两部分：`runEval alpha1.parquet alpha2.parquet run/read` 的双 parquet 日频分组回测与 PnL/VA 是主流程，实现在 `runEval.py`；其余 config overall、`--sim`、`--pnl`、`--va`、`--corr`、`--exposure` 模式实现在 `evals/comb_eval/run_eval_other.py`，保留原 CLI 兼容。`--skip-exposure` 和 `--skip-deciles` 只影响 overall。overall 中的十档统计是原始 target 的分组均值，不是各档实际成交 PnL。
 
-`comboOpt1 signal.parquet [--config config.xml]` 用 opt1 回测单个信号，预处理与双 parquet VA 的端点相同，输出逐年 ZZ500 超额、IR、换手和冻结日数；不传 --config 时使用默认配置。回测口径由 `<backtest fixbs>` 选择：默认 `false` 为复利 book（`总资产 * reserve_cash`）与整手成交；`true` 为固定 book（等于 cash，不预留现金）与零碎股数，仿照 pysim CalcSimple。卖出在两种口径下均按目标为零全部卖出、否则按金额（整手时四舍五入）成交。细节见 config.human。
+`comboOpt1 signal.parquet [--config config.xml]` 用 opt1 回测单个信号，预处理与双 parquet VA 的端点相同，输出逐年 ZZ500 超额、IR、换手和冻结日数；不传 --config 时使用默认配置。回测口径由 `<backtest fixbs>` 选择：默认 `true`（1.1.5 起）为固定 book（等于 cash，不预留现金）与零碎股数，仿照 pysim CalcSimple；`false` 为复利 book（`总资产 * reserve_cash`）与整手成交，即 1.1.4 及以前的默认口径，复现旧结果时需显式设置 `<backtest fixbs="false">`。卖出在两种口径下均按目标为零全部卖出、否则按金额（整手时四舍五入）成交。细节见 config.human。
 
 双 parquet VA 的所有 PnL 路径（0.00 target、各混合权重、1.00 信号）使用同一组日期，不一致时报错。未传 `--start` 时，起点是两个信号都有非零值的第一个共同日；传入 `--start`/`--end` 时严格使用该窗口，便于不同种子或变体在同一路径上比较：信号开头最多允许 5 个全零日（当天只用另一个信号），超过即报错；窗口内缺少任一交易日也报错，不会悄悄缩短路径。
 
 ## 内存和监控
 
-<combo><loader compression="fp4" /></combo> 配置训练特征和预测缓冲区的编码。来源数据仅在当前读取块中复用，作用域结束后释放；训练数据集保存滚动窗口各时点的 X/Y/W，取样时切片、解码并执行窗口变换；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。需按训练天数、时点数、股票数、特征数、模型和临时读取块评估内存；源数据更新后需重建数据集。
+<combo><loader compression="fp4" /></combo> 配置训练特征和预测缓冲区的编码。来源数据仅在当前读取块中复用，作用域结束后释放；训练数据集保存滚动窗口各时点的 X/Y/W，取样时切片、解码并执行窗口变换；训练窗口在增长（不足 `max_train_days`）和滑动阶段都跨训练保留并原地追加新日期，首次训练即按最终窗口长度和全部股票列预留存储；预测按时点复用滚动缓冲区。none/fp4/fp8 使用现有张量 Codec；成交价格和原始目标不经过特征压缩。需按训练天数、时点数、股票数、特征数、模型和临时读取块评估内存；源数据更新后需重建数据集。
 
 monitor 可记录读取、训练、预测和回测耗时及内存。runCombo 在各主要阶段、回测循环每月末和每次训练开始/结束输出一行 `[STAGE|时刻]`，附累计耗时。长任务须按 cgroup 可用资源评估峰值。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import gc
 import importlib.util
+import inspect
 import os
 import random
 import re
@@ -20,6 +21,15 @@ import numpy as np
 from .DataLoader import ComboBuffer, ComboDataLoader, ComboTrainDataset
 
 from combo2.monitoring import format_seconds, print_stage
+
+
+def _accepts_keyword(cls: type, name: str) -> bool:
+    """Whether ``cls(...)`` takes keyword ``name`` (research datasets written before it existed may not)."""
+    try:
+        parameters = inspect.signature(cls.__init__).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
 
 class ComboBase:
@@ -40,6 +50,7 @@ class ComboBase:
         self.model_smooth_rate = node.model_smooth_rate
         self.model_keep_num = node.model_keep_num
         self.max_train_days = int(node.max_train_days)
+        self.end_ds = getattr(node, "end_ds", None)   # strategy end; bounds the training window's growth
         self.checkpoint_root = node.checkpoint_root
         self._set_random_seed()
         self.modelDir = os.path.join(self.checkpoint_root, self.snaptime) if self.checkpoint_root else None
@@ -306,6 +317,30 @@ class ComboBase:
         self._log_alpha(ds, ti, "predict")
         return self.node.alpha
 
+    def _train_capacity_days(self) -> int | None:
+        """Longest training window this run reaches: max_train_days, or fewer days when the strategy ends first."""
+        if self.end_ds is None:
+            return None
+        dates = np.asarray(self.loader.universe.dates)
+        last_didx = int(np.searchsorted(dates, int(self.end_ds), side="right")) - 1
+        return max(0, min(self.max_train_days, last_didx - self.loader.data_start_didx + 1))
+
+    def _new_train_dataset(self, target_ds: int, ndays: int):
+        """Build the training snapshot; return it and whether the next training can advance it in place."""
+        kwargs = dict(
+            end_ds=target_ds, ndays=ndays, x_delay=self.retDays, ts_days=self.tsDays,
+            load_chunk_days=self.load_chunk_days, codec=self.loader.codec,
+        )
+        capacity_days = self._train_capacity_days()
+        grows = capacity_days is not None and capacity_days > ndays and _accepts_keyword(
+            self.research_dataset_cls, "capacity_days"
+        )
+        if grows:
+            kwargs["capacity_days"] = capacity_days
+        dataset = self.research_dataset_cls(self.loader, **kwargs)
+        keep = getattr(dataset, "rollable", False) and (grows or ndays == self.max_train_days)
+        return dataset, keep
+
     def _release_train_dataset(self):
         dataset = self._train_dataset
         self._train_dataset = None
@@ -324,8 +359,6 @@ class ComboBase:
         if ndays < self.tsDays + self.retDays - 1:
             raise ValueError(f"not enough training window for ds={ds}")
 
-        incremental = ndays == self.max_train_days
-
         if self.model is not None:
             previous_model = self.model
             self.model = None
@@ -342,11 +375,10 @@ class ComboBase:
         )
         train_start = time.perf_counter()
         dataset_start = time.perf_counter()
+        # The previous training's snapshot is advanced in place when the new window extends it: it grows while the
+        # history is shorter than max_train_days and slides afterwards. Otherwise it is released and rebuilt.
         dataset_mode = "full"
-        dataset = self._train_dataset if incremental else None
-        if not incremental and self._train_dataset is not None:
-            self._release_train_dataset()
-            self._release_torch_cache("after_train_dataset_release")
+        dataset = self._train_dataset
         if dataset is not None:
             try:
                 reused = dataset.roll_forward(target_ds, ndays)
@@ -357,17 +389,12 @@ class ComboBase:
                 dataset_mode = "incremental"
             else:
                 self._release_train_dataset()
-                self._release_torch_cache("before_incremental_dataset_rebuild")
+                self._release_torch_cache("before_train_dataset_rebuild")
                 dataset = None
         if dataset is None:
-            dataset = self.research_dataset_cls(
-                self.loader, end_ds=target_ds, ndays=ndays, x_delay=self.retDays,
-                ts_days=self.tsDays, load_chunk_days=self.load_chunk_days,
-                codec=self.loader.codec,
-            )
-            if incremental:
+            dataset, keep = self._new_train_dataset(target_ds, ndays)
+            if keep:
                 self._train_dataset = dataset
-                dataset_mode = "incremental_initial"
         dataset_time = time.perf_counter() - dataset_start
         print(
             f"[TRAIN] dataset_len={len(dataset)} "
@@ -382,11 +409,11 @@ class ComboBase:
         try:
             self.model.fit(dataset)
         except Exception:
-            if incremental:
+            if self._train_dataset is dataset:
                 self._release_train_dataset()
             raise
         fit_time = time.perf_counter() - fit_start
-        if not incremental:
+        if self._train_dataset is not dataset:
             dataset = None
         self._release_torch_cache("after_fit_dataset_release")
         print_stage(

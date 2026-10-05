@@ -120,6 +120,7 @@ class Node:
         self.alpha = torch.zeros(instsz, dtype=config["loader"]["dtype"])
         self.alpha_history: dict[int | tuple[int, int], torch.Tensor] = {}
         self.start_ds = int(organize_config["strategy"]["start_ds"])
+        self.end_ds = int(organize_config["strategy"]["end_ds"])
 
         for section in ("paths", "runtime", "model", "output"):
             for key, value in config[section].items():
@@ -262,7 +263,8 @@ def build_backtest_node(strategy_path: Path, organize_config: dict):
         execution_price="provided",
         drawdown_stop=float(backtest_config.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest_config.get("cooldown_days", 0)),
-        fixbs=bool(backtest_config.get("fixbs", False)),
+        fixbs=bool(backtest_config.get("fixbs", True)),
+        onlypnl=bool(backtest_config["onlypnl"]),
     )
 
 

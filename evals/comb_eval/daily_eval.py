@@ -703,6 +703,7 @@ def _build_backtest_node(
     *,
     simple: bool = False,
     config: dict | None = None,
+    onlypnl: bool = False,
 ) -> BacktestNode:
     ti = _coerce_ti(ti)
     strategy = _strategy_config(start_ds, end_ds, simple=simple, config=config)
@@ -726,8 +727,9 @@ def _build_backtest_node(
         snap_ti=ti,
         drawdown_stop=float(backtest.get("drawdown_stop", 0.0)),
         cooldown_days=int(backtest.get("cooldown_days", 0)),
-        fixbs=bool(backtest.get("fixbs", False)),
+        fixbs=bool(backtest.get("fixbs", True)),
         draw_output=False,
+        onlypnl=bool(onlypnl or backtest["onlypnl"]),
     )
 
 
@@ -762,6 +764,7 @@ def _run_weight(
     simple: bool,
     eligible: pd.DataFrame | None = None,
     long_ratio: float = DEFAULT_LONG_RATIO,
+    onlypnl: bool = False,
 ) -> WeightResult:
     ti = _coerce_ti(ti)
     signal = blend_signal(target, myposition, weight, eligible, long_ratio)
@@ -772,6 +775,7 @@ def _run_weight(
         dates[-1],
         ti,
         simple=simple,
+        onlypnl=onlypnl,
     )
     backtest = DailyBacktest(node)
     available_dates = set(int(date) for date in backtest.vwap_data.index)
@@ -840,18 +844,19 @@ def _init_process_worker(
     simple: bool,
     eligible: pd.DataFrame | None = None,
     long_ratio: float = DEFAULT_LONG_RATIO,
+    onlypnl: bool = False,
 ) -> None:
     global _PROCESS_CONTEXT
     _configure_process_worker()
-    _PROCESS_CONTEXT = (target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio)
+    _PROCESS_CONTEXT = (target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio, onlypnl)
 
 
 def _run_weight_in_process(weight: float) -> WeightResult:
     if _PROCESS_CONTEXT is None:
         raise RuntimeError("backtest process worker was not initialized")
-    target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio = _PROCESS_CONTEXT
+    target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio, onlypnl = _PROCESS_CONTEXT
     return _run_weight(
-        weight, target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio
+        weight, target, myposition, dates, cache_path, output_root, ti, simple, eligible, long_ratio, onlypnl
     )
 
 
@@ -868,6 +873,7 @@ def run_weight_backtests(
     simple: bool = False,
     eligible: pd.DataFrame | None = None,
     long_ratio: float = DEFAULT_LONG_RATIO,
+    onlypnl: bool = False,
 ) -> dict[float, WeightResult]:
     """eligible: the base-universe mask used for the long_ratio shift; when given, blends are re-shifted."""
     ti = _coerce_ti(ti)
@@ -888,7 +894,7 @@ def run_weight_backtests(
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_process_worker,
-            initargs=(target, myposition, dates, cache_path, root, ti, simple, eligible, long_ratio),
+            initargs=(target, myposition, dates, cache_path, root, ti, simple, eligible, long_ratio, onlypnl),
         ) as executor:
             futures = {
                 executor.submit(_run_weight_in_process, weight): weight
@@ -1064,6 +1070,7 @@ def evaluate_daily(
     long_ratio: float = DEFAULT_LONG_RATIO,
     ti: int | None = None,
     simple: bool = False,
+    onlypnl: bool = False,
 ) -> DailyEvaluationResult:
     long_ratio = float(long_ratio)
     if not np.isfinite(long_ratio) or not 0.0 <= long_ratio <= 1.0:
@@ -1117,6 +1124,7 @@ def evaluate_daily(
         int(common_dates.max()),
         workers=worker,
         output_root=resolved_eval_dir / "backtest",
+        onlypnl=onlypnl,
         ti=selected_ti,
         simple=simple,
         eligible=base,

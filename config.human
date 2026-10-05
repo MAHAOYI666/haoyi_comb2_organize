@@ -175,7 +175,7 @@ config 注入 dtype、tsDays、num_features、feature_names、sample_times。pre
 
 preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
 
-训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。固定训练窗口达到 `max_train_days` 后 Dataset 跨训练保留并原位滚动，来源数据在当前读取块结束后释放。X/Y/W 按训练股票数预留 `ComboTrainDataset.column_slack`（默认 10%）的空列；使用默认股票选择时，滚动遇到股票集合变化会在原存储内左移并按股票代码重排列，移出的股票删除，新增股票在保留日期上的特征写编码后的 0、Y 写 0、W 写 False，新增股票数超出预留容量时释放后完整重建。该做法要求股票不在基础股票池的日期上特征预处理结果为 0，且目标有效性包含基础股票池、无效位置的 Y 为 0。大型训练需评估全量训练特征、标签、模型、batch 和临时来源块的合计峰值内存；源数据更新后需重建数据集。
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。Dataset 跨训练保留并原位推进，来源数据在当前读取块结束后释放：训练窗口不足 `max_train_days` 时随训练日增长，达到后滑动，两种情况（以及同一次训练中既增长又滑动）都只读取新增日期，保留日期沿用已存储的值，结果与重新完整读取相同。ComboBase 在第一次训练时向 Dataset 传入 `capacity_days = min(max_train_days, data_start_ds 到 strategy end_ds 的交易日数)`，Dataset 按该天数和 mask 的全部股票预留 X/Y/W 的行与列（分配时即写零，第一次训练起内存即为最终大小），之后股票增加也不需要重建。研究员自定义 Dataset 的 `__init__` 不接受 `capacity_days`（也没有 `**kwargs`）、或节点没有 strategy end_ds 时，增长阶段每次训练完整重建，与 1.1.4 相同。只在滑动阶段建立的 Dataset 按训练股票数预留 `ComboTrainDataset.column_slack`（默认 10%）的空列；使用默认股票选择时，滚动遇到股票集合变化会在原存储内左移并按股票代码重排列，移出的股票删除，新增股票在保留日期上的特征写编码后的 0、Y 写 0、W 写 False，新增股票数超出预留容量时释放后完整重建。该做法要求股票不在基础股票池的日期上特征预处理结果为 0，且目标有效性包含基础股票池、无效位置的 Y 为 0。大型训练需评估全量训练特征、标签、模型、batch 和临时来源块的合计峰值内存；源数据更新后需重建数据集。
 
 ## 日期口径与训练
 
@@ -199,18 +199,20 @@ execution_price 使用 source:column，引用研究员 loader 中普通来源的
 
 退市状态只读取 factorsim 的 `StockMask2.StockListedDays`。已持仓股票从前一交易日有限值切换为当日缺失时，在当日优化前按零值核销；核销不计换手或手续费，其损失进入当日 PNL。普通停牌不会触发核销，继续沿用最后有效收盘估值；恢复行情后重新使用真实价格。
 
-book 与成交口径由 `<backtest fixbs=...>` 选择，默认 `false`：
+book 与成交口径由 `<backtest fixbs=...>` 选择，默认 `true`（1.1.5 起；1.1.4 及以前默认 `false`，复现旧结果需显式写 `fixbs="false"`）：
 
 | fixbs | 每日 book（target_stock_amount） | 成交 | 收益 |
 |---|---|---|---|
-| `false`（默认） | 当日第一次优化前 `总资产 * reserve_cash`，盈亏滚入下一日 | 整手；买入按金额向下取整到整手且受现金约束；复权零股折成现金 | PnL / 初始 cash |
-| `true` | 固定为 `cash`，不预留现金，盈亏不滚入，仿照 pysim CalcSimple | 零碎股数，不受现金约束（可为负，即借入）；复权不取整 | PnL / cash |
+| `false` | 当日第一次优化前 `总资产 * reserve_cash`，盈亏滚入下一日 | 整手；买入按金额向下取整到整手且受现金约束；复权零股折成现金 | PnL / 初始 cash |
+| `true`（默认） | 固定为 `cash`，不预留现金，盈亏不滚入，仿照 pysim CalcSimple | 零碎股数，不受现金约束（可为负，即借入）；复权不取整 | PnL / cash |
 
 两种口径的卖出规则：目标权重为 0 时卖出全部可卖股数；否则 `fixbs=false` 按四舍五入到整手卖出，卖后剩余不足半手时全部卖出，`fixbs=true` 按金额卖出零碎股数。`fixbs=true` 时持仓市值每天偏离固定 book，把持仓调回 book 的交易不计入 maxtvr。
 
 opt2 接收可卖金额、T+1 锁定金额、当日固定目标金额和累计实际换手。买入增加锁仓，卖出受可卖股数约束；仅换日时解除锁定并重置每日累计状态。日终按收盘价结算，每天一行日报。
 
 输出：
+
+`<backtest onlypnl="true">` 跳过 `*_position.csv`、`executions.csv` 和 `*_holdings.csv` 落盘，默认 `false`；收益、汇总及其他输出照常写入。双 parquet VA 可用 `runEval myposition.parquet target.parquet run --onlypnl` 开启。
 
 - train.log、checkpoints/：运行日志和模型。
 - alpha.parquet、alpha_history.pt：以 (date,time) 为样本索引。
