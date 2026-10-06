@@ -159,6 +159,7 @@ DEFAULT_CONFIG = {
             "load_chunk_days": None,
             "torch_threads": 64,
             "torch_interop_threads": 1,
+            "malloc_top_pad_mb": 1024,
             "model_smooth_rate": 0.7,
             "model_keep_num": 2,
             "max_train_days": 2000,
@@ -333,6 +334,8 @@ def _validate_config(config: dict) -> None:
     for name in positive:
         if int(runtime[name]) <= 0:
             raise ValueError(f"combo.runtime.{name} must be positive")
+    if not 0 <= int(runtime["malloc_top_pad_mb"]) < 2048:
+        raise ValueError("combo.runtime.malloc_top_pad_mb must be in [0, 2048)")
     if runtime.get("load_chunk_days") is not None and int(runtime["load_chunk_days"]) <= 0:
         raise ValueError("combo.runtime.load_chunk_days must be positive when set")
     if int(runtime["max_train_days"]) < int(runtime["tsDays"]):

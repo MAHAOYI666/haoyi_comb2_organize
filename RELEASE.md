@@ -5,23 +5,39 @@ version. This file records release notes, published artifacts, and install targe
 
 ## Current Version
 
-- Version: `1.1.5`
-- Version date: `2026-10-05`
+- Version: `1.1.6`
+- Version date: `2026-10-06`
 - Package name: `combo2`
-- Protected wheel build target: `dist_protected/combo2-1.1.5-cp313-cp313-linux_x86_64.whl`
+- Protected wheel build target: `dist_protected/combo2-1.1.6-cp313-cp313-linux_x86_64.whl`
 - Python target: `3.13`
-- Status: pushed to master 2026-10-05 (CI builds and publishes the wheel); the same version was built on KF and is installed in the shared notebook environment.
+- Status: pushed to master 2026-10-06 (CI builds and publishes the wheel); the same version was built on KF and is installed in the shared notebook environment.
 
 Build and install this version:
 
 ```bash
 python packaging/build_protected_wheel.py --python python3.13
-python -m pip install dist_protected/combo2-1.1.5-cp313-cp313-linux_x86_64.whl
+python -m pip install dist_protected/combo2-1.1.6-cp313-cp313-linux_x86_64.whl
 ```
 
 ## Unreleased
 
 No unreleased changes.
+
+## 1.1.6
+
+Training speed:
+
+- Fixes the slower fits of 1.1.5 on reused training datasets. `runCombo` now sets the glibc allocator before running:
+  - The mmap threshold is fixed at 32 MB, and the heap top keeps up to `combo.runtime.malloc_top_pad_mb` of freed memory (new; default 1024, range 0-2047).
+  - Training batches above 32 MB then reuse resident memory instead of faulting a fresh mapping every batch. Larger allocations, such as the dataset storage, are still mmapped and returned when freed.
+  - Peak RSS rises by up to the pad (statenet 10d: about 0.5 GB). `malloc_top_pad_mb="0"` keeps glibc's defaults.
+  - The run log shows the setting as `[MALLOC] mmap_threshold=32MB top_pad=<pad>MB accepted=True`.
+- The reserved training storage (1.1.5 `capacity_days`) is allocated uninitialised, so reserved rows and columns use memory only once a roll writes them. `Codec.allocate` takes `zero=` (default `True`).
+
+Validation (KF):
+
+- `pytest -q --ignore=output --ignore=build --ignore=dist_protected --ignore=0714.search.bad.performance --ignore=optuna_runs`: 152 passed, 12 skipped.
+- 1004 statenet-10d (JL label) to 2020-07-31: fits 1m29s, 1m38s, 1m42s, against 2m47s, 2m05s, 3m13s with 1.1.5. alpha.parquet is identical to 1.1.5 (and 1.1.4) on all 147 x 5642 cells.
 
 ## 1.1.5
 

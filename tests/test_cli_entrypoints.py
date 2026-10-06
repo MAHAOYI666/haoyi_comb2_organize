@@ -350,6 +350,11 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     with pytest.raises(ValueError, match="unsupported config key 'registry_cache_days'"):
         load_config(str(legacy_loader))
 
+    invalid_pad = tmp_path / "invalid-pad.xml"
+    invalid_pad.write_text('<config><combo><runtime malloc_top_pad_mb="2048" /></combo></config>', encoding="utf-8")
+    with pytest.raises(ValueError, match="malloc_top_pad_mb"):
+        load_config(str(invalid_pad))
+
     invalid_times = tmp_path / "times.xml"
     invalid_times.write_text('<config><combo><runtime sample_times="110000,100000" /></combo></config>')
     with pytest.raises(AssertionError, match="increasing"):
@@ -357,6 +362,21 @@ def test_config_validates_runtime_values_and_constants_schema(tmp_path):
     declared = tmp_path / "declared.xml"
     declared.write_text('<config><strategy><optimizer type="opt2" /></strategy><combo><runtime sample_times="100000,110000" /></combo></config>')
     assert load_config(str(declared))["combo"]["runtime"]["sample_times"] == (100000,110000)
+
+
+def test_configure_malloc_pads_the_heap_top_by_default(tmp_path, capsys):
+    from config import load_config
+    from combo2.runtime import configure_malloc
+
+    default = tmp_path / "default.xml"
+    default.write_text("<config />", encoding="utf-8")
+    configure_malloc(load_config(str(default)))
+    assert "[MALLOC] mmap_threshold=32MB top_pad=1024MB accepted=True" in capsys.readouterr().out
+
+    off = tmp_path / "off.xml"
+    off.write_text('<config><combo><runtime malloc_top_pad_mb="0" /></combo></config>', encoding="utf-8")
+    configure_malloc(load_config(str(off)))
+    assert "[MALLOC] glibc defaults" in capsys.readouterr().out
 
 
 def test_config_loads_researcher_optimizer_parameters(tmp_path):

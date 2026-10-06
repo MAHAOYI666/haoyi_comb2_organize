@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import importlib
 import importlib.util
 import json
@@ -14,6 +15,10 @@ from typing import Any
 
 DEFAULT_COMB_TORCH_THREADS = 64
 DEFAULT_COMB_TORCH_INTEROP_THREADS = 1
+DEFAULT_COMB_MALLOC_TOP_PAD_MB = 1024
+# glibc's adaptive mmap threshold ceiling on 64-bit (DEFAULT_MMAP_THRESHOLD_MAX)
+GLIBC_MMAP_THRESHOLD_MAX = 32 << 20
+_M_TOP_PAD, _M_MMAP_THRESHOLD = -2, -3
 _EXPLICIT_THREAD_ENV = {
     name: os.environ.get(name)
     for name in (
@@ -111,6 +116,31 @@ def configure_torch_threads(organize_config: dict):
         f"[THREADS] torch_num_threads={torch.get_num_threads()} "
         f"torch_num_interop_threads={torch.get_num_interop_threads()}"
     )
+
+
+def configure_malloc(organize_config: dict):
+    """Serve training batches from resident heap memory instead of fresh mappings.
+
+    A collated batch above glibc's mmap threshold (32 MB at most) is mmapped unless the heap happens to hold a free
+    chunk that large, and then every page of every batch faults afresh: statenet 10d batches are 88 MB, ~22k faults
+    and ~15 ms each, 60-70 s more per fit. Before 1.1.5 the fits after the first were fast only because rebuilding the
+    dataset left GBs of free heap behind; a dataset kept across trainings never rebuilds. With the threshold fixed at
+    that ceiling and the heap top padded by ``malloc_top_pad_mb``, such buffers come from the top of the heap and up to
+    the pad of freed memory stays resident for the next one; larger allocations (dataset storage) are still mmapped and
+    returned when freed. 0 keeps glibc's defaults.
+    """
+    top_pad_mb = int(organize_config["combo"]["runtime"].get("malloc_top_pad_mb", DEFAULT_COMB_MALLOC_TOP_PAD_MB))
+    if top_pad_mb == 0:
+        print("[MALLOC] glibc defaults")
+        return
+    try:
+        mallopt = ctypes.CDLL("libc.so.6").mallopt
+    except (OSError, AttributeError):
+        print("[MALLOC] glibc mallopt unavailable; allocator defaults kept")
+        return
+    mallopt.argtypes, mallopt.restype = (ctypes.c_int, ctypes.c_int), ctypes.c_int
+    accepted = mallopt(_M_MMAP_THRESHOLD, GLIBC_MMAP_THRESHOLD_MAX) and mallopt(_M_TOP_PAD, top_pad_mb << 20)
+    print(f"[MALLOC] mmap_threshold={GLIBC_MMAP_THRESHOLD_MAX >> 20}MB top_pad={top_pad_mb}MB accepted={bool(accepted)}")
 
 
 class Node:
@@ -431,6 +461,7 @@ def install_research_model_decorators(monitor: PerfMonitor, research_model_cls: 
 
 def run_loaded_config(organize_config: dict, config_path: str) -> int:
     configure_torch_threads(organize_config)
+    configure_malloc(organize_config)
     monitor = PerfMonitor.from_config(organize_config)
     if monitor.enabled:
         install_perf_decorators(monitor)

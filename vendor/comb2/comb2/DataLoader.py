@@ -307,7 +307,7 @@ class ComboTrainDataset(Dataset):
     ``capacity_days`` reserves rows for a window that will grow in place (``roll_forward``) up to that many days, as
     an expanding training window does until it reaches ``max_train_days``. A growing snapshot reserves a column for
     every instrument of the mask, so instruments that enter later never force a rebuild. The reserved storage is
-    allocated (and zero-filled) at construction.
+    allocated uninitialised at construction, so it becomes resident only as rolls write into it.
     """
 
     # Spare instrument columns reserved so rolling can admit new instruments in place.
@@ -364,9 +364,12 @@ class ComboTrainDataset(Dataset):
                 (sample_days + extra_days, len(loader.sample_times), capacity), dtype=loader.dtype,
             )
             self._W_storage = torch.empty_like(self._Y_storage, dtype=torch.bool)
+            # Uninitialised: every element of the X view is written before it is read, so the reserved rows and
+            # columns cost no resident memory until a roll writes them (zero-filled, a growing snapshot was resident
+            # at its final size from the first training: statenet 14.6 GB instead of 4.9 GB).
             self._X_storage = {
                 ti: self.codec.allocate(
-                    (storage_days + extra_days, capacity, loader.num_features), "cpu", loader.dtype,
+                    (storage_days + extra_days, capacity, loader.num_features), "cpu", loader.dtype, zero=False,
                 )
                 for ti in loader.sample_times
             }

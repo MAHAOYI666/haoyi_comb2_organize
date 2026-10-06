@@ -175,7 +175,7 @@ config 注入 dtype、tsDays、num_features、feature_names、sample_times。pre
 
 preprocess_features(values, ds, ti) 处理单时点 [stock, feature]。框架先将原始特征中的 Inf 转为缺失值，默认预处理再按股票截面 zscore、裁剪到 [-4,4]、缺失填零。preprocess_target(values, valid_mask, ds, ti) 返回 y/w；默认保留目标标准化和截断流程。transform_feature_window(values, target_ti=..., stage=...) 在选定训练/模型股票后处理窗口。ComboBase 按时点保留滚动预测缓冲区，复用已解码窗口和模型股票子集；历史预测只追加新增日期，实时刷新重算当前日。
 
-训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。Dataset 跨训练保留并原位推进，来源数据在当前读取块结束后释放：训练窗口不足 `max_train_days` 时随训练日增长，达到后滑动，两种情况（以及同一次训练中既增长又滑动）都只读取新增日期，保留日期沿用已存储的值，结果与重新完整读取相同。ComboBase 在第一次训练时向 Dataset 传入 `capacity_days = min(max_train_days, data_start_ds 到 strategy end_ds 的交易日数)`，Dataset 按该天数和 mask 的全部股票预留 X/Y/W 的行与列（分配时即写零，第一次训练起内存即为最终大小），之后股票增加也不需要重建。研究员自定义 Dataset 的 `__init__` 不接受 `capacity_days`（也没有 `**kwargs`）、或节点没有 strategy end_ds 时，增长阶段每次训练完整重建，与 1.1.4 相同。只在滑动阶段建立的 Dataset 按训练股票数预留 `ComboTrainDataset.column_slack`（默认 10%）的空列；使用默认股票选择时，滚动遇到股票集合变化会在原存储内左移并按股票代码重排列，移出的股票删除，新增股票在保留日期上的特征写编码后的 0、Y 写 0、W 写 False，新增股票数超出预留容量时释放后完整重建。该做法要求股票不在基础股票池的日期上特征预处理结果为 0，且目标有效性包含基础股票池、无效位置的 Y 为 0。大型训练需评估全量训练特征、标签、模型、batch 和临时来源块的合计峰值内存；源数据更新后需重建数据集。
+训练数据集在初始化时分块读取特征，预处理后直接编码到整个训练区间各时点的 X，并保存 Y、W；getitem 通过切片、解码和窗口变换生成样本，不重新读取来源或计算标签。无压缩时传入窗口变换的 X 与训练存储共享内存，原地修改会影响后续重叠窗口；FP4/FP8 解码生成独立特征张量。返回的 Y、W 在所有模式下均共享训练存储。none/fp4/fp8 使用现有 Codec 编码训练特征存储和预测缓冲区，来源、目标及成交价格不经过特征压缩。Dataset 跨训练保留并原位推进，来源数据在当前读取块结束后释放：训练窗口不足 `max_train_days` 时随训练日增长，达到后滑动，两种情况（以及同一次训练中既增长又滑动）都只读取新增日期，保留日期沿用已存储的值，结果与重新完整读取相同。ComboBase 在第一次训练时向 Dataset 传入 `capacity_days = min(max_train_days, data_start_ds 到 strategy end_ds 的交易日数)`，Dataset 按该天数和 mask 的全部股票预留 X/Y/W 的行与列。预留存储分配时不初始化，在滚动实际写入后才占用常驻内存；之后股票增加也不需要重建。研究员自定义 Dataset 的 `__init__` 不接受 `capacity_days`（也没有 `**kwargs`）、或节点没有 strategy end_ds 时，增长阶段每次训练完整重建，与 1.1.4 相同。只在滑动阶段建立的 Dataset 按训练股票数预留 `ComboTrainDataset.column_slack`（默认 10%）的空列；使用默认股票选择时，滚动遇到股票集合变化会在原存储内左移并按股票代码重排列，移出的股票删除，新增股票在保留日期上的特征写编码后的 0、Y 写 0、W 写 False，新增股票数超出预留容量时释放后完整重建。该做法要求股票不在基础股票池的日期上特征预处理结果为 0，且目标有效性包含基础股票池、无效位置的 Y 为 0。大型训练需评估全量训练特征、标签、模型、batch、临时来源块以及 `malloc_top_pad_mb` 保留量的合计峰值内存；源数据更新后需重建数据集。
 
 ## 日期口径与训练
 
@@ -228,7 +228,15 @@ runEval config.xml 加载同一份研究员代码重新计算目标 IC。分层�
 
 ## 监控与运行参数
 
-loader 保留 dtype、compression、data_start_ds、data_offset。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+loader 保留 dtype、compression、data_start_ds、data_offset。runtime 保留 seed、deterministic、livetrading、trainDelay、retDays、tsDays、load_chunk_days、torch_threads、torch_interop_threads、malloc_top_pad_mb、model_smooth_rate、model_keep_num、max_train_days、verbose 和实验名 snaptime。
+
+`malloc_top_pad_mb`（默认 `1024`，取值 0–2047）设置 runCombo 进程的 glibc 分配器：mmap 阈值固定为 32 MB（glibc 自适应阈值的上限），堆顶保留最多该值的已释放内存。
+
+- 作用：训练 batch 由 DataLoader 拼接，超过 32 MB 时，若堆中没有足够大的空闲块就会单独 mmap，每个 batch 的每一页都重新缺页。statenet 10d 的 batch 为 88 MB，每次 fit 因此多 60–70 s。打开后这类 batch 从堆顶分配，释放后保留给下一个 batch 复用。
+- 更大的分配（训练数据集存储）仍使用 mmap，释放时归还系统。
+- 代价：常驻内存最多增加该值，实测 statenet 10d 峰值增加约 0.5 GB。
+- 设为 `0` 时保留 glibc 默认行为。
+- 启动时输出一行 `[MALLOC] mmap_threshold=32MB top_pad=1024MB accepted=True`；没有 glibc `mallopt` 的系统上跳过设置并输出提示。
 
 monitor 保留 enabled、output_path、format、print_summary、collect_gpu、sync_cuda、verbose。长任务启动前按 cgroup 限制检查内存并用小规模验证估算峰值。
 
