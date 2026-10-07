@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HOME/.local/bin/haoyi-env.sh"
-exec python "$project_root/runCombo.py" "$@"
+# Use the installed release entrypoint, including its runtime initialization.
+exec "$VIRTUAL_ENV/bin/python" -P "$VIRTUAL_ENV/bin/runCombo" "$@"
