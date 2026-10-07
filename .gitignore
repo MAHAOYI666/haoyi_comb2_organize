@@ -26,3 +26,4 @@ runFactorCorr.py
 /data_audits/
 /docs/
 /mosek.lic
+/factor_builders/
