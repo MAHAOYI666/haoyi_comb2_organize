@@ -4,23 +4,6 @@ combo2 将研究员的 Memmap 数据、源级降维、数组模型、训练、�
 
 发布包名为 combo2，版本由 VERSION 管理；发布记录见 RELEASE.md。
 
-## Notebook 运行环境
-
-项目位于 `/home/mahaoyi/projects/haoyi_comb2_organize`，相关模型位于相邻的 `combo26q4`。
-
-```bash
-source /home/mahaoyi/.local/bin/haoyi-env.sh
-cd /home/mahaoyi/projects/haoyi_comb2_organize
-runCombo --help
-runEval --help
-```
-
-激活后项目 `bin/` 中的命令使用当前源码。实验显式导入的已安装 combo2 保持独立，冻结实验仍按其包版本与哈希验证。Python 解释器为 `/home/mahaoyi/.venvs/haoyi_comb2_py313/bin/python`。
-
-行情缓存默认 `/mnt/cache`，因子位于 `/mnt/factors/QsimPool` 和 `/mnt/factors/ZsimPool`；这些输入只读。运行输出使用各配置声明的项目内目录。`cache_path` 指向 AshareCache 的父目录，XML 路径支持 `~` 和环境变量展开；相对路径以 XML 所在目录为基准。
-
-许可证由 `MOSEKLM_LICENSE_FILE` 指定，默认 `/home/mahaoyi/mosek/mosek.lic`；`runEval --mosek` 可显式覆盖。GPU 训练须在获得 GPU 的 Notebook 或作业中执行，CUDA 依赖已安装不代表当前有 GPU。
-
 ## 安装方式
 
 下载这个仓库即可。当前仓库已经临时内置所需源码：
@@ -38,34 +21,12 @@ vendor/
 默认持仓策略依赖 `Mosek==11.0.25`。受保护 wheel 已声明该依赖；直接从源码运行时需在当前 Python 环境安装 MOSEK，并通过环境变量提供有效许可证：
 
 ```bash
-export MOSEKLM_LICENSE_FILE="$HOME/mosek/mosek.lic"
+export MOSEKLM_LICENSE_FILE=/path/to/comb2_organize/mosek.lic
 ```
 
 源码仓库根目录包含已脱敏的 `mosek.lic`。受保护 wheel 不内嵌许可证；wheel 部署环境仍需通过 `MOSEKLM_LICENSE_FILE` 指向获准使用的副本。
 
 完整配置和研究员可重写接口说明见 `config.human`。新 research 目录建议保留一份同名文件，作为模型、loader、dataset 的接口手册。
-
-### 已安装 combo2 1.1.4：单信号回测
-
-Notebook 的 Python 环境已升级为负责人提供的 `combo2==1.1.4` wheel。安装包与仓库源码独立：项目 `bin/runCombo`、`bin/runEval` 仍运行当前源码；新增 `comboOpt1` 来自虚拟环境的安装包。仓库 `VERSION` 记录源码版本，不随 wheel 安装改写。
-
-```bash
-source /home/mahaoyi/.local/bin/haoyi-env.sh
-comboOpt1 signal.parquet --config config.xml
-```
-
-`--config` 可省略，此时使用包内默认参数。信号研究、汇报和讨论建议在所用 XML 的 `<backtest>` 上显式设置 `fixbs="true"`；1.1.4 的默认值仍为 `false`。最小配置示例：
-
-```xml
-<config>
-  <constants cache_path="/mnt/cache" />
-  <backtest fixbs="true" />
-</config>
-```
-
-根据 1.1.4 包内说明，`fixbs=true` 固定每日 book 为 `cash`，盈亏不滚入本金，使用零碎股数且不受现金约束；并非仅修改收益曲线的展示方式。以上配置适用于新版安装包，不代表当前仓库源码已同步支持该参数。
-
-1.1.4 同时修复了回测问题，重跑结果可能与旧版不同；历史结果保留原版本和口径，比较时注明版本及 `fixbs` 设置。依赖 1.1.3 或其二进制哈希的冻结实验，回放前需使用独立的匹配环境，不修改历史校验以适配新包。
 
 ### 默认优化器与 simple 模式
 
@@ -92,16 +53,6 @@ runEval myposition.parquet target.parquet --simple --ti 093000
 数据集返回 (idx, ds, ti, x, y, w)。x 是 [tsDays, stock, feature] 普通张量，窗口取过去 tsDays 个交易日的同一时点快照。模型实现 fit、predict(x_window, di=..., ti=...)、save、load。
 
 完整配置、索引示例、扩展接口及优化器参数见 [config.human](config.human)。示例见 [eg-torch](eg-torch) 和 [eg-lgbm](eg-lgbm)。
-
-### 通用训练与早停规则
-
-后续新实验取消验证集，整个 dataset 用于训练，不留出验证尾段。在各实验声明的监督历史范围内，按训练发生时点筛选完整成熟的目标样本，所有满足监督条件的样本均参与梯度训练。不再执行训练/验证边界 purge；目标的全部依赖仍须在本次训练发生前完整可知。训练日期、时点与有效监督股票集合在训练前固定。
-
-每个完整 epoch 汇总训练模式下含 dropout、实际用于反向传播的训练 loss（`train_loss`），不另做关闭 dropout 的评估来替代该监控量。loss 各项及其权重由实验预先声明；多个时点先在日内等权，再按日期等权汇总。只有严格低于历史最佳值才算改善（`min_delta=0`），相等不算改善；连续 5 轮未改善时停止（`patience=5`），最多训练 15 轮。早停只控制训练时长，最终 checkpoint 遵循各实验明确声明的选择规则。完整要求见[基础规范第 3.3 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#33-训练集与监督边界)和[第 3.4 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#34-early-stopping-与-checkpoint)。
-
-这项规范适用于后续新实验；现有代码不会因文档更新自动改变，运行中或已经冻结的旧实验保留原规则。本次仅调整本地文档，不部署、不启动新任务，也不改变现有任务及巡检。
-
-haoyi_models 后续新实验默认显式配置 `model_keep_num="0"`，不要求保存正式 checkpoints；epoch 候选权重仅为选模临时保留，续训状态按需启用。预测、回测、指标、日志和其他正常 output 继续完整生成并保留，`alpha_history.pt` 等预测文件不属于可省略的模型权重。需要独立推理、teacher 权重或恢复能力时，在实验中声明必要的保留范围；运行中及既有实验不自动迁移。完整规则见[基础规范第 3.6 节](haoyi_models/UNIFIED_RESEARCH_BENCHMARK_PROTOCOL_20260912.md#36-模型文件与正常-output-的保留)。
 
 ## 回测和评估
 
