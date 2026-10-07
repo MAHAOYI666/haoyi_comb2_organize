@@ -323,7 +323,7 @@ class ResearchLoader(ComboDataLoader):
 
 
 CONFIG_TEMPLATE = '''
-<config>
+<config Name="experiment">
   <constants
     cache_path="/mnt/cache"
     output_root="output"

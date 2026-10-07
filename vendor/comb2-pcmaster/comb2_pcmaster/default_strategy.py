@@ -587,6 +587,11 @@ class AlphaStrategy(StrategyBase):
             forced_turnover_weight = float(
                 sellable_values[forced_exit].sum() / target_stock_amount
             )
+            # Under a fixed booksize the backtest must trade the stock book back
+            # to target_stock_amount each day; that resize is not alpha turnover.
+            forced_turnover_weight += (
+                float(getattr(self, "resize_turnover", 0.0)) / target_stock_amount
+            )
         else:
             forced_turnover_weight = forced_exit_weight
 
@@ -775,6 +780,15 @@ class AlphaStrategy(StrategyBase):
                 current_decision = local_previous.copy()
                 current_decision[~local_buy] = local_actual_weight[~local_buy]
                 normalized_trade_scale = 1.0
+                if float(getattr(self, "resize_turnover", 0.0)) > 0:
+                    # Under a fixed booksize, names pinned at their actual
+                    # book weight differ from the holdings-normalized previous
+                    # weight by the book drift; exempt that mechanical trade.
+                    gap = np.abs(local_actual_weight - local_previous)
+                    forced_turnover_weight += float(
+                        2.0 * gap[local_frozen & local_buy].sum()
+                        + gap[~local_buy].sum()
+                    )
             else:
                 local_locked_amount = locked_values[candidate_idx]
                 lower = local_locked_amount.copy()

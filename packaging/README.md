@@ -43,21 +43,20 @@ runEval config.xml
 
 The build uses Python 3.13 for the wheel ABI and writes pinned third-party
 dependency metadata that is compatible with Python 3.13 Linux x86_64 wheels.
-The numpy pin follows `../aresium/pdm.lock`; pandas and pyarrow follow the
-Python 3.13 dependency floor used by `../aressignalclient/pyproject.toml`. If
+Dependency pins and console entry points are read from `../pyproject.toml`. If
 `python3.13` is not on `PATH`, pass an absolute path with `--python`.
 
 The resulting wheel contains all local Combo2 runtime code. Third-party
-packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib, Optuna,
-MOSEK, psutil, and Plotly are not bundled into the wheel; they are declared in the
+packages such as torch, LightGBM, pandas, numpy, pyarrow, matplotlib,
+MOSEK, and psutil are not bundled into the wheel; they are declared in the
 wheel metadata so `pip install` can resolve and install them for the target
 Python 3.13 environment.
 
 The build compiles:
 
-- `config`, `runCombo`, `runEval`, `comboRunner`, `runPosCorr`
+- `config`, `runCombo`, `runEval`, `comboOpt1`, `comboRunner`, `runPosCorr`
 - `vendor/comb2-simbase` (`comb2_simbase` import package)
-- `optuna_framework`
+- `combo2` application services, configuration, paths, CLI and monitoring
 - `comb_eval`
 - vendor packages: `comb2`, `comb2_pcmaster`, `comb2_metrics`
 - `vendor.perf_monitor`
@@ -77,7 +76,10 @@ Installed commands include:
 - `combo-hello-world`
 - `runCombo`
 - `runEval`
+- `comboOpt1`
 - `comb-run`
 - `comb-eval`
 - `comb-combo-runner`
 - `comb-pos-corr`
+
+Optuna remains a source-only research tool. Neither `optuna_framework` nor its Optuna/Plotly dependencies are included in runtime distributions.

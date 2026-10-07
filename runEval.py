@@ -10,11 +10,9 @@ from pathlib import Path
 import pandas as pd
 
 
-ORGANIZE_ROOT = Path(__file__).resolve().parent
-for local_path in (ORGANIZE_ROOT, ORGANIZE_ROOT / "evals", ORGANIZE_ROOT / "vendor" / "comb2-simbase"):
-    text_path = str(local_path)
-    if text_path not in sys.path:
-        sys.path.insert(0, text_path)
+from combo2.bootstrap import bootstrap_source_tree
+
+bootstrap_source_tree()
 
 from comb_eval.daily_eval import DEFAULT_LONG_RATIO, evaluate_daily, format_daily_evaluation, read_daily_evaluation
 from comb_eval.run_eval_other import (
@@ -67,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-ratio", type=float, default=DEFAULT_LONG_RATIO, help="For direct daily VA, long bucket ratio used by long-short adjustment; default 0.5")
     parser.add_argument("--ti", type=int, help="For direct daily VA, execution and label time in HHMMSS; omitted when both inputs have one common intraday time")
     parser.add_argument("--simple", action="store_true", help="For direct daily VA, use the simplified optimizer profile; default uses the legacy optimizer profile")
+    parser.add_argument("--onlypnl", action="store_true", help="For direct daily VA, skip position, execution and holdings CSV output; default false")
     parser.add_argument("--exposure-mode", type=int, choices=(0, 1), default=0, help="For --exposure, 0=cross-sectional correlation, 1=beta")
     parser.add_argument("--column", default="longonly_pnl", help="For --va, PnL column to compare")
     parser.add_argument("--weights", default=DEFAULT_VA_WEIGHTS, help="For --va, comma-separated new-pnl blend weights")
@@ -87,6 +86,8 @@ def main() -> int:
             return run_daily_eval(args)
         if args.simple:
             raise ValueError("--simple requires direct daily evaluation inputs")
+        if args.onlypnl:
+            raise ValueError("--onlypnl requires direct daily evaluation inputs")
         if args.corr is not None:
             return run_corr(args)
         if args.sim is not None:
@@ -140,6 +141,7 @@ def run_daily_eval(args: argparse.Namespace) -> int:
             long_ratio=args.long_ratio,
             ti=args.ti,
             simple=args.simple,
+            onlypnl=args.onlypnl,
             start=args.start,
             end=args.end,
         )

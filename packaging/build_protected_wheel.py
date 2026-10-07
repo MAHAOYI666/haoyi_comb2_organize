@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -18,61 +19,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
 DISTRIBUTION_NAME = "combo2"
 
+PROJECT_METADATA = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 PACKAGE_SOURCES = {
-    "comb2_templates": REPO_ROOT / "comb2_templates",
-    "comb2_simbase": REPO_ROOT / "vendor" / "comb2-simbase" / "comb2_simbase",
-    "optuna_framework": REPO_ROOT / "optuna_framework",
-    "comb_eval": REPO_ROOT / "evals" / "comb_eval",
-    "comb2": REPO_ROOT / "vendor" / "comb2" / "comb2",
-    "comb2_pcmaster": REPO_ROOT / "vendor" / "comb2-pcmaster" / "comb2_pcmaster",
-    "comb2_metrics": REPO_ROOT / "vendor" / "comb2-metrics" / "comb2_metrics",
+    name: REPO_ROOT / path
+    for name, path in PROJECT_METADATA["tool"]["setuptools"]["package-dir"].items()
+    if name != "vendor"
 }
 
 MODULE_SOURCES = {
     "config": REPO_ROOT / "config.py",
     "runCombo": REPO_ROOT / "runCombo.py",
     "runEval": REPO_ROOT / "runEval.py",
+    "comboOpt1": REPO_ROOT / "comboOpt1.py",
     "comboRunner": REPO_ROOT / "comboRunner.py",
     "runPosCorr": REPO_ROOT / "runPosCorr.py",
     "comboHelloWorld": REPO_ROOT / "comboHelloWorld.py",
     "vendor.perf_monitor": REPO_ROOT / "vendor" / "perf_monitor.py",
 }
 
-ENTRY_POINTS = {
-    "runCombo": "runCombo:main",
-    "runEval": "runEval:main",
-    "comb-run": "runCombo:main",
-    "comb-combo-runner": "comboRunner:main",
-    "comb-pos-corr": "runPosCorr:main",
-    "comb-eval": "comb_eval.cli:main",
-    "combo-hello-world": "comboHelloWorld:main",
-}
+ENTRY_POINTS = PROJECT_METADATA["project"]["scripts"]
 CONSOLE_SCRIPTS = [f"{name}={target}" for name, target in ENTRY_POINTS.items()]
-
-# These pins target Python 3.13 Linux x86_64 wheels.  numpy follows
-# ../aresium/pdm.lock, while pandas/pyarrow follow the lower bounds in
-# ../aressignalclient/pyproject.toml.
-BUILD_DEPENDENCY_PINS = (
-    ("setuptools", "82.0.1"),
-    ("wheel", "0.47.0"),
-    ("Cython", "3.0.12"),
-)
-RUNTIME_DEPENDENCY_PINS = (
-    ("numpy", "2.3.5"),
-    ("pandas", "3.0.2"),
-    ("pyarrow", "23.0.1"),
-    ("torch", "2.9.1"),
-    ("matplotlib", "3.9.4"),
-    ("optuna", "4.8.0"),
-    ("psutil", "7.2.2"),
-    ("plotly", "6.7.0"),
-    ("lightgbm", "4.4.0"),
-    ("Mosek", "11.0.25"),
-)
 
 IGNORED_DIRS = {"__pycache__", ".pytest_cache", "tests", "studies"}
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".c", ".cpp"}
 ALLOWED_SOURCE_FILES = {
+    "combo2/__init__.py",
+    "combo2/cli/__init__.py",
     "comb2/__init__.py",
     "comb2/codec/__init__.py",
     "comb2_templates/__init__.py",
@@ -81,8 +53,6 @@ ALLOWED_SOURCE_FILES = {
     "comb2_metrics/__init__.py",
     "comb2_pcmaster/__init__.py",
     "comb_eval/__init__.py",
-    "optuna_framework/__init__.py",
-    "optuna_framework/scripts/__init__.py",
     "vendor/__init__.py",
 }
 PLAIN_SOURCE_FILES = {"comb2_pcmaster/default_strategy.py"}
@@ -208,13 +178,9 @@ def ensure_pip(python: Path) -> None:
 
 def resolve_dependencies() -> dict[str, object]:
     return {
-        "build_requires": pin_dependencies(BUILD_DEPENDENCY_PINS),
-        "install_requires": pin_dependencies(RUNTIME_DEPENDENCY_PINS),
+        "build_requires": PROJECT_METADATA["tool"]["combo2"]["protected-build"]["requires"],
+        "install_requires": PROJECT_METADATA["project"]["dependencies"],
     }
-
-
-def pin_dependencies(pins: tuple[tuple[str, str], ...]) -> list[str]:
-    return [f"{name}=={version}" for name, version in pins]
 
 
 def prepare_stage(stage_root: Path) -> None:
@@ -326,7 +292,6 @@ setup(
         "comb2_templates": ["config.human"],
         "comb2_pcmaster": ["default_strategy.py"],
         "comb2_simbase": ["index_mask/memmap_mask/*.npy"],
-        "optuna_framework": ["config.xml"],
     }},
     zip_safe=False,
 )
@@ -434,7 +399,10 @@ def rewrite_wheel_from_dir(work_dir: Path, wheel: Path) -> None:
 
 def verify_wheel(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
-        source_files = sorted(name for name in archive.namelist() if name.endswith(".py"))
+        names = archive.namelist()
+        if any(name.startswith("optuna_framework/") for name in names):
+            raise RuntimeError("Optuna must not be included in the runtime wheel")
+        source_files = sorted(name for name in names if name.endswith(".py"))
     disallowed = [name for name in source_files if name not in ALLOWED_SOURCE_FILES]
     if disallowed:
         joined = "\n".join(f"  {name}" for name in disallowed)
@@ -446,7 +414,7 @@ def print_plan(stage_root: Path, dependencies: dict[str, object], python: Path) 
     packages = package_names(stage_root)
     print(f"staged source: {stage_root}")
     print(f"build python: {python}")
-    print("dependency version source: built-in Python 3.13 wheel-compatible pins")
+    print("dependency version source: pyproject.toml")
     print(f"packages: {len(packages)}")
     print(f"compiled extensions: {len(extensions)}")
     print("install_requires:")

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,6 +27,7 @@ from evals.comb_eval.daily_eval import (
     check_same_path_dates,
     MAX_LEADING_INACTIVE_DAYS,
     blend_signal,
+    VA_WEIGHTS,
 )
 
 
@@ -284,3 +290,55 @@ def test_blend_signal_restores_the_long_ratio_after_blending():
     assert ((shifted > 0).sum(axis=1) == 200).all()
     pd.testing.assert_frame_equal(blend_signal(target, myposition, 0.0, eligible), target)
     pd.testing.assert_frame_equal(blend_signal(target, myposition, 1.0, eligible), myposition)
+
+
+def test_real_daily_eval_onlypnl_preserves_results(tmp_path):
+    cache = os.environ.get("COMB2_TEST_CACHE_PATH")
+    alpha = os.environ.get("COMB2_TEST_ALPHA_PATH")
+    license_path = os.environ.get("MOSEKLM_LICENSE_FILE")
+    if not cache or not alpha or not license_path:
+        pytest.skip("real cache, alpha and MOSEK license are required")
+    assert Path(cache).is_dir() and Path(alpha).is_file() and Path(license_path).is_file()
+
+    dates = [20241028, 20241029, 20241030]
+    signal = _normalize_daily_frame(pd.read_parquet(alpha), label="alpha").loc[dates]
+    assert (np.isfinite(signal) & signal.ne(0)).any(axis=1).all()
+    signal_path = tmp_path / "signal.parquet"
+    signal.to_parquet(signal_path)
+    repo = Path(__file__).resolve().parents[1]
+    command = [
+        sys.executable, str(repo / "runEval.py"), str(signal_path), str(signal_path), "run",
+        "--cache-path", cache, "--mosek", license_path, "--worker", "1",
+        "--start", str(dates[0]), "--end", str(dates[-1]),
+    ]
+    processes = {}
+    for name, flags in [("full", []), ("pnl", ["--onlypnl"])]:
+        processes[name] = subprocess.run(
+            command + ["--eval-dir", str(tmp_path / name)] + flags,
+            cwd=repo, text=True, capture_output=True, check=False,
+        )
+        assert processes[name].returncode == 0, processes[name].stdout + processes[name].stderr
+
+    full = tmp_path / "full"
+    pnl = tmp_path / "pnl"
+    full_files = {path.relative_to(full) for path in full.rglob("*") if path.is_file()}
+    details = {
+        path for path in full_files
+        if path.name == "executions.csv" or path.name.endswith(("_position.csv", "_holdings.csv"))
+    }
+    assert len(details) == 3 * len(VA_WEIGHTS)
+    executions = pd.read_csv(full / "backtest" / "weight_1.00" / "executions.csv")
+    assert (executions["buy_shares"] > 0).any()
+    pnl_files = {path.relative_to(pnl) for path in pnl.rglob("*") if path.is_file()}
+    assert pnl_files == full_files - details
+    for path in pnl_files:
+        assert (full / path).read_bytes() == (pnl / path).read_bytes(), str(path)
+
+    read_command = command.copy()
+    read_command[4] = "read"
+    read_result = subprocess.run(
+        read_command + ["--eval-dir", str(pnl)],
+        cwd=repo, text=True, capture_output=True, check=False,
+    )
+    assert read_result.returncode == 0, read_result.stdout + read_result.stderr
+    assert read_result.stdout.strip() in processes["pnl"].stdout

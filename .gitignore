@@ -19,6 +19,7 @@ haoyi_models/
 correlation.py
 runFactorCorr.py
 *.txt
+*.egg-info/
 
 /artifacts/
 /spectral_shrinkwhite_factor_mapping.md

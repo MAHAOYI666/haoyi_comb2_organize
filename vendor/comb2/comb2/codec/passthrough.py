@@ -13,7 +13,7 @@ class PassthroughCodec:
         validate_logical_dtype(dtype, FLOAT_DTYPES, "PassthroughCodec")
         self.storage_dtype = dtype
 
-    def allocate(self, shape, device="cpu", logical_dtype=None) -> tuple[torch.Tensor, CodecMeta]:
+    def allocate(self, shape, device="cpu", logical_dtype=None, zero=True) -> tuple[torch.Tensor, CodecMeta]:
         logical_dtype = self.storage_dtype if logical_dtype is None else logical_dtype
         validate_logical_dtype(logical_dtype, FLOAT_DTYPES, "PassthroughCodec")
         if logical_dtype != self.storage_dtype:
@@ -22,7 +22,7 @@ class PassthroughCodec:
             )
         logical_shape = normalize_shape(shape)
         storage_device = normalize_cpu_device(device)
-        buf = torch.zeros(logical_shape, dtype=self.storage_dtype, device=storage_device)
+        buf = (torch.zeros if zero else torch.empty)(logical_shape, dtype=self.storage_dtype, device=storage_device)
         meta = CodecMeta(
             logical_shape=logical_shape,
             storage_shape=logical_shape,

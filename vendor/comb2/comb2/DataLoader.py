@@ -302,13 +302,21 @@ class ComboDataLoader:
 
 
 class ComboTrainDataset(Dataset):
-    """Preloaded training snapshot with same-time windows across trading days."""
+    """Preloaded training snapshot with same-time windows across trading days.
+
+    ``capacity_days`` reserves rows for a window that will grow in place (``roll_forward``) up to that many days, as
+    an expanding training window does until it reaches ``max_train_days``. A growing snapshot reserves a column for
+    every instrument of the mask, so instruments that enter later never force a rebuild. The reserved storage is
+    allocated uninitialised at construction, so it becomes resident only as rolls write into it.
+    """
 
     # Spare instrument columns reserved so rolling can admit new instruments in place.
     column_slack = 0.10
+    # Rows moved per step when columns are remapped without a shift.
+    remap_chunk_rows = 16
 
     def __init__(self, loader, end_ds, ndays, x_delay=None, ts_days=8,
-                 validinsts=None, load_chunk_days=None, codec=None):
+                 validinsts=None, load_chunk_days=None, codec=None, capacity_days=None):
         self.loader = loader
         assert not loader.registry.in_cache_scope, (
             "ComboTrainDataset must be constructed outside an active cache scope"
@@ -330,13 +338,16 @@ class ComboTrainDataset(Dataset):
             loader.release_working_cache()
             self._fixed_validinsts = validinsts is not None
             sample_days = self.last_sample - self.first_sample + 1
+            storage_days = self.last_sample - self.start_didx + 1
+            default_selection = type(self)._build_validinsts is ComboTrainDataset._build_validinsts
+            # A snapshot that cannot roll (custom selection) never grows, so it reserves no rows.
+            extra_days = 0
+            if capacity_days is not None and (self._fixed_validinsts or default_selection):
+                extra_days = max(0, int(capacity_days) - self.ndays)
             self._base_validity = None
-            if (
-                not self._fixed_validinsts
-                and type(self)._build_validinsts is ComboTrainDataset._build_validinsts
-            ):
+            if not self._fixed_validinsts and default_selection:
                 self._base_validity = torch.empty(
-                    (len(loader.sample_times), sample_days, len(loader.mask.code)),
+                    (len(loader.sample_times), sample_days + extra_days, len(loader.mask.code)),
                     dtype=torch.bool,
                 )
             self.validinsts = self._build_validinsts() if validinsts is None else validinsts.to(torch.long)
@@ -345,17 +356,24 @@ class ComboTrainDataset(Dataset):
             self.codec = codec or PassthroughCodec(loader.dtype)
             capacity = self.numValidinsts
             if not self._fixed_validinsts:
-                capacity += math.ceil(self.numValidinsts * self.column_slack)
-            self._Y_storage = torch.empty((sample_days, len(loader.sample_times), capacity), dtype=loader.dtype)
+                if extra_days:
+                    capacity = max(capacity, len(loader.mask.code))
+                else:
+                    capacity += math.ceil(self.numValidinsts * self.column_slack)
+            self._Y_storage = torch.empty(
+                (sample_days + extra_days, len(loader.sample_times), capacity), dtype=loader.dtype,
+            )
             self._W_storage = torch.empty_like(self._Y_storage, dtype=torch.bool)
-            storage_days = self.last_sample - self.start_didx + 1
+            # Uninitialised: every element of the X view is written before it is read, so the reserved rows and
+            # columns cost no resident memory until a roll writes them (zero-filled, a growing snapshot was resident
+            # at its final size from the first training: statenet 14.6 GB instead of 4.9 GB).
             self._X_storage = {
                 ti: self.codec.allocate(
-                    (storage_days, capacity, loader.num_features), "cpu", loader.dtype,
+                    (storage_days + extra_days, capacity, loader.num_features), "cpu", loader.dtype, zero=False,
                 )
                 for ti in loader.sample_times
             }
-            self._set_columns(self.numValidinsts)
+            self._set_view(storage_days, sample_days, self.numValidinsts)
             for part, ti in enumerate(loader.sample_times):
                 loader.set_current_ti(ti)
                 for offset in range(0, storage_days, self.load_chunk_days):
@@ -393,22 +411,23 @@ class ComboTrainDataset(Dataset):
                 values[start + offset:start + offset + width]
             )
 
-    def _set_columns(self, count):
-        """Expose the first ``count`` storage columns as X/Y/W."""
+    def _set_view(self, storage_days, sample_days, count):
+        """Expose the first ``storage_days`` (X) / ``sample_days`` (Y, W) rows and ``count`` columns."""
         self.X = {}
         self.X_meta = {}
         for ti, (storage, meta) in self._X_storage.items():
-            self.X[ti] = storage[:, :count]
+            self.X[ti] = storage[:storage_days, :count]
             self.X_meta[ti] = replace(
                 meta,
-                logical_shape=(meta.logical_shape[0], count, *meta.logical_shape[2:]),
-                storage_shape=(meta.storage_shape[0], count, *meta.storage_shape[2:]),
+                logical_shape=(storage_days, count, *meta.logical_shape[2:]),
+                storage_shape=(storage_days, count, *meta.storage_shape[2:]),
             )
-        self.Y = self._Y_storage[..., :count]
-        self.W = self._W_storage[..., :count]
+        self.Y = self._Y_storage[:sample_days, :, :count]
+        self.W = self._W_storage[:sample_days, :, :count]
 
-    def _remap_columns_(self, validinsts, offset):
-        """Shift dim 0 left by ``offset`` and reorder columns to ``validinsts``.
+    def _remap_columns_(self, validinsts, offset, storage_days, sample_days):
+        """Shift the first ``storage_days`` (X) / ``sample_days`` (Y, W) rows left by ``offset`` (possibly 0) and
+        reorder their columns to ``validinsts``; the caller resets the view.
 
         Instruments absent from the old selection were outside the base universe
         on every retained day. The data contract gives them zero features there,
@@ -422,20 +441,21 @@ class ComboTrainDataset(Dataset):
         self.codec.encode_into(
             zero, zero_meta, 0, torch.zeros(self.loader.num_features, dtype=self.loader.dtype),
         )
-        storages = [(storage, 1, zero[0]) for storage, _ in self._X_storage.values()]
-        storages += [(self._Y_storage, 2, 0), (self._W_storage, 2, False)]
-        for storage, axis, fill in storages:
+        storages = [(storage, storage_days, 1, zero[0]) for storage, _ in self._X_storage.values()]
+        storages += [(self._Y_storage, sample_days, 2, 0), (self._W_storage, sample_days, 2, False)]
+        # Each step copies its source rows out before writing, and later steps read only rows past the written ones.
+        step = offset if offset > 0 else self.remap_chunk_rows
+        for storage, rows, axis, fill in storages:
             added_index = (slice(None),) * axis + (added,)
-            keep = storage.shape[0] - offset
-            for start in range(0, keep, offset):
-                width = min(offset, keep - start)
-                rows = storage[start + offset:start + offset + width].index_select(axis, src)
+            keep = rows - offset
+            for start in range(0, keep, step):
+                width = min(step, keep - start)
+                moved = storage[start + offset:start + offset + width].index_select(axis, src)
                 target = storage[start:start + width]
-                target.index_copy_(axis, dst, rows)
+                target.index_copy_(axis, dst, moved)
                 target[added_index] = fill
         self.validinsts = validinsts
         self.numValidinsts = len(validinsts)
-        self._set_columns(self.numValidinsts)
 
     def storage_nbytes(self):
         tensors = [
@@ -458,11 +478,13 @@ class ComboTrainDataset(Dataset):
         self._W_storage = None
         self._base_validity = None
 
-    def _roll_validity(self, first_sample, last_sample, offset):
+    def _roll_validity(self, first_sample, last_sample, offset, kept):
+        """Shift the ``kept`` retained sample days of the base validity left by ``offset``, read the new days up to
+        ``last_sample`` and return the instruments valid on any sample day of the new window."""
         for part, ti in enumerate(self.loader.sample_times):
-            self._shift_left_(self._base_validity[part], offset)
+            self._shift_left_(self._base_validity[part, :kept + offset], offset)
             self.loader.set_current_ti(ti)
-            first = last_sample - offset + 1
+            first = first_sample + kept
             for begin in range(first, last_sample + 1, self.load_chunk_days):
                 days = [
                     self.loader.didx2date(idx)
@@ -477,26 +499,32 @@ class ComboTrainDataset(Dataset):
                         self.loader.gen_base_universe_mask(ds)
                     )
                 self.loader.release_working_cache()
-        return torch.where(
-            self._base_validity.reshape(-1, self._base_validity.shape[-1]).any(dim=0)
-        )[0]
+        validity = self._base_validity[:, :last_sample - first_sample + 1]
+        return torch.where(validity.reshape(-1, validity.shape[-1]).any(dim=0))[0]
 
     def roll_forward(self, end_ds, ndays):
-        """Update a fixed-size rolling snapshot in place; return False to rebuild."""
+        """Advance the snapshot in place to the ``ndays``-day window ending at ``end_ds``; return False to rebuild.
+
+        The window may slide (its start moves forward) and grow (up to the rows reserved by ``capacity_days``) in
+        the same step. Retained days keep their stored values and only the new tail days are read, so the result
+        equals a cold load of the new window. After a False return the snapshot may be partly updated and must be
+        released.
+        """
         assert self.Y is not None, "released Dataset cannot roll"
-        assert int(ndays) == self.ndays
         end_ds = self.loader.align_date(end_ds)
         end_didx = self.loader.date2didx(end_ds)
-        start_didx = end_didx - self.ndays + 1
-        assert start_didx >= self.loader.data_start_didx
+        start_didx = max(self.loader.data_start_didx, end_didx - int(ndays) + 1)
         first_sample = start_didx + self.ts_days - 1
         last_sample = end_didx - self.ret_days + 1
         storage_days = last_sample - start_didx + 1
         sample_days = last_sample - first_sample + 1
-        assert sample_days == self.Y.shape[0]
+        old_storage_days = self.last_sample - self.start_didx + 1
+        old_sample_days = self.last_sample - self.first_sample + 1
         offset = start_didx - self.start_didx
-        assert offset > 0
-        if offset >= sample_days:
+        kept = old_sample_days - offset
+        if end_didx <= self.end_didx or offset < 0 or kept <= 0:
+            return False
+        if sample_days > self._Y_storage.shape[0]:   # X reserves as many extra rows as Y
             return False
 
         remap = False
@@ -504,15 +532,15 @@ class ComboTrainDataset(Dataset):
             if self._base_validity is None:
                 return False
             with self.loader.cache_scope():
-                validinsts = self._roll_validity(first_sample, last_sample, offset)
+                validinsts = self._roll_validity(first_sample, last_sample, offset, kept)
             if not torch.equal(validinsts, self.validinsts):
                 if len(validinsts) > self._Y_storage.shape[-1]:
                     return False
                 remap = True
 
         if remap:
-            self._remap_columns_(validinsts, offset)
-        else:
+            self._remap_columns_(validinsts, offset, old_storage_days, old_sample_days)
+        elif offset:
             for storage in self.X.values():
                 self._shift_left_(storage, offset)
             self._shift_left_(self.Y, offset)
@@ -523,9 +551,11 @@ class ComboTrainDataset(Dataset):
         self.start_didx = start_didx
         self.first_sample = first_sample
         self.last_sample = last_sample
+        self.ndays = end_didx - start_didx + 1
+        self._set_view(storage_days, sample_days, self.numValidinsts)
 
-        feature_first = storage_days - offset
-        target_first = sample_days - offset
+        feature_first = old_storage_days - offset
+        target_first = kept
         with self.loader.cache_scope():
             for ti in self.loader.sample_times:
                 self.loader.set_current_ti(ti)
@@ -562,6 +592,11 @@ class ComboTrainDataset(Dataset):
                     self.loader.release_working_cache()
         self.load_stats = self.loader.registry.last_scope_stats
         return True
+
+    @property
+    def rollable(self):
+        """Whether ``roll_forward`` can ever succeed (fixed or default instrument selection)."""
+        return self._fixed_validinsts or self._base_validity is not None
 
     def _build_validinsts(self):
         valid = torch.zeros(len(self.loader.mask.code), dtype=torch.bool)

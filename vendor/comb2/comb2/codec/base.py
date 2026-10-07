@@ -26,7 +26,8 @@ class Codec(Protocol):
     storage_dtype: torch.dtype
     supported_input_dtypes: tuple[torch.dtype, ...]
 
-    def allocate(self, shape, device, logical_dtype) -> tuple[torch.Tensor, CodecMeta]:
+    def allocate(self, shape, device, logical_dtype, zero=True) -> tuple[torch.Tensor, CodecMeta]:
+        """``zero=False`` leaves the buffer uninitialised (pages are committed on first write)."""
         ...
 
     def encode_into(self, buf: torch.Tensor, meta: CodecMeta, idx, x: torch.Tensor) -> None:

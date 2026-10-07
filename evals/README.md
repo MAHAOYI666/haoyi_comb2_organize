@@ -31,13 +31,15 @@ python -m comb_eval.cli eval --pnl /path/to/pnl.tsv --pnlzz500 /path/to/pnlzz500
 runEval /path/to/myposition.parquet /path/to/target.parquet [run|read]
 ```
 
-默认使用旧版 optimizer 配置。需要使用简化配置时显式增加 `--simple`：
+默认使用 config.py 当前配置。需要清空 hard/soft 约束列表时显式增加 `--simple`：
 
 ```bash
 runEval /path/to/myposition.parquet /path/to/target.parquet run --simple --ti 093000
 ```
 
-`--simple` 仅影响 direct daily VA 的 optimizer profile：它使用较宽松的简化参数，且不加载默认的 hard/soft universe、risk 和 industry-group 列表。未传 `--simple` 时使用 `config.py` 的旧版默认配置。`--long-ratio`、`--worker`、`--mosek` 和 `--eval-dir` 分别控制做多比例、并行 worker、MOSEK license 和结果目录。
+`--simple` 仅影响 direct daily VA 的 optimizer profile：它保留当前默认的四项核心数值参数，清空 hard/soft universe、risk 和 industry-group 列表。未传 `--simple` 时使用 `config.py` 的当前默认配置。`--long-ratio`、`--worker`、`--mosek` 和 `--eval-dir` 分别控制做多比例、并行 worker、MOSEK license 和结果目录。
+
+`runEval myposition.parquet target.parquet run --onlypnl` 跳过各权重回测的 `*_position.csv`、`executions.csv` 和 `*_holdings.csv` 落盘。`onlypnl` 默认 `false`，也可在 `<backtest onlypnl="true">` 中配置。此开关只影响明细输出，保留收益、汇总和 manifest，`read` 使用相同的结果目录。
 
 Direct daily VA 的信号混合顺序固定为：对 target 和 myposition 分别做 `long_ratio` 调整；再按天分别对正值多头侧和负值空头侧做 L1 归一化；然后按 `signal=(1-w)*target+w*myposition` 混合；对 0 < w < 1 的混合信号再做一次同样的 `long_ratio` 调整（两份信号各自正负各半，但加权和的正值比例会漂移到约 0.51–0.59，而 opt1 的硬性参与度约束随正值候选数变化）；最后把混合信号交给 opt。这里的 `w` 是信号空间的混合系数，不是最终组合资本占比。新口径的结果目录和 manifest 会标记为 `long_short_l1_readjust_v2`，不能复用旧混合口径生成的 artifact。
 
@@ -59,7 +61,7 @@ python -m comb_eval.cli eval --pnl /path/to/pnl.tsv --ic /path/to/daily_ic --sta
 python -m comb_eval.cli eval --config /path/to/config.xml
 ```
 
-该入口需要 output_root 下的 alpha.parquet 和 backtest 中配置的每日成交指标文件。目标定义来自 ResearchLoader.gen_raw_target。评估输出包括 daily_ic.csv、ic_summary.csv、pnl_summary.csv、decile_summary.csv、Barra/CAP 暴露汇总、signal_analysis.png 和 report.json。
+该入口需要有效实验目录下的 `<Name>.parquet`（未设置 Name 时为 `alpha.parquet`） 和 backtest 中配置的每日成交指标文件。目标定义来自 ResearchLoader.gen_raw_target。评估输出包括 daily_ic.csv、ic_summary.csv、pnl_summary.csv、decile_summary.csv、Barra/CAP 暴露汇总、signal_analysis.png 和 report.json。
 
 IC 按时点统计，不给任意研究目标自动套用日频年化。分层输出为每个时点各层原始目标的平均值；实际收益、手续费和换手来自成交日终记录。总体评估与研究员目标定义保持一致。独立 pnl/ic 等命令继续接受本地表格。
 

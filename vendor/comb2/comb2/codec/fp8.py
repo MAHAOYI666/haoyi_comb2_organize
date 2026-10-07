@@ -31,13 +31,13 @@ class FP8Codec:
         if not probe_cpu_float8_cast():
             raise RuntimeError("FP8Codec requires CPU cast support for torch.float8_e4m3fn")
 
-    def allocate(self, shape, device="cpu", logical_dtype=None) -> tuple[torch.Tensor, CodecMeta]:
+    def allocate(self, shape, device="cpu", logical_dtype=None, zero=True) -> tuple[torch.Tensor, CodecMeta]:
         if logical_dtype is None:
             logical_dtype = torch.float16
         validate_logical_dtype(logical_dtype, self.supported_input_dtypes, "FP8Codec")
         logical_shape = normalize_shape(shape)
         storage_device = normalize_cpu_device(device)
-        buf = torch.zeros(logical_shape, dtype=self.storage_dtype, device=storage_device)
+        buf = (torch.zeros if zero else torch.empty)(logical_shape, dtype=self.storage_dtype, device=storage_device)
         meta = CodecMeta(
             logical_shape=logical_shape,
             storage_shape=logical_shape,

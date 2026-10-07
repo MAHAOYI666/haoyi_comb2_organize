@@ -11,10 +11,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-SIMBASE_ROOT = Path(__file__).resolve().parents[3] / "vendor" / "comb2-simbase"
-if str(SIMBASE_ROOT) not in sys.path:
-    sys.path.insert(0, str(SIMBASE_ROOT))
-
 from comb2_simbase import IndexMask
 from comb2_simbase.benchmark import load_index_benchmark
 from .dataloader import DataLoader
@@ -48,6 +44,12 @@ class BacktestNode:
     snap_ti: int | None = None
     drawdown_stop: float = 0.0
     cooldown_days: int = 0
+    # Selects the execution model: True -> _FixedBookExecution, False ->
+    # _CompoundLotExecution (see those classes).
+    fixbs: bool = True
+    # Amount needed today to bring the stock book back to target_stock_amount
+    # under fixbs; opt2 exempts it from maxtvr.
+    resize_turnover_today: float = 0.0
     holdings: pd.Series | None = None
     locked_holdings: pd.Series | None = None
     yesterday: int | None = None
@@ -62,6 +64,7 @@ class BacktestNode:
     daily_metrics_written: bool = False
     prev_total_asset: float | None = None
     draw_output: bool = True
+    onlypnl: bool = False
 
 
 def _adjust_alpha_by_long_ratio(
@@ -92,9 +95,69 @@ def _adjust_alpha_by_long_ratio(
     return pd.Series(adjusted, index=raw.index, name=raw.name)
 
 
+class _CompoundLotExecution:
+    """fixbs=False: book = total asset * reserve_cash; whole lots, buys limited by cash."""
+
+    def __init__(self, node: BacktestNode):
+        self.node = node
+
+    def target_amount(self, pre_trade_total: float) -> float:
+        return float(pre_trade_total * self.node.reserve_cash)
+
+    def resize_turnover(self, stock_value: float) -> float:
+        return 0.0
+
+    def carry(self, new_holdings: pd.Series, pre_close: pd.Series) -> tuple[pd.Series, float]:
+        """Corporate-action share adjustment: floor to whole shares, the remainder becomes cash."""
+        holdings = np.floor(new_holdings)
+        return holdings, (pre_close * (new_holdings - holdings)).sum()
+
+    def buy(self, amount: float, price: float, cash: float) -> tuple[float, float]:
+        """Return (shares, traded value) for a buy order of ``amount`` including fees."""
+        price_per_100_shares = price * 100
+        max_lots = int(cash // (price_per_100_shares * (1 + self.node.fee_rate)))
+        target_lots = int(amount // (price_per_100_shares * (1 + self.node.fee_rate)))
+        buy_lots = min(target_lots, max_lots)
+        return buy_lots * 100, buy_lots * price_per_100_shares
+
+    def sell(self, amount: float, price: float, sellable_shares: float) -> float:
+        """Shares for a partial sell: nearest lot, all when less than half a lot would remain."""
+        price_per_100_shares = price * 100
+        if amount >= sellable_shares * price - 0.5 * price_per_100_shares:
+            return sellable_shares
+        return min(sellable_shares, np.floor(amount / price_per_100_shares + 0.5) * 100)
+
+
+class _FixedBookExecution:
+    """fixbs=True, as pysim CalcSimple: book = cash every day, fractional shares, buys may borrow."""
+
+    def __init__(self, node: BacktestNode):
+        self.node = node
+
+    def target_amount(self, pre_trade_total: float) -> float:
+        return float(self.node.cash)
+
+    def resize_turnover(self, stock_value: float) -> float:
+        """Trade needed to bring the stock book back to the fixed book; opt1/opt2 exempt it from maxtvr."""
+        return abs(stock_value - float(self.node.cash)) if stock_value > 0 else 0.0
+
+    def carry(self, new_holdings: pd.Series, pre_close: pd.Series) -> tuple[pd.Series, float]:
+        return new_holdings, 0.0
+
+    def buy(self, amount: float, price: float, cash: float) -> tuple[float, float]:
+        shares = amount / (price * (1 + self.node.fee_rate))
+        return shares, shares * price
+
+    def sell(self, amount: float, price: float, sellable_shares: float) -> float:
+        return min(sellable_shares, amount / price)
+
+
 class DailyBacktest:
     def __init__(self, node: BacktestNode):
         self.node = node
+        self.execution = (
+            _FixedBookExecution(node) if node.fixbs else _CompoundLotExecution(node)
+        )
         os.makedirs(self.node.output_path, exist_ok=True)
         self.trade_date = sorted(IndexMask().date)
         self.dataloader = DataLoader(signal_path="", cache_path=self.node.cache_path)
@@ -208,8 +271,8 @@ class DailyBacktest:
         pre_close_today = self.preclose_data.loc[date]
         adj = (pre_close_today / close_yesterday).fillna(1.0)
         new_holdings = self.node.holdings / adj
-        self.node.holdings = np.floor(new_holdings)
-        self.cash += (pre_close_today * (new_holdings - self.node.holdings)).sum()
+        self.node.holdings, residual_cash = self.execution.carry(new_holdings, pre_close_today)
+        self.cash += residual_cash
         self.node.locked_holdings = pd.Series(0.0, index=self.node.holdings.index)
 
     def _total_asset(self, prices_per_share: pd.Series) -> float:
@@ -343,7 +406,10 @@ class DailyBacktest:
         assert self._positive_finite(mark_prices[held]).all(), "held stocks require observable marks"
         pre_trade_total = self._total_asset(mark_prices)
         if new_day:
-            self.node.target_stock_amount = float(pre_trade_total * self.node.reserve_cash)
+            self.node.target_stock_amount = self.execution.target_amount(pre_trade_total)
+            self.node.resize_turnover_today = self.execution.resize_turnover(
+                pre_trade_total - self.cash
+            )
         assert np.isfinite(self.node.target_stock_amount) and self.node.target_stock_amount > 0
         current_value = (self.node.holdings * mark_prices).fillna(0.0)
         locked_value = (self.node.locked_holdings * mark_prices).fillna(0.0)
@@ -389,15 +455,19 @@ class DailyBacktest:
                 signals = signals.fillna(0.0)
             signal_masked = signals * universe_today
             self.dataloader.date = date
-            orders = self.strategy.generate_orders(
-                signal_masked,
-                sellable_value,
-                locked_value,
-                buyable_mask,
-                market_sellable_mask,
-                self.node.target_stock_amount,
-                self.node.executed_turnover_today,
-            )
+            self.strategy.resize_turnover = self.node.resize_turnover_today
+            try:
+                orders = self.strategy.generate_orders(
+                    signal_masked,
+                    sellable_value,
+                    locked_value,
+                    buyable_mask,
+                    market_sellable_mask,
+                    self.node.target_stock_amount,
+                    self.node.executed_turnover_today,
+                )
+            finally:
+                self.strategy.resize_turnover = 0.0
         assert orders.index.equals(self.universe.columns)
         assert list(orders.columns) == ["buy_amount", "sell_amount"]
         order_values = orders.to_numpy(dtype=float)
@@ -440,35 +510,31 @@ class DailyBacktest:
 
         for stock in execution_index:
             price_per_share = vwap_today[stock]
-            price_per_100_shares = price_per_share * 100
             buy_amount = orders.at[stock, "buy_amount"]
             sell_amount = orders.at[stock, "sell_amount"]
 
             if buy_amount > 0:
-                max_lots = int(self.cash // (price_per_100_shares * (1 + self.node.fee_rate)))
-                target_lots = int(buy_amount // (price_per_100_shares * (1 + self.node.fee_rate)))
-                buy_lots = min(target_lots, max_lots)
-                if buy_lots > 0:
-                    b_value = buy_lots * price_per_100_shares
+                bought, b_value = self.execution.buy(buy_amount, price_per_share, self.cash)
+                if bought > 0:
                     cost = b_value * (1 + self.node.fee_rate)
-                    trade_cost += buy_lots * price_per_100_shares * self.node.fee_rate
+                    trade_cost += b_value * self.node.fee_rate
                     self.cash -= cost
-                    self.node.holdings.loc[stock] = self.node.holdings.loc[stock] + buy_lots * 100
+                    self.node.holdings.loc[stock] = self.node.holdings.loc[stock] + bought
                     self.node.locked_holdings.loc[stock] = (
-                        self.node.locked_holdings.loc[stock] + buy_lots * 100
+                        self.node.locked_holdings.loc[stock] + bought
                     )
                     tvr_cost += b_value
-                    buy_shares.loc[stock] = buy_lots * 100
+                    buy_shares.loc[stock] = bought
             elif sell_amount > 0:
                 sellable_shares = max(
                     self.node.holdings.loc[stock]
                     - self.node.locked_holdings.loc[stock],
                     0.0,
                 )
-                shares_to_sell = min(
-                    sellable_shares,
-                    (sell_amount // price_per_100_shares + 1) * 100,
-                )
+                if target_weight.get(stock, 0.0) > 0:
+                    shares_to_sell = self.execution.sell(sell_amount, price_per_share, sellable_shares)
+                else:
+                    shares_to_sell = sellable_shares
                 s_value = shares_to_sell * price_per_share
                 proceeds = s_value * (1 - self.node.fee_rate)
                 trade_cost += s_value * self.node.fee_rate
@@ -478,16 +544,17 @@ class DailyBacktest:
                 sell_shares.loc[stock] = shares_to_sell
 
         self.node.executed_turnover_today += float(tvr_cost)
-        executed = orders.loc[execution_index].copy()
-        executed["buy_shares"] = buy_shares.loc[execution_index]
-        executed["sell_shares"] = sell_shares.loc[execution_index]
-        executed["execution_price"] = vwap_today.loc[execution_index]
-        executed["date"] = date
-        executed["time"] = int(ti)
-        executed.index.name = "code"
-        executed.to_csv(self.execution_path, mode="a" if self.executions_written else "w",
-                        header=not self.executions_written)
-        self.executions_written = True
+        if not self.node.onlypnl:
+            executed = orders.loc[execution_index].copy()
+            executed["buy_shares"] = buy_shares.loc[execution_index]
+            executed["sell_shares"] = sell_shares.loc[execution_index]
+            executed["execution_price"] = vwap_today.loc[execution_index]
+            executed["date"] = date
+            executed["time"] = int(ti)
+            executed.index.name = "code"
+            executed.to_csv(self.execution_path, mode="a" if self.executions_written else "w",
+                            header=not self.executions_written)
+            self.executions_written = True
 
         self.day_trade_cost += float(trade_cost)
         self.last_prices = vwap_today.where(np.isfinite(vwap_today) & (vwap_today > 0), mark_prices)
@@ -557,8 +624,9 @@ class DailyBacktest:
             self.draw()
         prefix = f"{self.node.strategy_class}_{self.node.start_ds}_{self.node.end_ds}"
         self.asset_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_yield.csv"))
-        self.position_data.to_csv(os.path.join(self.node.output_path, f"{prefix}_position.csv"))
-        self.hold_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_holdings.csv"))
+        if not self.node.onlypnl:
+            self.position_data.to_csv(os.path.join(self.node.output_path, f"{prefix}_position.csv"))
+            self.hold_history.to_csv(os.path.join(self.node.output_path, f"{prefix}_holdings.csv"))
         return summary
 
     def setup_plot(self, title, xlabel, ylabel):

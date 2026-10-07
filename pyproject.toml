@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools==82.0.1", "wheel==0.47.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "combo2"
+dynamic = ["version"]
+description = "Research model training, prediction, backtesting and evaluation"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "numpy==2.3.5", "pandas==3.0.2", "pyarrow==23.0.1",
+  "torch==2.9.1", "matplotlib==3.9.4", "psutil==7.2.2",
+  "lightgbm==4.4.0", "Mosek==11.0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+runCombo = "combo2.cli.run_combo:main"
+runEval = "runEval:main"
+comboOpt1 = "comboOpt1:main"
+comb-run = "combo2.cli.run_combo:main"
+comb-combo-runner = "comboRunner:main"
+comb-pos-corr = "runPosCorr:main"
+comb-eval = "comb_eval.cli:main"
+combo-hello-world = "comboHelloWorld:main"
+
+[tool.setuptools]
+include-package-data = false
+py-modules = ["config", "runCombo", "runEval", "comboOpt1", "comboRunner", "runPosCorr", "comboHelloWorld"]
+packages = ["combo2", "combo2.cli", "comb2_templates", "comb2_simbase", "comb_eval", "comb2", "comb2.codec", "comb2_pcmaster", "comb2_metrics", "vendor"]
+
+[tool.setuptools.package-dir]
+combo2 = "combo2"
+comb2_templates = "comb2_templates"
+comb2_simbase = "vendor/comb2-simbase/comb2_simbase"
+comb_eval = "evals/comb_eval"
+comb2 = "vendor/comb2/comb2"
+comb2_pcmaster = "vendor/comb2-pcmaster/comb2_pcmaster"
+comb2_metrics = "vendor/comb2-metrics/comb2_metrics"
+vendor = "vendor"
+
+[tool.setuptools.package-data]
+comb2_templates = ["config.human"]
+comb2_simbase = ["index_mask/memmap_mask/*.npy"]
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
+
+[tool.combo2.protected-build]
+requires = ["setuptools==82.0.1", "wheel==0.47.0", "Cython==3.0.12"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "evals/tests", "vendor/comb2/tests", "vendor/comb2-pcmaster/tests"]
+pythonpath = [".", "evals", "vendor/comb2", "vendor/comb2-pcmaster", "vendor/comb2-simbase", "vendor/comb2-metrics"]
